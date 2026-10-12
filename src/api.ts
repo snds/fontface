@@ -88,7 +88,7 @@ export interface ActivationOutcome {
   error: string | null;
 }
 
-export type ServiceId = "google" | "adobe";
+export type ServiceId = "google" | "adobe" | "purchases";
 
 export interface ServiceInfo {
   id: ServiceId;
@@ -142,6 +142,85 @@ export interface AdobeStatus {
   supported: boolean;
 }
 
+export interface PurchaseContents {
+  /** Desktop font files that will be imported (paths inside the download). */
+  fonts: string[];
+  families: string[];
+  licenses: string[];
+  /** Font files left out: web/app/ebook files, and second formats of a font. */
+  skippedFonts: string[];
+  /** Names or addresses suggest trial or demo fonts. */
+  trial: boolean;
+  /** Too many fonts to treat as one download (e.g. a whole collection); import it by hand. */
+  tooLarge: boolean;
+  /** Font files that couldn't be read or aren't valid fonts. */
+  unreadable: string[];
+}
+
+export interface PurchaseFind {
+  id: number;
+  path: string;
+  name: string;
+  /** An unzipped download (a folder). */
+  isFolder: boolean;
+  store: string | null;
+  storeName: string | null;
+  originUrl: string | null;
+  referrer: string | null;
+  contents: PurchaseContents;
+  status: "new" | "imported";
+  foundAt: number;
+  importedDir: string | null;
+  /** The original download no longer exists. */
+  missing: boolean;
+}
+
+export interface PurchaseImported {
+  dir: string;
+  label: string;
+  store: string;
+  storeName: string;
+  originUrl: string | null;
+  sourceName: string;
+  importedAt: number;
+  fontFiles: number;
+  licenseFiles: string[];
+  subscriptionBound: boolean;
+  mayBeTrial: boolean;
+}
+
+export interface PurchaseStore {
+  id: string;
+  name: string;
+  subscriptionBound: boolean;
+  mayBeTrial: boolean;
+}
+
+export interface WatchFolder {
+  path: string;
+  /** Why it can't be read right now (missing, or no permission), if it can't. */
+  problem: string | null;
+}
+
+export interface RemovalReport {
+  removed: number;
+  /** [folder name, why] for each one that couldn't be removed. */
+  failed: [string, string][];
+}
+
+export interface PurchasesStatus {
+  watching: boolean;
+  folders: WatchFolder[];
+  finds: PurchaseFind[];
+  imported: PurchaseImported[];
+  stores: PurchaseStore[];
+}
+
+export interface ImportResult {
+  dir: string;
+  files: string[];
+}
+
 export const api = {
   listFolders: () => invoke<Folder[]>("list_folders"),
   addFolder: (path: string) => invoke<Folder>("add_folder", { path }),
@@ -158,4 +237,17 @@ export const api = {
   googleInstall: (id: string) => invoke<GoogleInstallResult>("google_install", { id }),
   googleRemove: (id: string) => invoke<void>("google_remove", { id }),
   adobeStatus: () => invoke<AdobeStatus>("adobe_status"),
+  purchasesStatus: () => invoke<PurchasesStatus>("purchases_status"),
+  purchasesSetWatching: (on: boolean) => invoke<void>("purchases_set_watching", { on }),
+  purchasesAddFolder: (path: string) => invoke<void>("purchases_add_folder", { path }),
+  purchasesRemoveFolder: (path: string) => invoke<void>("purchases_remove_folder", { path }),
+  purchasesCheckNow: () => invoke<number>("purchases_check_now"),
+  purchasesImport: (id: number, store: string | null) => invoke<ImportResult>("purchases_import", { id, store }),
+  purchasesImportPath: (path: string, store: string | null) => invoke<ImportResult>("purchases_import_path", { path, store }),
+  purchasesDetectStore: (path: string) => invoke<string | null>("purchases_detect_store", { path }),
+  purchasesRetryWatch: () => invoke<boolean>("purchases_retry_watch"),
+  purchasesDismiss: (id: number) => invoke<void>("purchases_dismiss", { id }),
+  purchasesRemove: (dir: string) => invoke<void>("purchases_remove", { dir }),
+  purchasesSubscriptionEnded: (store: string) => invoke<RemovalReport>("purchases_subscription_ended", { store }),
+  purchasesReveal: (dir: string) => invoke<void>("purchases_reveal", { dir }),
 };

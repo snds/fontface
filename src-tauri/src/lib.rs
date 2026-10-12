@@ -37,6 +37,10 @@ pub struct AppState {
     seen_loaded: Mutex<HashSet<String>>,
     /// Service families (e.g. Google Fonts ids) with an install or removal in progress.
     service_ops: Mutex<HashSet<String>>,
+    /// The purchases folder watcher, while watching is on.
+    purchase_watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// Watched folders the watcher couldn't watch, with the reason (retried on window focus).
+    purchase_watch_failed: Mutex<HashMap<String, String>>,
 }
 
 pub struct RunningScan {
@@ -96,7 +100,10 @@ pub fn run() {
                 deferred: Mutex::default(),
                 seen_loaded: Mutex::default(),
                 service_ops: Mutex::default(),
+                purchase_watcher: Mutex::default(),
+                purchase_watch_failed: Mutex::default(),
             });
+            commands::restart_purchase_watcher(app.handle());
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 // Each missing path is recorded the moment it's found, so a scan that finishes
@@ -125,6 +132,19 @@ pub fn run() {
             commands::google_install,
             commands::google_remove,
             commands::adobe_status,
+            commands::purchases_status,
+            commands::purchases_set_watching,
+            commands::purchases_add_folder,
+            commands::purchases_remove_folder,
+            commands::purchases_check_now,
+            commands::purchases_import,
+            commands::purchases_import_path,
+            commands::purchases_dismiss,
+            commands::purchases_remove,
+            commands::purchases_subscription_ended,
+            commands::purchases_reveal,
+            commands::purchases_detect_store,
+            commands::purchases_retry_watch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Fontface");

@@ -6,7 +6,11 @@ Second, it shows fonts another app, such as Adobe Creative Cloud, has already tu
 Third, it recognizes fonts the user bought when the download lands in a watched folder.
 Fontface never copies, decrypts, converts or re-shares a font in a way its license forbids.
 
-Status (2026-10-12): the All Fonts, Font Book and Folders views, Google Fonts (keyless: the Fontsource catalog plus full files from the google/fonts repository) and the read-only Adobe Fonts listing are built. Everything else here is still a plan. Facts were checked live on 2026-10-12, and each section ends with its sources. Fontface uses only other font managers' public documentation, never their code, binaries or hosted data (see [FEATURES.md](FEATURES.md)).
+Status (2026-10-12): built so far:
+- the All Fonts, Font Book and Folders views;
+- Google Fonts (keyless: the Fontsource catalog plus full files from the google/fonts repository);
+- the read-only Adobe Fonts listing;
+- the Purchases download watcher (§3.3). Still to do there: the "Replace with newer version" offer, the 30-day trial reminder, and a "License transferred" status. Everything else here is still a plan. Facts were checked live on 2026-10-12, and each section ends with its sources. Fontface uses only other font managers' public documentation, never their code, binaries or hosted data (see [FEATURES.md](FEATURES.md)).
 
 ## 1. Summary
 
@@ -235,7 +239,7 @@ Most font stores have no API. Fontface instead notices font downloads, reads whe
 
 - Set up: Settings > Services > Purchases > "Watch for font downloads". The default folder is `~/Downloads`. macOS asks the user for permission.
 - When a `.zip`, `.otf`, `.ttf`, `.ttc` or `.otc` file arrives, Fontface asks, for example, "Fonts from MyFonts: add to library?"
-- Import copies only desktop font files and license files into `Sources/purchases/<store>/<family>/`. The original download stays put. "Import zip or folder" handles older purchases; the user picks the store if Fontface can't tell.
+- Import copies only desktop font files and license files into `Services/Purchases/<Store>/<Family>/` (web, app and ebook font files are left out; when a download has OTF and TTF of the same font, the OTF is kept). Font files that can't be read are listed on the find instead of being dropped silently. A folder with more than 2,000 fonts is too big to treat as one download; the panel says so and the user imports it by hand. The original download stays put. "Import zip or folder" handles older purchases; the user picks the store if Fontface can't tell.
 - A newer version of an owned font (same PostScript name, higher `head.fontRevision`) gets a "Replace" offer. Apps may show the old version until restarted.
 - Envato Elements fonts are marked "Subscription-bound". A "My Elements subscription ended" action uninstalls them all, because the license requires uninstalling, not just turning off.
 - Fontstore trial fonts are marked "Trial, not for commercial use", with a reminder after 30 days. A "License transferred" status prompts removal. Turning the watcher off keeps imported fonts.

@@ -8,6 +8,12 @@ const HELVETICA_TTC: &str = "/System/Library/Fonts/Helvetica.ttc";
 const SF_VARIABLE: &str = "/System/Library/Fonts/SFNS.ttf";
 const ANDALE_MONO: &str = "/System/Library/Fonts/Supplemental/Andale Mono.ttf";
 
+/// Copies a fixture as plain bytes. fs::copy keeps macOS's compression on system fonts, and
+/// reading such a fresh copy can briefly fail with "Attribute not found", making tests flaky.
+fn copy_plain(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<()> {
+    std::fs::write(to, std::fs::read(from)?)
+}
+
 fn read(path: &str) -> Vec<u8> {
     std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
@@ -83,7 +89,7 @@ fn activation_round_trip() {
     let dir = std::env::temp_dir().join(format!("fontface-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let copy = dir.join("Andale Mono Copy.ttf");
-    std::fs::copy(ANDALE_MONO, &copy).unwrap();
+    copy_plain(ANDALE_MONO, &copy).unwrap();
 
     let first = activation::activate(&copy);
     println!("activate: {first:?}");
@@ -147,7 +153,7 @@ mod library {
         fn copy(&self, from: &str, to: &str) -> PathBuf {
             let dest = self.fonts().join(to);
             std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
-            std::fs::copy(from, &dest).unwrap();
+            crate::tests::copy_plain(from, &dest).unwrap();
             dest
         }
         fn add_folder(&self) -> i64 {
@@ -373,7 +379,7 @@ mod safety {
     fn unreadable_changed_file_keeps_its_intent() {
         let dir = temp("keepintent");
         let font = dir.join("fonts/A.ttf");
-        std::fs::copy(ANDALE_MONO, &font).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, &font).unwrap();
         let mut conn = db::open(&dir.join("db.sqlite3")).unwrap();
         let folder = db::insert_folder(&mut conn, &dir.join("fonts"), "user").unwrap();
         scan(&dir, folder);
@@ -403,8 +409,8 @@ mod safety {
     #[test]
     fn dead_symlinks_dont_block_cleanup() {
         let dir = temp("deadlink");
-        std::fs::copy(ANDALE_MONO, dir.join("fonts/A.ttf")).unwrap();
-        std::fs::copy(ANDALE_MONO, dir.join("fonts/B.ttf")).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("fonts/A.ttf")).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("fonts/B.ttf")).unwrap();
         let mut conn = db::open(&dir.join("db.sqlite3")).unwrap();
         let folder = db::insert_folder(&mut conn, &dir.join("fonts"), "user").unwrap();
         scan(&dir, folder);
@@ -423,7 +429,7 @@ mod safety {
     fn symlink_into_another_library_folder_is_not_listed_twice() {
         let dir = temp("crosslink");
         std::fs::create_dir_all(dir.join("other")).unwrap();
-        std::fs::copy(ANDALE_MONO, dir.join("other/A.ttf")).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("other/A.ttf")).unwrap();
         std::os::unix::fs::symlink(dir.join("other"), dir.join("fonts/Other")).unwrap();
         let mut conn = db::open(&dir.join("db.sqlite3")).unwrap();
         let other = db::insert_folder(&mut conn, &dir.join("other"), "user").unwrap();
@@ -500,7 +506,7 @@ mod round_two {
         let dir = temp("handover");
         std::fs::create_dir_all(dir.join("a")).unwrap();
         std::fs::create_dir_all(dir.join("b")).unwrap();
-        std::fs::copy(ANDALE_MONO, dir.join("b/Andale.ttf")).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("b/Andale.ttf")).unwrap();
         std::os::unix::fs::symlink(dir.join("b"), dir.join("a/B")).unwrap();
         let db_path = dir.join("db.sqlite3");
         let mut conn = db::open(&db_path).unwrap();
@@ -525,7 +531,7 @@ mod round_two {
         for d in ["a", "b", "x"] {
             std::fs::create_dir_all(dir.join(d)).unwrap();
         }
-        std::fs::copy(ANDALE_MONO, dir.join("x/Andale.ttf")).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("x/Andale.ttf")).unwrap();
         std::os::unix::fs::symlink(dir.join("x"), dir.join("a/X")).unwrap();
         std::os::unix::fs::symlink(dir.join("x"), dir.join("b/X")).unwrap();
         let db_path = dir.join("db.sqlite3");
@@ -548,7 +554,7 @@ mod round_two {
         let dir = temp("legacy");
         std::fs::create_dir_all(dir.join("fonts")).unwrap();
         std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
-        std::fs::copy(ANDALE_MONO, dir.join("elsewhere/A.ttf")).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("elsewhere/A.ttf")).unwrap();
         std::os::unix::fs::symlink(dir.join("elsewhere"), dir.join("fonts/Linked")).unwrap();
         let db_path = dir.join("db.sqlite3");
         let mut conn = db::open(&db_path).unwrap();
@@ -575,7 +581,7 @@ mod round_two {
         let dir = temp("corrupt");
         std::fs::create_dir_all(dir.join("fonts")).unwrap();
         let font = dir.join("fonts/A.ttf");
-        std::fs::copy(ANDALE_MONO, &font).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, &font).unwrap();
         let db_path = dir.join("db.sqlite3");
         let mut conn = db::open(&db_path).unwrap();
         let f = db::insert_folder(&mut conn, &dir.join("fonts"), "user").unwrap();
@@ -596,7 +602,7 @@ mod round_two {
         let dir = temp("unplugged");
         std::fs::create_dir_all(dir.join("fonts")).unwrap();
         std::fs::create_dir_all(dir.join("drive/Fonts")).unwrap();
-        std::fs::copy(ANDALE_MONO, dir.join("drive/Fonts/F.ttf")).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("drive/Fonts/F.ttf")).unwrap();
         std::os::unix::fs::symlink(dir.join("drive/Fonts"), dir.join("fonts/Ext")).unwrap();
         let db_path = dir.join("db.sqlite3");
         let mut conn = db::open(&db_path).unwrap();
@@ -677,7 +683,7 @@ fn adobe_font_store_is_never_scanned_or_switched() {
     let _ = std::fs::remove_dir_all(&dir);
     let store = dir.join("Library/Application Support/Adobe/CoreSync/plugins/livetype");
     std::fs::create_dir_all(store.join("r")).unwrap();
-    std::fs::copy(ANDALE_MONO, store.join("r/123.otf")).unwrap();
+    crate::tests::copy_plain(ANDALE_MONO, store.join("r/123.otf")).unwrap();
     std::fs::create_dir_all(dir.join("fonts")).unwrap();
     std::os::unix::fs::symlink(store.join("r/123.otf"), dir.join("fonts/Proxima.otf")).unwrap();
     std::os::unix::fs::symlink(dir.join("Library/Application Support/Adobe/CoreSync/plugins"), dir.join("fonts/CC")).unwrap();
@@ -719,4 +725,258 @@ fn startup_purges_adobe_rows() {
     let left: String = conn.query_row("SELECT path FROM fonts", [], |r| r.get(0)).unwrap();
     assert!(left.ends_with("Keep.otf"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+mod purchases_flow {
+    use std::io::Write;
+
+    use crate::{db, services::purchases};
+
+    use super::{ANDALE_MONO, HELVETICA_TTC};
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fontface-buy-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Downloads")).unwrap();
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::canonicalize(dir).unwrap()
+    }
+
+    /// A store-like zip: fonts in a subfolder, a license, macOS clutter, a webfont and a path
+    /// that tries to escape.
+    fn make_zip(path: &std::path::Path) {
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, bytes) in [
+            ("Andale/Desktop/AndaleMono-Regular.ttf", std::fs::read(ANDALE_MONO).unwrap()),
+            ("Andale/Desktop/Helvetica.ttc", std::fs::read(HELVETICA_TTC).unwrap()),
+            ("Andale/License/EULA Desktop.txt", b"license text".to_vec()),
+            ("Andale/Web/andale.woff2", b"web".to_vec()),
+            ("__MACOSX/Andale/._AndaleMono-Regular.ttf", b"junk".to_vec()),
+            ("../../escape.ttf", std::fs::read(ANDALE_MONO).unwrap()),
+        ] {
+            zip.start_file(name, opts).unwrap();
+            zip.write_all(&bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_origin(path: &std::path::Path, urls: &[&str]) {
+        let value = plist::Value::Array(urls.iter().map(|u| plist::Value::String(u.to_string())).collect());
+        let mut bytes = Vec::new();
+        value.to_writer_binary(&mut bytes).unwrap();
+        xattr::set(path, "com.apple.metadata:kMDItemWhereFroms", &bytes).unwrap();
+    }
+
+    #[test]
+    fn finds_identifies_and_imports_a_store_zip() {
+        let dir = temp("zip");
+        let download = dir.join("Downloads/andale-mono.zip");
+        make_zip(&download);
+        #[cfg(target_os = "macos")]
+        set_origin(&download, &["https://cdn.myfonts.net/s/aw/original/123/andale.zip", "https://www.myfonts.com/account/orders"]);
+
+        let data = dir.join("data");
+        let mut conn = db::open(&data.join("db.sqlite3")).unwrap();
+        crate::services::ensure_service_folders(&mut conn, &data).unwrap();
+        purchases::add_watch_folder(&conn, &purchases::validate_watch_folder(&dir.join("Downloads")).unwrap()).unwrap();
+
+        let new = purchases::check_folders(&conn).unwrap();
+        assert_eq!(new.len(), 1);
+        let find = purchases::finds(&conn).unwrap().remove(0);
+        assert_eq!(find.contents.fonts.len(), 2, "two desktop fonts; webfont, clutter and the escaping entry skipped: {:?}", find.contents.fonts);
+        assert!(find.contents.families.contains(&"Andale Mono".to_string()));
+        assert_eq!(find.contents.licenses, vec!["Andale/License/EULA Desktop.txt"]);
+        #[cfg(target_os = "macos")]
+        assert_eq!(find.store.as_deref(), Some("myfonts"), "store read from the download's origin");
+        assert!(purchases::check_folders(&conn).unwrap().is_empty(), "unchanged downloads aren't re-reported");
+
+        let source = purchases::find_source(&conn, find.id).unwrap();
+        let store = source.store.clone().unwrap_or_else(|| purchases::OTHER.into());
+        let result = purchases::import(&data, &source.path, &store, source.origin_url, source.referrer).unwrap();
+        purchases::mark_imported(&conn, find.id, &store, &result.dir).unwrap();
+        let mut files = result.files.clone();
+        files.sort();
+        assert_eq!(files, vec!["AndaleMono-Regular.ttf", "Helvetica.ttc"]);
+        let imported_dir = std::path::Path::new(&result.dir);
+        assert!(imported_dir.join("EULA Desktop.txt").exists(), "license travels with the fonts");
+        assert!(download.exists(), "the original download is left alone");
+        assert!(!dir.join("escape.ttf").exists() && !data.join("escape.ttf").exists());
+        assert!(purchases::is_import_dir(&data, imported_dir));
+        let listed = purchases::imported(&data);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].font_files, 2);
+        #[cfg(target_os = "macos")]
+        assert_eq!(listed[0].store_name, "MyFonts");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn imports_a_plain_font_file_with_a_chosen_store() {
+        let dir = temp("file");
+        let file = dir.join("Downloads/Andale Mono.ttf");
+        crate::tests::copy_plain(ANDALE_MONO, &file).unwrap();
+        let data = dir.join("data");
+        let mut conn = db::open(&data.join("db.sqlite3")).unwrap();
+        crate::services::ensure_service_folders(&mut conn, &data).unwrap();
+        let first = purchases::import(&data, &file, "fontspring", None, None).unwrap();
+        let second = purchases::import(&data, &file, "fontspring", None, None).unwrap();
+        assert_ne!(first.dir, second.dir, "a second import doesn't overwrite the first");
+        assert!(first.dir.contains("/Purchases/Fontspring/"));
+        let empty = dir.join("Downloads/notes.zip");
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&empty).unwrap());
+        z.start_file("readme.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(b"hi").unwrap();
+        z.finish().unwrap();
+        assert!(purchases::import(&data, &empty, "other", None, None).is_err(), "no fonts, no import");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn setup(name: &str) -> (std::path::PathBuf, std::path::PathBuf, rusqlite::Connection) {
+        let dir = temp(name);
+        let data = dir.join("data");
+        let mut conn = db::open(&data.join("db.sqlite3")).unwrap();
+        crate::services::ensure_service_folders(&mut conn, &data).unwrap();
+        purchases::add_watch_folder(&conn, &purchases::validate_watch_folder(&dir.join("Downloads")).unwrap()).unwrap();
+        (dir, data, conn)
+    }
+
+    /// Safari and Archive Utility unzip downloads into a folder: that's one download, and its
+    /// license comes along. Web/app files are left out, and OTF wins over TTF of the same font.
+    #[test]
+    fn an_unzipped_folder_is_one_download_with_its_license() {
+        let (dir, data, conn) = setup("folder");
+        let family = dir.join("Downloads/Andale Family");
+        for (rel, src) in [
+            ("OTF/AndaleMono.otf", ANDALE_MONO),
+            ("TTF/AndaleMono.ttf", ANDALE_MONO),
+            ("Webfonts/AndaleMono-web.ttf", ANDALE_MONO),
+            ("Collection/Helvetica.ttc", HELVETICA_TTC),
+        ] {
+            std::fs::create_dir_all(family.join(rel).parent().unwrap()).unwrap();
+            crate::tests::copy_plain(src, family.join(rel)).unwrap();
+        }
+        std::fs::write(family.join("Licensing.pdf"), b"license").unwrap();
+        std::fs::write(family.join("Broken.otf"), b"not a font").unwrap();
+
+        let new = purchases::check_folders(&conn).unwrap();
+        assert_eq!(new.len(), 1, "one download, not one per file");
+        let find = purchases::finds(&conn).unwrap().remove(0);
+        assert!(find.is_folder);
+        assert_eq!(find.contents.licenses, vec!["Licensing.pdf"]);
+        // The two Andale files are byte-identical TrueType copies (not an OTF/TTF pair), so both stay.
+        assert_eq!(find.contents.fonts.len(), 3, "{:?}", find.contents.fonts);
+        assert_eq!(find.contents.skipped_fonts, vec!["Webfonts/AndaleMono-web.ttf"], "the web copy is left out");
+        assert_eq!(find.contents.unreadable, vec!["Broken.otf"], "a bad file is shown, not silently dropped");
+
+        let source = purchases::find_source(&conn, find.id).unwrap();
+        let result = purchases::import(&data, &source.path, "other", None, None).unwrap();
+        assert!(std::path::Path::new(&result.dir).join("Licensing.pdf").exists());
+        assert_eq!(result.files.len(), 3);
+
+        // Finder writing .DS_Store doesn't make the (now dismissed) download new again.
+        purchases::dismiss(&conn, find.id).unwrap();
+        std::fs::write(family.join(".DS_Store"), b"finder").unwrap();
+        std::fs::write(family.join("OTF/.DS_Store"), b"finder").unwrap();
+        assert!(purchases::check_folders(&conn).unwrap().is_empty());
+        // A zip next to its own unzipped folder counts once.
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("Downloads/Andale Family.zip")).ok();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A recorded download that's renamed or moved keeps its state instead of being offered again.
+    #[test]
+    fn a_moved_download_is_not_offered_again() {
+        let (dir, _data, conn) = setup("moved");
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("Downloads/Andale.ttf")).unwrap();
+        let first = purchases::check_folders(&conn).unwrap();
+        purchases::dismiss(&conn, first[0]).unwrap();
+        std::fs::rename(dir.join("Downloads/Andale.ttf"), dir.join("Downloads/Andale renamed.ttf")).unwrap();
+        assert!(purchases::check_folders(&conn).unwrap().is_empty(), "not new again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Symlinks (e.g. one restored from a hostile zip pointing at a system file) are never followed.
+    #[test]
+    fn symlinked_downloads_are_ignored() {
+        let (dir, _data, conn) = setup("symlink");
+        std::os::unix::fs::symlink(ANDALE_MONO, dir.join("Downloads/Linked.ttf")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", dir.join("Downloads/Zero.otf")).unwrap();
+        assert!(purchases::check_folders(&conn).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Live FSEvents: a font dropped into a watched folder is recorded within a few seconds.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn watcher_notices_new_downloads() {
+        let dir = temp("watch");
+        let data = dir.join("data");
+        let db_path = data.join("db.sqlite3");
+        let mut conn = db::open(&db_path).unwrap();
+        crate::services::ensure_service_folders(&mut conn, &data).unwrap();
+        let folder = purchases::validate_watch_folder(&dir.join("Downloads")).unwrap();
+        purchases::add_watch_folder(&conn, &folder).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |r| {
+            let _ = tx.send(r);
+        })
+        .unwrap();
+        use notify::Watcher;
+        watcher.watch(std::path::Path::new(&folder), notify::RecursiveMode::Recursive).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        crate::tests::copy_plain(ANDALE_MONO, dir.join("Downloads/New.ttf")).unwrap();
+        let got = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("an event");
+        println!("event: {got:?}");
+        assert!(purchases::record(&conn, &dir.join("Downloads/New.ttf")).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Live FSEvents: a whole unzipped folder moved into a watched folder (as Archive Utility
+    /// does) maps to one download, with its license.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn watcher_sees_a_moved_in_folder_as_one_download() {
+        let (dir, _data, conn) = setup("watch-folder");
+        let staging = dir.join("staging/Andale Family");
+        std::fs::create_dir_all(staging.join("OTF")).unwrap();
+        crate::tests::copy_plain(ANDALE_MONO, staging.join("OTF/AndaleMono.ttf")).unwrap();
+        std::fs::write(staging.join("EULA.txt"), b"license").unwrap();
+        let root = std::path::PathBuf::from(purchases::watch_folders(&conn).unwrap().remove(0));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |r: notify::Result<notify::Event>| {
+            if let Ok(e) = r {
+                let _ = tx.send(e.paths);
+            }
+        })
+        .unwrap();
+        use notify::Watcher;
+        watcher.watch(&root, notify::RecursiveMode::Recursive).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::fs::rename(&staging, root.join("Andale Family")).unwrap();
+        let paths = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("an event");
+        let units: std::collections::HashSet<_> =
+            paths.iter().filter_map(|p| purchases::unit_for(&[root.clone()], p)).collect();
+        println!("event paths {paths:?} -> units {units:?}");
+        assert_eq!(units.len(), 1);
+        let unit = units.into_iter().next().unwrap();
+        let id = purchases::record(&conn, &unit).unwrap().expect("recorded as new");
+        let find = purchases::finds(&conn).unwrap().into_iter().find(|f| f.id == id).unwrap();
+        assert!(find.is_folder);
+        assert_eq!(find.contents.licenses, vec!["EULA.txt"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn watched_folders_cannot_nest() {
+    use crate::services::purchases::check_not_nested;
+    let existing = vec!["/Users/x/Downloads".to_string()];
+    assert!(check_not_nested(&existing, "/Users/x/Downloads/Fonts").is_err());
+    assert!(check_not_nested(&existing, "/Users/x").is_err());
+    assert!(check_not_nested(&existing, "/Users/x/Desktop").is_ok());
+    assert!(check_not_nested(&existing, "/Users/x/Downloads").is_ok(), "re-adding the same folder is harmless");
 }

@@ -42,7 +42,9 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Google Fonts: browse, download, update, remove | ✅ | ⬜ | Keyless: Fontsource catalog + google/fonts repo files; downloads go to a managed folder and are turned on |
 | Adobe Fonts: list fonts Creative Cloud turned on | ✅ | ⬜ | Read-only by design (Adobe's terms); links to Adobe; untested with CC installed |
 | Font Book: deactivated fonts, collections, Apple downloadable fonts | ⬜ | ⬜ | See INTEGRATIONS.md §2 |
-| Purchases watcher (MyFonts, Fontspring, …) | ⬜ | ⬜ | INTEGRATIONS.md §3.3 |
+| Purchases watcher (MyFonts, Fontspring, …) | ✅ | ⬜ | Watches Downloads (or chosen folders); a file, zip or unzipped folder counts as one download; store from the download's origin; copies desktop fonts + licenses into a managed folder; Subscription badge and "subscription ended" removal; a trial badge; manual import of zips/folders |
+| Purchases: trial reminder after 30 days, "License transferred" status | ⬜ | ⬜ | |
+| Purchases: "newer version available" offer | ⬜ | ⬜ | Same PostScript name with a higher font revision |
 | Open fonts catalog (Fontsource, Noto, Nerd Fonts, open foundries) | ⬜ | ⬜ | INTEGRATIONS.md §3.4 |
 | "Managed by" badges for Monotype Fonts, Connect, Fontstand | ⬜ | ⬜ | INTEGRATIONS.md §3.5 |
 

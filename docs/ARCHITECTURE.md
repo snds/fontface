@@ -100,6 +100,18 @@ apart from macOS dropping a font before its drive mounted, so launch still re-ap
 - Other fonts are fetched over `ff://`, 6 at a time, newest first. Rows that scroll away are dropped from the queue.
 - Online-only files are never downloaded for a preview; they show "Not downloaded yet". Files over 96 MB aren't previewed.
 
+**Purchases.**
+`services/purchases.rs` and `services/purchase_watch.rs` handle font downloads.
+
+How it works:
+- The watcher uses `notify` (FSEvents on macOS) to watch folders the user picks. Downloads is the default.
+- Bursts of file events are grouped for 2 seconds. Files still being written are left until their next event.
+- Each font file or zip is looked at once; its size and modified time are remembered.
+- The store comes from the download's origin, which macOS records in `kMDItemWhereFroms`. On Windows it's the `Zone.Identifier` stream. It's matched against a list of store domains.
+- Importing copies only desktop font files and license files into `Services/Purchases/<Store>/<Family>/`. They go through a hidden temporary folder, with a `.fontface-purchase.json` file that records the store, the origin and flags. The original download stays put.
+- The import folder is a library folder of kind `service`, so the normal scan and activation apply.
+- Its tables come from an idempotent `ensure_schema` (no `user_version` bump), so they merge cleanly with other features.
+
 **Cloud storage.**
 Online-only files (Google Drive or iCloud via File Provider; `SF_DATALESS` in `st_flags`)
 download when first read. The scanner counts them and the UI says so. Activated fonts must stay

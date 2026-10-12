@@ -15,6 +15,8 @@ interface Props {
   services: ServiceInfo[];
   /** Fonts Creative Cloud has turned on, once known. */
   adobeCount: number | null;
+  /** Font downloads found by the purchases watcher, waiting to be added. */
+  newPurchases: number;
   view: LibraryView;
   scans: Map<number, ScanProgress>;
   onView: (v: LibraryView) => void;
@@ -121,7 +123,7 @@ function FolderRow({
   );
 }
 
-export function Sidebar({ folders, counts, folderCounts, services, adobeCount, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan }: Props) {
+export function Sidebar({ folders, counts, folderCounts, services, adobeCount, newPurchases, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan }: Props) {
   const items: { label: string; icon: string; view: LibraryView; count: number; hint: string }[] = [
     { label: "All Fonts", icon: "font_download", view: { kind: "all" }, count: counts.all, hint: "Every font Fontface knows about" },
     {
@@ -180,7 +182,9 @@ export function Sidebar({ folders, counts, folderCounts, services, adobeCount, v
               const google = services.find((x) => x.id === "google");
               const googleScan = google?.folderId != null ? scans.get(google.folderId) : undefined;
               const googleCount = google?.folderId != null ? folderCounts.get(google.folderId) ?? 0 : 0;
-              const rows: { id: "google" | "adobe"; label: string; count: string; busy: boolean; hint: string }[] = [
+              const purchases = services.find((x) => x.id === "purchases");
+              const purchasesScan = purchases?.folderId != null ? scans.get(purchases.folderId) : undefined;
+              const rows: { id: "google" | "adobe" | "purchases"; label: string; count: string; busy: boolean; hint: string; icon?: string; highlight?: boolean }[] = [
                 {
                   id: "google",
                   label: "Google Fonts",
@@ -195,6 +199,15 @@ export function Sidebar({ folders, counts, folderCounts, services, adobeCount, v
                   busy: false,
                   hint: "Fonts Creative Cloud has turned on (read-only)",
                 },
+                {
+                  id: "purchases",
+                  label: "Purchases",
+                  count: newPurchases ? `${n(newPurchases)} new` : "",
+                  busy: !!purchasesScan,
+                  hint: "Fonts you bought: spotted in your downloads and added with their license",
+                  icon: "shopping_bag",
+                  highlight: newPurchases > 0,
+                },
               ];
               return rows.map((r) => (
                 <button
@@ -205,12 +218,19 @@ export function Sidebar({ folders, counts, folderCounts, services, adobeCount, v
                   onClick={() => onView({ kind: "service", id: r.id })}
                 >
                   <Icon
-                    name={r.busy ? "progress_activity" : "cloud"}
+                    name={r.busy ? "progress_activity" : (r.icon ?? "cloud")}
                     size={18}
                     className={cn("text-muted-foreground", r.busy && "animate-spin")}
                   />
                   <span className="flex-1 truncate">{r.label}</span>
-                  <span className="font-mono text-xs text-muted-foreground tabular-nums">{r.count}</span>
+                  <span
+                    className={cn(
+                      "font-mono text-xs tabular-nums",
+                      r.highlight ? "rounded-full bg-primary px-1.5 text-primary-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    {r.count}
+                  </span>
                 </button>
               ));
             })()}

@@ -31,7 +31,7 @@ export type LibraryView =
   | { kind: "all" }
   | { kind: "installed" }
   | { kind: "folder"; id: number }
-  | { kind: "service"; id: "google" | "adobe" };
+  | { kind: "service"; id: "google" | "adobe" | "purchases" };
 
 /** Narrows any view by on/off state. */
 export type StatusFilter = "any" | "active" | "inactive";
