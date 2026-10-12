@@ -40,6 +40,7 @@ screen readers hear the places).
 | Font Book and the macOS font folders | Gray | The three folders follow Font Book's color unless you set their own |
 | Google Fonts | Blue | Fontface's download folder |
 | Adobe Fonts | Red | |
+| Purchases | Orange | Fontface's folder for fonts imported from store downloads |
 | Google Drive (`~/Library/CloudStorage/GoogleDrive-*`) | Green | Recognized from the folder's path |
 | iCloud Drive (`~/Library/Mobile Documents/…`) | Sky | |
 | Dropbox (`~/Library/CloudStorage/Dropbox*` or `~/Dropbox`) | Indigo | |

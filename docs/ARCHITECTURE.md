@@ -100,6 +100,23 @@ apart from macOS dropping a font before its drive mounted, so launch still re-ap
 - Other fonts are fetched over `ff://`, 6 at a time, newest first. Rows that scroll away are dropped from the queue.
 - Online-only files are never downloaded for a preview; they show "Not downloaded yet". Files over 96 MB aren't previewed.
 
+**Purchases.**
+`services/purchases.rs` and `services/purchase_watch.rs` handle font downloads.
+
+How it works:
+- The watcher uses `notify` (FSEvents on macOS) to watch folders the user picks. Downloads is the default.
+- Bursts of file events are grouped for 2 seconds. Files still being written are left until their next event.
+- Each font file or zip is looked at once; its size and modified time are remembered.
+- The store comes from the download's origin, which macOS records in `kMDItemWhereFroms`. On Windows it's the `Zone.Identifier` stream. It's matched against a list of store domains.
+- Importing copies only desktop font files and license files into `Services/Purchases/<Store>/<Family>/`. They go through a hidden temporary folder, with a `.fontface-purchase.json` file that records the store, the origin and flags. The original download stays put.
+- The import folder is a library folder of kind `service`, so the normal scan and activation apply.
+- An import has two steps: `prepare` copies into the hidden folder, and `place` moves it into `<Store>/<Family>/`. A single font file instead joins a folder of its family from the same store (hard-linked in, so a scan never sees half a file).
+- Replace (`purchases::replace`) prepares the new version, then turns the old fonts off, then swaps. The old folder is renamed to `.replaced-<name>` while the new one moves in, and is renamed back if that fails. At startup, a leftover `.replaced-<name>` goes back if `<name>` is missing and is deleted otherwise. Turning fonts off and back on is passed in as functions, so tests run without touching the OS.
+- Fonts are matched by content: each font's fingerprint (length + 64-bit hash) is kept on the find and in the sidecar, with its families and faces. `record` uses them to skip downloads whose fonts are already imported; `link_replacements` uses them to offer Replace.
+- Lock order: the scan write turn, then the activation lock, then the DB mutex. File changes in the Purchases folder take turns through a separate lock that's only held for file work, never while waiting for the other three.
+- `check_folders` is single-flight per library: a second caller waits for the running check and gets its result.
+- Its tables come from an idempotent `ensure_schema` (no `user_version` bump), so they merge cleanly with other features.
+
 **Cloud storage.**
 Online-only files (Google Drive or iCloud via File Provider; `SF_DATALESS` in `st_flags`)
 download when first read. The scanner counts them and the UI says so. Activated fonts must stay

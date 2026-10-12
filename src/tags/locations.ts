@@ -12,6 +12,7 @@ import { useOrganize } from "./store";
  * - Font Book and its folders: gray (the folders follow Font Book's color unless set).
  * - Services and cloud storage: a color people know them by (Google Fonts blue, Adobe red,
  *   Google Drive green, iCloud sky, Dropbox indigo…), recognised from the folder's path.
+ *   Purchases (fonts imported from store downloads) are orange.
  * - Plain folders: amber, like a manila folder.
  * A folder inside a library folder takes the color of the nearest folder above it that has one.
  *
@@ -26,6 +27,7 @@ export const DEFAULTS = {
   folder: "amber",
   google: "blue",
   adobe: "red",
+  purchases: "orange",
 } as const satisfies Record<string, TagColor>;
 
 /** Cloud storage folders, recognised by path. The first match wins. */
@@ -56,6 +58,7 @@ export function folderKind(folder: Folder, services: ServiceInfo[], fontBookColo
   if (folder.kind === "service") {
     const service = services.find((s) => s.folderId === folder.id)?.id;
     if (service === "google") return { source: "Google Fonts", defaultColor: DEFAULTS.google };
+    if (service === "purchases") return { source: "Purchases", defaultColor: DEFAULTS.purchases };
     return { source: "Service", defaultColor: DEFAULTS.folder };
   }
   const cloud = cloudOf(folder.path);
@@ -83,7 +86,6 @@ export function useLocations(folders: Folder[], services: ServiceInfo[]): Locati
     const fontBook = locationColors.get(FONT_BOOK_LOCATION) ?? DEFAULTS.fontBook;
     const kinds = new Map(folders.map((f) => [f.id, folderKind(f, services, fontBook)]));
     const kindOf = (f: Folder) => kinds.get(f.id) ?? folderKind(f, services, fontBook);
-    const google = services.find((s) => s.id === "google")?.folderId;
 
     /** The library folder holding a path, by longest prefix. */
     const rootOf = (path: string): Folder | undefined => {
@@ -130,7 +132,7 @@ export function useLocations(folders: Folder[], services: ServiceInfo[]): Locati
       const inside = dir.startsWith(`${folder.path}/`) ? dir.slice(folder.path.length + 1) : "";
       const parts = [kind.source, folder.label, inside].filter(Boolean);
       // "Google Fonts › Google Fonts" says nothing twice.
-      if (folder.id === google || folder.kind === "system") parts.splice(1, 1);
+      if (folder.kind === "service" || folder.kind === "system") parts.splice(1, 1);
       return parts.join(" › ");
     };
 

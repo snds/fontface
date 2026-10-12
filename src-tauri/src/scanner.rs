@@ -70,10 +70,15 @@ pub fn is_font_file(path: &Path) -> bool {
 
 /// Parses every face in a font file. A plain .ttf/.otf has one face; a collection has several.
 pub fn parse_file(data: &[u8]) -> Result<Vec<ParsedFace>, String> {
+    // Real collections hold a few dozen faces at most. The count comes from the file's header,
+    // so a hostile file could claim millions; refuse those instead of parsing them all.
+    const MAX_FACES: u32 = 256;
     let collection = ttf_parser::fonts_in_collection(data);
     let count = collection.unwrap_or(1);
-    // `count` comes from the file's header, so it isn't trusted for allocation.
-    let mut faces = Vec::with_capacity((count as usize).min(64));
+    if count > MAX_FACES {
+        return Err(format!("collection claims {count} faces"));
+    }
+    let mut faces = Vec::with_capacity(count as usize);
     for index in 0..count {
         let face = Face::parse(data, index).map_err(|e| e.to_string())?;
         faces.push(parse_face(&face, collection.is_some()));

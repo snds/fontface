@@ -3,7 +3,7 @@
 
 use std::{
     collections::{BTreeSet, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering::Relaxed},
         Arc,
@@ -557,4 +557,297 @@ fn restore(state: &AppState, paths: &[String]) {
 #[tauri::command(async)]
 pub fn adobe_status() -> services::adobe::AdobeStatus {
     services::adobe::status()
+}
+
+// --------------------------------------------------------------------------------- purchases
+
+use services::purchases;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchFolder {
+    path: String,
+    /// Why it can't be read right now, if it can't (missing, or no permission).
+    problem: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurchasesStatus {
+    watching: bool,
+    folders: Vec<WatchFolder>,
+    finds: Vec<purchases::Find>,
+    imported: Vec<purchases::Imported>,
+    stores: &'static [purchases::Store],
+}
+
+/// (Re)starts or stops the purchases watcher to match the saved settings, and checks the
+/// watched folders once in the background (catching downloads made while the app was closed).
+/// The settings are read while holding the watcher lock, so the last of several quick changes wins.
+pub fn restart_purchase_watcher(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut slot = state.purchase_watcher.lock().unwrap_or_else(|p| p.into_inner());
+    *slot = None; // stops the old watcher and its worker
+    state.purchase_watch_failed.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    let Ok(conn) = db::open(&state.db_path) else { return };
+    let on = purchases::watching(&conn);
+    let folders = purchases::watch_folders(&conn).unwrap_or_default();
+    if !on || folders.is_empty() {
+        return;
+    }
+    let (watcher, failed) = services::purchase_watch::start(app.clone(), state.db_path.clone(), state.data_dir.clone(), &folders);
+    *state.purchase_watch_failed.lock().unwrap_or_else(|p| p.into_inner()) = failed.into_iter().collect();
+    *slot = watcher;
+    drop(slot);
+    let (handle, db_path, data_dir) = (app.clone(), state.db_path.clone(), state.data_dir.clone());
+    std::thread::spawn(move || {
+        if let Ok(conn) = db::open(&db_path) {
+            if let Ok(new) = purchases::check_folders(&conn, &data_dir) {
+                if !new.is_empty() {
+                    let _ = handle.emit("purchases-changed", &new);
+                }
+            }
+        }
+    });
+}
+
+#[tauri::command]
+pub async fn purchases_status(app: AppHandle) -> AppResult<PurchasesStatus> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let conn = db::open(&state.db_path)?;
+        let watching = purchases::watching(&conn);
+        let failed = state.purchase_watch_failed.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let mut finds = purchases::finds(&conn)?;
+        purchases::link_replacements(&mut finds, &state.data_dir);
+        Ok(PurchasesStatus {
+            watching,
+            folders: purchases::watch_folders(&conn)?
+                .into_iter()
+                .map(|path| WatchFolder {
+                    problem: purchases::folder_problem(&path).or_else(|| {
+                        failed.get(&path).filter(|_| watching).map(|e| format!("Not being watched: {e}"))
+                    }),
+                    path,
+                })
+                .collect(),
+            finds,
+            imported: purchases::imported(&state.data_dir),
+            stores: purchases::STORES,
+        })
+    })
+    .await
+}
+
+/// Turns watching on or off. The first time it's turned on with no folders, Downloads is added.
+#[tauri::command]
+pub async fn purchases_set_watching(app: AppHandle, on: bool) -> AppResult<()> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let downloads = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Downloads"));
+        state.write(|conn| {
+            if on && purchases::watch_folders(conn)?.is_empty() {
+                let downloads = downloads.ok_or_else(|| AppError::Other("Couldn't find your Downloads folder".into()))?;
+                purchases::add_watch_folder(conn, &purchases::validate_watch_folder(&downloads)?)?;
+            }
+            purchases::set_watching(conn, on)
+        })?;
+        restart_purchase_watcher(&app);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn purchases_add_folder(app: AppHandle, path: String) -> AppResult<()> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let real = purchases::validate_watch_folder(Path::new(&path))?;
+        state.write(|conn| {
+            purchases::check_not_nested(&purchases::watch_folders(conn)?, &real)?;
+            purchases::add_watch_folder(conn, &real)
+        })?;
+        restart_purchase_watcher(&app);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn purchases_remove_folder(app: AppHandle, path: String) -> AppResult<()> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.write(|conn| purchases::remove_watch_folder(conn, &path))?;
+        restart_purchase_watcher(&app);
+        Ok(())
+    })
+    .await
+}
+
+/// Looks through the watched folders now. Returns how many new font downloads were found.
+#[tauri::command]
+pub async fn purchases_check_now(app: AppHandle) -> AppResult<usize> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        Ok(purchases::check_folders(&db::open(&state.db_path)?, &state.data_dir)?.len())
+    })
+    .await
+}
+
+/// Which store a picked file or folder came from, if it can be told (to preselect it).
+#[tauri::command]
+pub async fn purchases_detect_store(path: String) -> AppResult<Option<String>> {
+    blocking(move || Ok(purchases::detect_store(Path::new(&path)).map(str::to_string))).await
+}
+
+/// Copies a found download's fonts and licenses into the Purchases folder. The UI then rescans
+/// that folder and turns the new fonts on.
+#[tauri::command]
+pub async fn purchases_import(app: AppHandle, id: i64, store: Option<String>) -> AppResult<purchases::ImportResult> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let source = purchases::find_source(&db::open(&state.db_path)?, &state.data_dir, id)?;
+        // One import per download, whether it was picked from the list or by hand.
+        let _op = FamilyOp::start(&state, &format!("purchase-path:{}", source.path.display()))?;
+        let store = store.filter(|s| !s.is_empty()).or(source.store).unwrap_or_else(|| purchases::OTHER.into());
+        let result = purchases::import(&state.data_dir, &source.path, &store, source.origin_url, source.referrer)?;
+        state.write(|conn| purchases::mark_imported(conn, id, &store, &result.dir))?;
+        Ok(result)
+    })
+    .await
+}
+
+/// Imports a zip, font file or folder the user picked (older purchases, or a lost origin). With
+/// no store chosen, the store is read from the file's origin when possible.
+#[tauri::command]
+pub async fn purchases_import_path(app: AppHandle, path: String, store: Option<String>) -> AppResult<purchases::ImportResult> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let source = std::fs::canonicalize(&path)?;
+        let _op = FamilyOp::start(&state, &format!("purchase-path:{}", source.display()))?;
+        let urls = purchases::origin(&source);
+        let store = store
+            .filter(|s| !s.is_empty())
+            .or_else(|| purchases::store_for(&urls).map(|s| s.id.to_string()))
+            .unwrap_or_else(|| purchases::OTHER.into());
+        let result = purchases::import(&state.data_dir, &source, &store, urls.first().cloned(), urls.get(1).cloned())?;
+        // If the watcher had listed this download, it's now imported.
+        state.write(|conn| purchases::mark_path_imported(conn, &source, &store, &result.dir))?;
+        Ok(result)
+    })
+    .await
+}
+
+/// Called when the window comes back to the front: if a watched folder couldn't be watched
+/// before (a drive that wasn't connected) and can be read now, the watcher is restarted.
+#[tauri::command]
+pub async fn purchases_retry_watch(app: AppHandle) -> AppResult<bool> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let failed: Vec<String> = state.purchase_watch_failed.lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect();
+        let back = failed.iter().any(|f| purchases::folder_problem(f).is_none());
+        if back {
+            restart_purchase_watcher(&app);
+        }
+        Ok(back)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn purchases_dismiss(app: AppHandle, id: i64) -> AppResult<()> {
+    blocking(move || app.state::<AppState>().write(|conn| purchases::dismiss(conn, id))).await
+}
+
+/// Replaces an imported purchase with a newer download of it (same store, same families). The
+/// new files are copied and checked first. Only then are the old fonts turned off and swapped
+/// out; if the swap fails, they're turned back on. The UI then rescans the folder and turns the
+/// same faces back on.
+#[tauri::command]
+pub async fn purchases_replace(app: AppHandle, id: i64, dir: String) -> AppResult<purchases::Replaced> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let source = purchases::find_source(&db::open(&state.db_path)?, &state.data_dir, id)?;
+        let _op = FamilyOp::start(&state, &format!("purchase-path:{}", source.path.display()))?;
+        let _dir_op = FamilyOp::start(&state, &format!("purchase-dir:{dir}"))?;
+        let result = purchases::replace(
+            &state.data_dir,
+            Path::new(&dir),
+            &source.path,
+            source.store.as_deref(),
+            source.origin_url,
+            source.referrer,
+            |d| turn_off_under(&state, d),
+            |paths| restore(&state, paths),
+        )?;
+        state.write(|conn| purchases::mark_imported(conn, id, &result.store, &result.dir))?;
+        Ok(result)
+    })
+    .await
+}
+
+/// "I bought it": clears an imported purchase's trial flag (and its reminder).
+#[tauri::command]
+pub async fn purchases_confirm_license(app: AppHandle, dir: String) -> AppResult<()> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let _op = FamilyOp::start(&state, &format!("purchase-dir:{dir}"))?;
+        purchases::confirm_license(&state.data_dir, Path::new(&dir))
+    })
+    .await
+}
+
+/// Removes an imported purchase: its fonts are turned off and the copied files deleted.
+/// The original download is not touched.
+#[tauri::command]
+pub async fn purchases_remove(app: AppHandle, dir: String) -> AppResult<()> {
+    blocking(move || remove_import(&app.state::<AppState>(), Path::new(&dir), "dismissed")).await
+}
+
+/// The license was transferred to someone else: like Remove, and the download isn't offered again.
+#[tauri::command]
+pub async fn purchases_transferred(app: AppHandle, dir: String) -> AppResult<()> {
+    blocking(move || remove_import(&app.state::<AppState>(), Path::new(&dir), "transferred")).await
+}
+
+fn remove_import(state: &AppState, dir: &Path, status: &str) -> AppResult<()> {
+    let _op = FamilyOp::start(state, &format!("purchase-dir:{}", dir.display()))?;
+    purchases::remove_import(&state.data_dir, dir, |d| turn_off_under(state, d), |paths| restore(state, paths))?;
+    state.write(|conn| purchases::forget_removed(conn, &dir.to_string_lossy(), status))
+}
+
+/// Shows an imported purchase's folder (with its license files) in Finder / Explorer.
+#[tauri::command(async)]
+pub fn purchases_reveal(state: State<'_, AppState>, dir: String) -> AppResult<()> {
+    if !purchases::is_import_dir(&state.data_dir, Path::new(&dir)) {
+        return Err(AppError::Invalid("That isn't a purchase Fontface imported".into()));
+    }
+    reveal(Path::new(&dir))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalReport {
+    removed: usize,
+    /// (folder name, why) for each one that couldn't be removed.
+    failed: Vec<(String, String)>,
+}
+
+/// For subscription stores (Envato Elements): the license ends with the subscription, so every
+/// font imported from that store is turned off and removed. Every item is tried; the report
+/// says which ones couldn't be removed.
+#[tauri::command]
+pub async fn purchases_subscription_ended(app: AppHandle, store: String) -> AppResult<RemovalReport> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let mut report = RemovalReport { removed: 0, failed: Vec::new() };
+        for item in purchases::imported(&state.data_dir).into_iter().filter(|i| i.store == store && i.subscription_bound) {
+            match remove_import(&state, Path::new(&item.dir), "dismissed") {
+                Ok(()) => report.removed += 1,
+                Err(e) => report.failed.push((item.label, e.to_string())),
+            }
+        }
+        Ok(report)
+    })
+    .await
 }

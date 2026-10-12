@@ -6,7 +6,11 @@ Second, it shows fonts another app, such as Adobe Creative Cloud, has already tu
 Third, it recognizes fonts the user bought when the download lands in a watched folder.
 Fontface never copies, decrypts, converts or re-shares a font in a way its license forbids.
 
-Status (2026-10-12): the All Fonts, Font Book and Folders views, Google Fonts (keyless: the Fontsource catalog plus full files from the google/fonts repository) and the read-only Adobe Fonts listing are built. Everything else here is still a plan. Facts were checked live on 2026-10-12, and each section ends with its sources. Fontface uses only other font managers' public documentation, never their code, binaries or hosted data (see [FEATURES.md](FEATURES.md)).
+Status (2026-10-12): built so far:
+- the All Fonts, Font Book and Folders views;
+- Google Fonts (keyless: the Fontsource catalog plus full files from the google/fonts repository);
+- the read-only Adobe Fonts listing;
+- the Purchases download watcher (§3.3). Still to do there: the "Replace with newer version" offer, the 30-day trial reminder, and a "License transferred" status. Everything else here is still a plan. Facts were checked live on 2026-10-12, and each section ends with its sources. Fontface uses only other font managers' public documentation, never their code, binaries or hosted data (see [FEATURES.md](FEATURES.md)).
 
 ## 1. Summary
 
@@ -235,10 +239,14 @@ Most font stores have no API. Fontface instead notices font downloads, reads whe
 
 - Set up: Settings > Services > Purchases > "Watch for font downloads". The default folder is `~/Downloads`. macOS asks the user for permission.
 - When a `.zip`, `.otf`, `.ttf`, `.ttc` or `.otc` file arrives, Fontface asks, for example, "Fonts from MyFonts: add to library?"
-- Import copies only desktop font files and license files into `Sources/purchases/<store>/<family>/`. The original download stays put. "Import zip or folder" handles older purchases; the user picks the store if Fontface can't tell.
-- A newer version of an owned font (same PostScript name, higher `head.fontRevision`) gets a "Replace" offer. Apps may show the old version until restarted.
+- Import copies only desktop font files and license files into `Services/Purchases/<Store>/<Family>/` (web, app and ebook font files are left out; when a download has OTF and TTF of the same font, the OTF is kept). Font files that can't be read are listed on the find instead of being dropped silently. A folder with more than 2,000 fonts is too big to treat as one download; the panel says so and the user imports it by hand. The original download stays put. "Import zip or folder" handles older purchases; the user picks the store if Fontface can't tell.
+- A download that looks like a newer version of an imported purchase gets a "Replace" offer instead of "Add to library". It must come from the same store, hold only families the purchase has, share at least one font with it (same PostScript name, variable or static, slant), and have different files. Version numbers aren't compared.
+- Replace copies the new files first. Then it turns the old fonts off, swaps the files inside the same folder, and turns the same styles back on. Styles that are new in this version turn on too, if any style was on. Styles the download doesn't include stay, and so do the old license files. If the swap fails, the old files stay and their fonts go back on. Apps may show the old version until restarted.
+- Fonts are recognised by their contents (a fingerprint of each file). A download whose fonts are all already imported isn't offered again, for example an imported folder tidied into a subfolder of Downloads. The same goes for a dismissed download that was moved, but not for a fresh copy of it next to the original.
+- Single font files of one family, downloaded one at a time, go into one folder. A file joins a folder from the same store that has its family but not its style. A possible trial never joins a folder of bought fonts, or the other way round.
 - Envato Elements fonts are marked "Subscription-bound". A "My Elements subscription ended" action uninstalls them all, because the license requires uninstalling, not just turning off.
-- Fontstore trial fonts are marked "Trial, not for commercial use", with a reminder after 30 days. A "License transferred" status prompts removal. Turning the watcher off keeps imported fonts.
+- Downloads that may be trials (all of Fontstore's, and names with words like "trial" or "demo") are marked "May be a trial". 30 days after import, the Purchases page shows a reminder with "Remove" and "I bought it". "I bought it" clears the flag, and it stays cleared when a newer version replaces the purchase.
+- "License transferred…" on an imported purchase is for a license passed on to someone else. Like "subscription ended" for one item, it turns the fonts off and deletes Fontface's copy, and that download is never offered again. Turning the watcher off keeps imported fonts.
 
 **Technical design**
 
@@ -246,6 +254,8 @@ Most font stores have no API. Fontface instead notices font downloads, reads whe
 - Origin on macOS: the `com.apple.metadata:kMDItemWhereFroms` extended attribute, a small property list holding the download URL and page (crates `xattr` and `plist`). On Windows: the `Zone.Identifier` stream's `HostUrl` and `ReferrerUrl`.
 - A user-editable data file maps domains to stores: myfonts.com, fonts.com (legacy), fontspring.com, fontsquirrel.com, typenetwork.com, futurefonts.com, fontstore.com, ilovetypography.com, elements.envato.com, graphicriver.net, creativemarket.com, fontshare.com and foundry sites.
 - Some unzip tools, copies to other drives and Windows "Unblock" strip the origin. Then the user tags the store. Skip online-only cloud placeholders (`cloud.rs::is_dataless`).
+- Each font gets a fingerprint: its length and a 64-bit hash of its bytes. Finds store them, and each purchase's sidecar stores them with its families and faces. Sidecars written before this are described from their files when read.
+- One check of the watched folders runs at a time. A check asked for meanwhile (the watcher, "Check now", the check at startup) waits and shares the running check's result. When the watcher stops, its pending batch is still checked.
 
 **License and ToS guardrails**
 

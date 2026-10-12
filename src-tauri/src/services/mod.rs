@@ -9,6 +9,8 @@
 
 pub mod adobe;
 pub mod google;
+pub mod purchase_watch;
+pub mod purchases;
 
 use std::{
     path::{Path, PathBuf},
@@ -22,8 +24,8 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-/// (service id, folder name) for every download service.
-pub const DOWNLOAD_SERVICES: &[(&str, &str)] = &[("google", "Google Fonts")];
+/// (service id, folder name) for every service with a folder Fontface manages.
+pub const DOWNLOAD_SERVICES: &[(&str, &str)] = &[("google", "Google Fonts"), ("purchases", "Purchases")];
 
 pub fn services_root(data_dir: &Path) -> PathBuf {
     data_dir.join("Services")
@@ -42,6 +44,8 @@ pub fn service_for_path(data_dir: &Path, path: &Path) -> Option<&'static str> {
 /// Creates each service's managed folder and makes sure it's in the library as kind `service`.
 pub fn ensure_service_folders(conn: &mut Connection, data_dir: &Path) -> AppResult<()> {
     sweep_leftovers(data_dir);
+    purchases::sweep_leftovers(data_dir);
+    purchases::ensure_schema(conn)?;
     for (_, name) in DOWNLOAD_SERVICES {
         let dir = services_root(data_dir).join(name);
         std::fs::create_dir_all(&dir)?;

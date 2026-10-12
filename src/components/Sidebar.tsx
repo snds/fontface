@@ -22,6 +22,8 @@ interface Props {
   services: ServiceInfo[];
   /** Fonts Creative Cloud has turned on, once known. */
   adobeCount: number | null;
+  /** Font downloads found by the purchases watcher, waiting to be added. */
+  newPurchases: number;
   view: LibraryView;
   scans: Map<number, ScanProgress>;
   onView: (v: LibraryView) => void;
@@ -159,7 +161,7 @@ function UserFolder({ folder, families, row, view, onView, locations }: {
   );
 }
 
-export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan }: Props) {
+export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan }: Props) {
   const locations = useLocations(folders, services);
   const items: { label: string; icon: string; view: LibraryView; count: number; hint: string }[] = [
     { label: "All Fonts", icon: "font_download", view: { kind: "all" }, count: counts.all, hint: "Every font Fontface knows about" },
@@ -241,7 +243,9 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
               const google = services.find((x) => x.id === "google");
               const googleScan = google?.folderId != null ? scans.get(google.folderId) : undefined;
               const googleCount = google?.folderId != null ? folderCounts.get(google.folderId) ?? 0 : 0;
-              const rows: { id: "google" | "adobe"; label: string; count: string; busy: boolean; hint: string }[] = [
+              const purchases = services.find((x) => x.id === "purchases");
+              const purchasesScan = purchases?.folderId != null ? scans.get(purchases.folderId) : undefined;
+              const rows: { id: "google" | "adobe" | "purchases"; label: string; count: string; busy: boolean; hint: string; icon?: string; highlight?: boolean }[] = [
                 {
                   id: "google",
                   label: "Google Fonts",
@@ -256,10 +260,20 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
                   busy: false,
                   hint: "Fonts Creative Cloud has turned on (read-only)",
                 },
+                {
+                  id: "purchases",
+                  label: "Purchases",
+                  count: newPurchases ? `${n(newPurchases)} new` : "",
+                  busy: !!purchasesScan,
+                  hint: "Fonts you bought: spotted in your downloads and added with their license",
+                  icon: "shopping_bag",
+                  highlight: newPurchases > 0,
+                },
               ];
               return rows.map((r) => {
-                // Google Fonts' color is its download folder's; Adobe Fonts has no folder here.
-                const location = r.id === "google" ? folders.find((f) => f.id === google?.folderId)?.path : ADOBE_LOCATION;
+                // Google Fonts and Purchases take their managed folder's color; Adobe Fonts has no folder here.
+                const managed = r.id === "google" ? google : r.id === "purchases" ? purchases : undefined;
+                const location = r.id === "adobe" ? ADOBE_LOCATION : folders.find((f) => f.id === managed?.folderId)?.path;
                 const color = location ? locations.colorOf(location) : undefined;
                 return (
                 <LocationMenu key={r.id} location={location ?? ""} color={color ?? "gray"} defaultColor={location ? locations.defaultOf(location) : "gray"} disabled={!location}>
@@ -270,14 +284,21 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
                   onClick={() => onView({ kind: "service", id: r.id })}
                 >
                   <Icon
-                    name={r.busy ? "progress_activity" : "cloud"}
+                    name={r.busy ? "progress_activity" : (r.icon ?? "cloud")}
                     size={18}
                     filled={!r.busy && !!color}
                     className={cn("text-muted-foreground", r.busy && "animate-spin")}
                     style={!r.busy && color ? { color: colorVar(color) } : undefined}
                   />
                   <span className="flex-1 truncate">{r.label}</span>
-                  <span className="font-mono text-xs text-muted-foreground tabular-nums">{r.count}</span>
+                  <span
+                    className={cn(
+                      "font-mono text-xs tabular-nums",
+                      r.highlight ? "rounded-full bg-primary px-1.5 text-primary-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    {r.count}
+                  </span>
                 </button>
                 </LocationMenu>
                 );

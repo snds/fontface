@@ -23,10 +23,14 @@ ttf-parser = "0.25"
 thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 ureq = "2"
+notify = "8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 core-text = "21"
+plist = "1"
+xattr = "1"
 # Finder tags (NSURL) and Font Book collections (NSFontCollection), for tag import and export.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObjCRuntime", "NSObject", "NSString", "NSURL"] }

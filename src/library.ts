@@ -32,7 +32,7 @@ export type LibraryView =
   | { kind: "all" }
   | { kind: "installed" }
   | { kind: "folder"; id: number }
-  | { kind: "service"; id: "google" | "adobe" }
+  | { kind: "service"; id: "google" | "adobe" | "purchases" }
   | { kind: "tag"; id: number }
   | { kind: "location"; path: string };
 

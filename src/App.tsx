@@ -3,8 +3,18 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { api, type Folder, type FontSummary, type GoogleFamily, type ScanProgress, type ServiceInfo } from "@/api";
-import { filterFamilies, groupFamilies, viewKey, type Face, type LibraryView, type StatusFilter } from "@/library";
+import {
+  api,
+  type Folder,
+  type FontSummary,
+  type GoogleFamily,
+  type PurchaseFind,
+  type PurchaseImported,
+  type ScanProgress,
+  type ServiceId,
+  type ServiceInfo,
+} from "@/api";
+import { activationIds, filterFamilies, groupFamilies, viewKey, type Face, type LibraryView, type StatusFilter } from "@/library";
 import { faceName } from "@/fontLoader";
 import {
   AlertDialog,
@@ -27,6 +37,7 @@ import { FontList } from "@/components/FontList";
 import { DetailPanel } from "@/components/DetailPanel";
 import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
+import { PurchasesPanel } from "@/components/PurchasesPanel";
 import { useLocations } from "@/tags/locations";
 import { useFilterContext } from "@/tags/model";
 
@@ -62,6 +73,11 @@ export default function App() {
   const [googleUpdatingAll, setGoogleUpdatingAll] = useState(false);
   /** The same busy set, readable synchronously (so two clicks can't both start). */
   const googleBusyRef = useRef(new Set<string>());
+  /** Purchases: bumped when the watcher finds something or an import/removal finishes. */
+  const [purchasesVersion, setPurchasesVersion] = useState(0);
+  const [newPurchases, setNewPurchases] = useState(0);
+  const [purchaseBusy, setPurchaseBusy] = useState<Set<string>>(new Set());
+  const purchaseBusyRef = useRef(new Set<string>());
 
   const started = useRef(false);
   const lastLiveRefresh = useRef(0);
@@ -121,7 +137,11 @@ export default function App() {
     const unlisten = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (!focused) return;
       clearTimeout(timer);
-      timer = setTimeout(() => loadFonts().catch(() => {}), 300);
+      timer = setTimeout(() => {
+        loadFonts().catch(() => {});
+        // A watched folder that wasn't available (e.g. an unplugged drive) may be back.
+        api.purchasesRetryWatch().catch(() => {});
+      }, 300);
     });
     return () => {
       clearTimeout(timer);
@@ -209,6 +229,32 @@ export default function App() {
       unlisten.then((fn) => fn());
     };
   }, [loadFonts, setScan, announce]);
+
+  // The purchases watcher found new font downloads. The listener is registered before the
+  // first count, and only the newest count is applied.
+  const purchaseCountSeq = useRef(0);
+  const countNewPurchases = useCallback(() => {
+    const my = ++purchaseCountSeq.current;
+    api
+      .purchasesStatus()
+      .then((st) => my === purchaseCountSeq.current && setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    const unlisten = listen<number[]>("purchases-changed", (e) => {
+      setPurchasesVersion((v) => v + 1);
+      countNewPurchases();
+      const n = e.payload.length;
+      toast.info(n === 1 ? "New font download found" : `${n} new font downloads found`, {
+        description: "Add them to your library from Purchases.",
+        action: { label: "Review", onClick: () => setView({ kind: "service", id: "purchases" }) },
+      });
+    });
+    unlisten.then(() => countNewPurchases());
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [countNewPurchases]);
 
   // A folder view whose folder is gone (e.g. removed while a removal was still running) falls
   // back to All Fonts.
@@ -313,8 +359,149 @@ export default function App() {
     }
   };
 
-  const googleFolderNow = () =>
-    foldersRef.current.find((f) => f.id === servicesRef.current.find((s) => s.id === "google")?.folderId);
+  const serviceFolderNow = (id: ServiceId) =>
+    foldersRef.current.find((f) => f.id === servicesRef.current.find((s) => s.id === id)?.folderId);
+  const googleFolderNow = () => serviceFolderNow("google");
+
+  /**
+   * After a service copied files into `dir`: rescan its folder (once more if files are missing),
+   * then turn the new fonts on, one copy per style like everywhere else in the library, and
+   * check it worked. Throws a plain explanation if the files didn't fully reach the library or
+   * didn't turn on. `pick` narrows which new fonts to turn on (default: all of them).
+   */
+  const bringIntoLibrary = async (
+    service: ServiceId,
+    dir: string,
+    files: string[],
+    pick: (name: string, font: FontSummary) => boolean = () => true,
+  ) => {
+    const verb = service === "google" ? "Downloaded" : "Added";
+    const nameOf = (f: FontSummary) => f.path.slice(dir.length + 1);
+    const read = async () => {
+      const folder = serviceFolderNow(service);
+      if (folder) await rescan(folder);
+      // Font ids don't depend on on/off state, so a direct list is fine for picking them; the
+      // displayed list is refreshed through the guarded loader below.
+      const list = await api.listFonts();
+      return { list, added: list.filter((f) => f.path.startsWith(`${dir}/`)) };
+    };
+    let { list, added } = await read();
+    if (files.some((n) => !added.some((f) => nameOf(f) === n))) ({ list, added } = await read());
+    if (added.length === 0) {
+      throw new Error(`${verb}, but it isn't in the library yet. Quit and reopen Fontface to finish adding it.`);
+    }
+    const arrived = new Set(added.map(nameOf));
+
+    // Faces with a new copy here; turn on one copy each, preferring the new one.
+    const newIds = new Set(added.filter((f) => pick(nameOf(f), f)).map((f) => f.id));
+    const faces = groupFamilies(list).flatMap((fam) => fam.faces).filter((face) => face.copies.some((c) => newIds.has(c.id)));
+    const ids = activationIds(
+      faces.map((face) => {
+        const here = face.copies.filter((c) => newIds.has(c.id));
+        return { ...face, primary: here[0], copies: here };
+      }),
+      true,
+    );
+    const wantedFiles = new Set(list.filter((f) => ids.includes(f.id)).map((f) => f.path));
+    const on = await setActivation(ids, true, [...wantedFiles]);
+    await loadFonts();
+
+    const turnedOn = [...wantedFiles].filter((p) => on.has(p)).length;
+    const missing = files.filter((n) => !arrived.has(n));
+    if (missing.length) {
+      throw new Error(`${verb}, but only ${arrived.size} of ${files.length} files reached the library. Quit and reopen Fontface to finish.`);
+    }
+    if (wantedFiles.size && turnedOn === 0) throw new Error(`${verb}, but it couldn't be turned on. See the messages above.`);
+    if (turnedOn < wantedFiles.size) throw new Error(`${verb}; ${turnedOn} of ${wantedFiles.size} files turned on. See the messages above.`);
+  };
+
+  /** Runs a purchase operation with its busy state, then has the Purchases page reload. */
+  const purchaseOp = async (key: string, op: () => Promise<void>) => {
+    if (purchaseBusyRef.current.has(key)) throw new Error("Already working on that");
+    purchaseBusyRef.current.add(key);
+    setPurchaseBusy(new Set(purchaseBusyRef.current));
+    try {
+      await op();
+    } finally {
+      purchaseBusyRef.current.delete(key);
+      setPurchaseBusy(new Set(purchaseBusyRef.current));
+      setPurchasesVersion((v) => v + 1);
+      countNewPurchases();
+    }
+  };
+
+  // A single font file may join a folder of its family: turn on only the files this import added.
+  const importPurchase = (find: PurchaseFind, store: string | null) =>
+    purchaseOp(`path:${find.path}`, async () => {
+      const result = await api.purchasesImport(find.id, store);
+      await bringIntoLibrary("purchases", result.dir, result.files, (name) => result.files.includes(name));
+      toast.success(`Added ${find.contents.families[0] ?? find.name} to your library`);
+    });
+
+  const importPurchasePath = (path: string, store: string | null) =>
+    purchaseOp(`path:${path}`, async () => {
+      const result = await api.purchasesImportPath(path, store);
+      await bringIntoLibrary("purchases", result.dir, result.files, (name) => result.files.includes(name));
+      toast.success("Added to your library");
+    });
+
+  /**
+   * Swaps a newer download in for an imported purchase, then turns the same faces back on (and
+   * faces that are new in this version, if any were on). Nothing is turned on if it was all off.
+   */
+  const replacePurchase = (find: PurchaseFind, dir: string) =>
+    purchaseOp(`path:${find.path}`, async () => {
+      mutationEpoch.current++;
+      let result;
+      try {
+        result = await api.purchasesReplace(find.id, dir);
+      } finally {
+        mutationEpoch.current++;
+      }
+      const wasOn = new Set(result.wasActiveFaces);
+      const old = new Set(result.oldFaces);
+      await bringIntoLibrary("purchases", result.dir, result.files, (_, font) => {
+        const ps = font.postscriptName;
+        return !!ps && (wasOn.has(ps) || (wasOn.size > 0 && !old.has(ps)));
+      });
+      toast.success(`Updated ${find.contents.families[0] ?? find.name} to the new version`);
+    });
+
+  const rescanPurchases = async () => {
+    const folder = serviceFolderNow("purchases");
+    if (folder) await rescan(folder).catch(() => {});
+  };
+
+  /** Removes an imported purchase. `transferred`: the license went to someone else. */
+  const removePurchase = (item: PurchaseImported, transferred = false) =>
+    purchaseOp(`dir:${item.dir}`, async () => {
+      mutationEpoch.current++;
+      try {
+        await (transferred ? api.purchasesTransferred(item.dir) : api.purchasesRemove(item.dir));
+      } finally {
+        mutationEpoch.current++;
+        await rescanPurchases();
+      }
+    });
+
+  const purchaseSubscriptionEnded = (store: string, name: string) =>
+    purchaseOp(`store:${store}`, async () => {
+      mutationEpoch.current++;
+      let report;
+      try {
+        report = await api.purchasesSubscriptionEnded(store);
+      } finally {
+        mutationEpoch.current++;
+        await rescanPurchases();
+      }
+      const { removed, failed } = report;
+      if (failed.length) {
+        throw new Error(
+          `Removed ${removed} of ${removed + failed.length}. Couldn't remove: ${failed.map(([n, why]) => `${n} (${why})`).join("; ")}`,
+        );
+      }
+      toast.success(`Removed ${removed} ${name} ${removed === 1 ? "font set" : "font sets"}`);
+    });
 
   /**
    * Downloads a Google Fonts family, adds it to the library, and turns it on. An update turns
@@ -325,46 +512,14 @@ export default function App() {
   const installGoogle = (id: string) =>
     googleOp(id, async () => {
       const result = await api.googleInstall(id);
-      const folder = googleFolderNow();
-      if (folder) await rescan(folder);
-      // Font ids don't depend on on/off state, so a direct list is fine for picking them; the
-      // displayed list is refreshed through the guarded loader below.
-      const list = await api.listFonts();
-      const nameOf = (f: FontSummary) => f.path.slice(result.dir.length + 1);
-      const added = list.filter((f) => f.path.startsWith(`${result.dir}/`));
-      const arrived = new Set(added.map(nameOf));
-      if (added.length === 0) {
-        throw new Error("Downloaded, but it isn't in the library yet. Rescan Google Fonts, then turn it on.");
-      }
-      const missing = result.files.filter((n) => !arrived.has(n));
-
-      let wanted = added;
-      if (result.updated) {
-        const wasOn = new Set(result.wasActiveFiles);
-        const old = new Set(result.oldFiles);
-        const renamedAway = result.wasActiveFiles.some((n) => !result.files.includes(n));
-        wanted = added.filter((f) => wasOn.has(nameOf(f)) || (renamedAway && !old.has(nameOf(f))));
-      }
-      const on = await setActivation(
-        wanted.map((f) => f.id),
-        true,
-        [...new Set(wanted.map((f) => f.path))],
+      // An update turns back on exactly what was on before; a renamed file (e.g. statics rebuilt
+      // as a variable font) counts as the file it replaced.
+      const wasOn = new Set(result.wasActiveFiles);
+      const old = new Set(result.oldFiles);
+      const renamedAway = result.wasActiveFiles.some((n) => !result.files.includes(n));
+      await bringIntoLibrary("google", result.dir, result.files, (name) =>
+        !result.updated || wasOn.has(name) || (renamedAway && !old.has(name)),
       );
-      await loadFonts();
-
-      const wantedFiles = new Set(wanted.map((f) => f.path));
-      const turnedOn = [...wantedFiles].filter((p) => on.has(p)).length;
-      if (missing.length) {
-        throw new Error(
-          `Downloaded, but only ${arrived.size} of ${result.files.length} files reached the library. Rescan Google Fonts.`,
-        );
-      }
-      if (wantedFiles.size && turnedOn === 0) {
-        throw new Error("Downloaded, but it couldn't be turned on. See the messages above.");
-      }
-      if (turnedOn < wantedFiles.size) {
-        throw new Error(`Downloaded; ${turnedOn} of ${wantedFiles.size} files turned on. See the messages above.`);
-      }
     });
 
   /** Updates families one at a time, skipping any already being worked on. */
@@ -458,6 +613,7 @@ export default function App() {
           families={allFamilies}
           services={services}
           adobeCount={adobeCount}
+          newPurchases={newPurchases}
           view={view}
           scans={scans}
           onView={setView}
@@ -478,6 +634,17 @@ export default function App() {
                 onInstall={installGoogle}
                 onRemove={removeGoogle}
                 onUpdateAll={updateAllGoogle}
+              />
+            ) : view.id === "purchases" ? (
+              <PurchasesPanel
+                version={purchasesVersion}
+                busy={purchaseBusy}
+                onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
+                onImport={importPurchase}
+                onImportPath={importPurchasePath}
+                onReplace={replacePurchase}
+                onRemove={removePurchase}
+                onSubscriptionEnded={purchaseSubscriptionEnded}
               />
             ) : (
               <AdobeFontsPanel previewText={previewText} onStatus={(st) => setAdobeCount(st.faces.length)} />
