@@ -38,8 +38,10 @@ import { DetailPanel } from "@/components/DetailPanel";
 import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
+import { locateFolder } from "@/tags/locate";
 import { useLocations } from "@/tags/locations";
 import { useFilterContext } from "@/tags/model";
+import { TagDialogHost } from "@/tags/TagDialogs";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
@@ -283,6 +285,14 @@ export default function App() {
     } catch (e) {
       toast.error("Couldn't add that folder", { description: String(e) });
     }
+  };
+
+  /** "Locate…" for a folder that moved: point it at the new place, then rescan it. */
+  const relocate = async (folder: Folder) => {
+    if (!(await locateFolder(folder))) return;
+    await refresh().catch(() => {});
+    const moved = (await api.listFolders()).find((f) => f.id === folder.id);
+    if (moved) await scan(moved);
   };
 
   const removeFolder = async (folder: Folder) => {
@@ -621,6 +631,7 @@ export default function App() {
           onRemoveFolder={setPendingRemoval}
           onRescan={(f) => scan(f)}
           onCancelScan={(f) => api.cancelScan(f.id).catch((e) => toast.error(String(e)))}
+          onLocateFolder={relocate}
         />
         <main className="flex min-h-0 min-w-0 flex-col">
           {view.kind === "service" ? (
@@ -757,6 +768,11 @@ export default function App() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Tag dialogs (new, rename, delete, find, import, export), for every menu that opens one. */}
+      <TagDialogHost
+        families={allFamilies}
+        onDeleted={(ids) => setView((v) => (v.kind === "tag" && ids.includes(v.id) ? { kind: "all" } : v))}
+      />
       <Toaster position="bottom-right" />
       {/* One calm, always-present live region for screen readers. */}
       <div role="status" aria-live="polite" className="sr-only">

@@ -31,6 +31,8 @@ interface Props {
   onRemoveFolder: (f: Folder) => void;
   onRescan: (f: Folder) => void;
   onCancelScan: (f: Folder) => void;
+  /** Point a folder that can't be found at where it moved ("Locate…"). */
+  onLocateFolder?: (f: Folder) => void;
 }
 
 const same = (a: LibraryView, b: LibraryView) =>
@@ -89,6 +91,7 @@ function FolderRow({
   onRemove,
   onRescan,
   onCancel,
+  onLocate,
 }: {
   folder: Folder;
   count: number;
@@ -102,6 +105,7 @@ function FolderRow({
   onRemove: () => void;
   onRescan: () => void;
   onCancel: () => void;
+  onLocate?: () => void;
 }) {
   const system = folder.kind === "system";
   const icon = folder.missing ? "folder_off" : system ? "folder_special" : "folder";
@@ -111,7 +115,7 @@ function FolderRow({
       <button
         className="flex min-w-0 flex-1 items-center gap-2"
         aria-current={selected ? "page" : undefined}
-        title={folder.path}
+        title={folder.missing ? `Can't find ${folder.path}. If it moved, use Locate (right-click).` : folder.path}
         onClick={onView}
       >
         {scan ? (
@@ -132,7 +136,9 @@ function FolderRow({
         {scan && scan.phase === "reading" ? `${Math.floor((scan.done / Math.max(1, scan.found)) * 100)}%` : n(count)}
       </span>
       <span className="hidden items-center group-focus-within/item:flex group-hover/item:flex">
-        {scan ? (
+        {folder.missing && onLocate ? (
+          <IconAction icon="folder_open" label="Locate folder…" onClick={onLocate} />
+        ) : scan ? (
           <IconAction icon="stop_circle" label="Stop scanning" onClick={onCancel} />
         ) : (
           <IconAction icon="refresh" label="Rescan folder" onClick={onRescan} />
@@ -161,7 +167,7 @@ function UserFolder({ folder, families, row, view, onView, locations }: {
   );
 }
 
-export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan }: Props) {
+export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan, onLocateFolder }: Props) {
   const locations = useLocations(folders, services);
   const items: { label: string; icon: string; view: LibraryView; count: number; hint: string }[] = [
     { label: "All Fonts", icon: "font_download", view: { kind: "all" }, count: counts.all, hint: "Every font Fontface knows about" },
@@ -177,12 +183,14 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
   const user = folders.filter((f) => f.kind === "user");
   const running = folders.filter((f) => scans.has(f.id));
 
+  const locate = (folder: Folder) => (folder.missing && onLocateFolder ? () => onLocateFolder(folder) : undefined);
   const row = (folder: Folder, leading?: React.ReactNode) => (
     <LocationMenu
       key={folder.id}
       location={folder.path}
       color={locations.colorOf(folder.path)}
       defaultColor={locations.defaultOf(folder.path)}
+      onLocate={locate(folder)}
     >
       <FolderRow
         folder={folder}
@@ -195,6 +203,7 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
         onRemove={() => onRemoveFolder(folder)}
         onRescan={() => onRescan(folder)}
         onCancel={() => onCancelScan(folder)}
+        onLocate={locate(folder)}
       />
     </LocationMenu>
   );

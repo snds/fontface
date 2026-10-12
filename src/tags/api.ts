@@ -46,6 +46,12 @@ export interface PlannedTag {
   merged: string[];
 }
 
+export interface MissingFont {
+  /** PostScript name (or file, or family, as the source gives it). */
+  name: string;
+  tags: string[];
+}
+
 export interface ImportPreview {
   label: string;
   date: number | null;
@@ -53,7 +59,22 @@ export interface ImportPreview {
   fonts: number;
   matchedFonts: number;
   unmatchedFonts: number;
+  /** Matched as named styles inside variable fonts. */
+  namedStyleMatches: number;
+  /** Matched once the name in the font file was tidied the way macOS writes it. */
+  tidiedMatches: number;
+  /** Fonts not in the library, with the tags that name them (capped; unmatchedFonts has the total). */
+  missing: MissingFont[];
   notes: string[];
+}
+
+export interface Relocated {
+  /** False when none of the folder's fonts are at the new place: nothing changed yet. */
+  moved: boolean;
+  found: number;
+  checked: number;
+  path: string;
+  oldPath: string;
 }
 
 export interface ImportResult {
@@ -103,6 +124,7 @@ export const tagsApi = {
   remove: (tagId: number) => invoke<number[]>("tags_delete", { tagId }),
   assign: (tagIds: number[], keys: string[], on: boolean) => invoke<number>("tags_assign", { tagIds, keys, on }),
   setLocationColor: (location: string, color: TagColor | null) => invoke<void>("location_color_set", { location, color }),
+  relocateFolder: (folderId: number, path: string, force: boolean) => invoke<Relocated>("folder_relocate", { folderId, path, force }),
   importPreview: (source: ImportSource) => invoke<ImportPreview>("tags_import_preview", { source }),
   importApply: (source: ImportSource, tags: string[], keepUnmatched: boolean) =>
     invoke<ImportResult>("tags_import_apply", { source, tags, keepUnmatched }),

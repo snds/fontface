@@ -2,9 +2,11 @@ import { useSyncExternalStore } from "react";
 import type { Face } from "@/library";
 import type { Tag } from "./api";
 
-/** Which tag dialog is open. One host (in the sidebar) shows it, so any menu can ask for one. */
+/** Which tag dialog is open. One host (mounted once, near the app's root) shows it, so any menu can ask for one. */
 export type TagDialog =
   | { kind: "create"; parent?: Tag; faces?: Face[] }
+  /** Find tags for some fonts, by typing (the right-click menu's "Find a Tag…"). */
+  | { kind: "pick"; faces: Face[] }
   | { kind: "rename"; tag: Tag }
   | { kind: "delete"; tag: Tag }
   | { kind: "import" }

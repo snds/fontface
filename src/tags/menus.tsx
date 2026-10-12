@@ -24,7 +24,9 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { COLOR_NAMES, PALETTE, colorVar, type Tag, type TagColor } from "./api";
 import { openTagDialog } from "./dialogs";
+import { moveTag } from "./drag";
 import type { Locations } from "./locations";
+import { fold, isWithin, parentOf, useTagIndex } from "./model";
 import { recolorTag, setLocationColor } from "./store";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -102,6 +104,40 @@ export function openMenuFromKeyboard(e: React.KeyboardEvent): boolean {
   return true;
 }
 
+/** "Move to": the top level, or any tag that isn't this one, inside it, or its parent already. */
+function MoveSub({ kit, tag }: { kit: Kit; tag: Tag }) {
+  const { Sub, SubTrigger, SubContent, Item, Separator } = kit;
+  const index = useTagIndex();
+  const parent = parentOf(tag.name);
+  const places = index.ordered.filter((n) => !isWithin(n.tag.name, tag.name) && fold(n.tag.name) !== fold(parent ?? ""));
+  if (!parent && !places.length) return null;
+  return (
+    <Sub>
+      <SubTrigger>
+        <Icon name="drive_file_move" size={16} />
+        Move to
+      </SubTrigger>
+      <SubContent className="max-h-[min(26rem,var(--available-height))] min-w-48 overflow-y-auto">
+        {parent && (
+          <>
+            <Item onClick={() => moveTag(tag, null)}>
+              <Icon name="vertical_align_top" size={16} />
+              Top level
+            </Item>
+            {places.length > 0 && <Separator />}
+          </>
+        )}
+        {places.map((n) => (
+          <Item key={n.tag.id} title={n.tag.name} style={{ paddingLeft: 6 + n.depth * 14 }} onClick={() => moveTag(tag, n.tag)}>
+            <Icon name="label" size={16} filled style={{ color: colorVar(n.tag.color) }} />
+            <span className="truncate">{n.label}</span>
+          </Item>
+        ))}
+      </SubContent>
+    </Sub>
+  );
+}
+
 export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
   const { Item, Separator } = kit;
   return (
@@ -115,6 +151,7 @@ export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
         <Icon name="new_label" size={16} />
         New tag inside…
       </Item>
+      <MoveSub kit={kit} tag={tag} />
       <Item onClick={() => openTagDialog({ kind: "export", tag })}>
         <Icon name="ios_share" size={16} />
         Export…
@@ -129,13 +166,32 @@ export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
 }
 
 /** The color items for one location: the palette, and a way back to the default. */
-function LocationItems({ location, color, defaultColor }: { location: string; color: TagColor; defaultColor: TagColor }) {
+function LocationItems({
+  location,
+  color,
+  defaultColor,
+  onLocate,
+}: {
+  location: string;
+  color: TagColor;
+  defaultColor: TagColor;
+  onLocate?: () => void;
+}) {
   const { Item, Separator } = CONTEXT;
   // Picking the default goes back to following it (a parent folder, or Font Book), rather
   // than fixing that color in place.
   const pick = (c: TagColor) => setLocationColor(location, c === defaultColor ? null : c).catch(failed("change the color"));
   return (
     <>
+      {onLocate && (
+        <>
+          <Item onClick={onLocate}>
+            <Icon name="folder_open" size={16} />
+            Locate…
+          </Item>
+          <Separator />
+        </>
+      )}
       <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={pick} />
       {color !== defaultColor && (
         <>
@@ -151,14 +207,15 @@ function LocationItems({ location, color, defaultColor }: { location: string; co
 }
 
 /**
- * Right-click a location (a folder, Font Book, a service) to pick its color. Wraps the row in
- * a plain block, so the row's own layout is untouched.
+ * Right-click a location (a folder, Font Book, a service) to pick its color, or to locate a
+ * folder that moved. Wraps the row in a plain block, so the row's own layout is untouched.
  */
 export function LocationMenu({
   location,
   color,
   defaultColor,
   disabled,
+  onLocate,
   children,
 }: {
   location: string;
@@ -166,6 +223,8 @@ export function LocationMenu({
   defaultColor: TagColor;
   /** No color for this row: just show it. */
   disabled?: boolean;
+  /** The folder can't be found: offer "Locate…" to point it at where it moved. */
+  onLocate?: () => void;
   children: React.ReactNode;
 }) {
   if (disabled) return <>{children}</>;
@@ -175,7 +234,7 @@ export function LocationMenu({
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-44">
-        <LocationItems location={location} color={color} defaultColor={defaultColor} />
+        <LocationItems location={location} color={color} defaultColor={defaultColor} onLocate={onLocate} />
       </ContextMenuContent>
     </ContextMenu>
   );

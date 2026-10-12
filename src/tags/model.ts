@@ -20,6 +20,8 @@ export const fold = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
 export const depthOf = (name: string) => name.split("/").length - 1;
 export const leafOf = (name: string) => name.slice(name.lastIndexOf("/") + 1);
 export const parentOf = (name: string) => (name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : null);
+/** `name` is `ancestor` or nested somewhere under it (ignoring letter case, like the database). */
+export const isWithin = (name: string, ancestor: string) => fold(name) === fold(ancestor) || fold(name).startsWith(`${fold(ancestor)}/`);
 
 export function tagTree(tags: Tag[]): TagNode[] {
   const byName = new Map<string, TagNode>();

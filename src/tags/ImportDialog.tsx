@@ -49,6 +49,48 @@ async function pickSource(kind: ImportSource["kind"]): Promise<ImportSource | nu
   return typeof path === "string" ? { kind, path } : null;
 }
 
+/** The fonts the source names that aren't in the library, opened on request, with a way to copy them. */
+function MissingFonts({ preview }: { preview: ImportPreview }) {
+  const [open, setOpen] = useState(false);
+  const total = preview.unmatchedFonts;
+  const copy = () => {
+    const text = preview.missing.map((m) => `${m.name}\t${m.tags.join(", ")}`).join("\n");
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast.success(`Copied ${n(preview.missing.length)} font names`, { description: "One per line, with their tags after a tab." }))
+      .catch((e) => toast.error("Couldn't copy", { description: String(e) }));
+  };
+  return (
+    <details className="rounded-lg border text-xs" onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="cursor-default px-3 py-2 select-none">
+        Show the {n(total)} {total === 1 ? "font" : "fonts"} not in your library
+      </summary>
+      {open && (
+        <div className="flex flex-col gap-2 border-t p-2">
+          <div className="flex items-center gap-2">
+            <span className="flex-1 text-muted-foreground">
+              Most are fonts you don't have here, such as Google Fonts that Typeface downloaded itself.
+              {preview.missing.length < total && ` The first ${n(preview.missing.length)} are listed.`}
+            </span>
+            <Button variant="outline" size="xs" onClick={copy}>
+              <Icon name="content_copy" size={14} />
+              Copy list
+            </Button>
+          </div>
+          <ul className="max-h-48 overflow-y-auto font-mono" aria-label="Fonts not in your library">
+            {preview.missing.map((m) => (
+              <li key={m.name} className="flex gap-2 px-1 py-0.5">
+                <span className="truncate">{m.name}</span>
+                <span className="ml-auto shrink-0 truncate font-sans text-muted-foreground">{m.tags.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </details>
+  );
+}
+
 /**
  * Import tags: pick a source, see what it holds and how it matches the library, tick the tags
  * to bring in, then apply. Running it again adds nothing new.
@@ -226,6 +268,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
                 </span>
               </label>
             )}
+            {preview.missing.length > 0 && <MissingFonts preview={preview} />}
             {preview.notes.map((note) => (
               <p key={note} className="flex items-start gap-1.5 text-xs text-muted-foreground">
                 <Icon name="info" size={14} className="mt-px" />

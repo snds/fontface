@@ -663,7 +663,7 @@ fn real_typeface_backup() {
 /// dialog does: preview, then apply the tags it ticks, keeping tags for fonts not in the
 /// library yet. Backups are applied in the order given, so tags merge into the first spelling.
 ///
-/// Dry run (prints the previews, changes nothing):
+/// Dry run (prints the previews; works on a snapshot, so the library isn't touched):
 ///   FONTFACE_TYPEFACE_BACKUPS='a.typeface-backup|b.typeface-backup' FONTFACE_LIBRARY=/path/library.sqlite3 \
 ///     cargo test import_typeface_backups -- --ignored --nocapture
 /// Add FONTFACE_APPLY_TO=<the same path as FONTFACE_LIBRARY> to write. Fontface's own library
@@ -679,7 +679,20 @@ fn import_typeface_backups() {
     if apply && real && std::env::var("FONTFACE_REAL_LIBRARY").ok().as_deref() != Some("yes") {
         panic!("{library} is Fontface's own library. Set FONTFACE_REAL_LIBRARY=yes (and quit Fontface) to change it.");
     }
-    let mut conn = db::open(std::path::Path::new(&library)).unwrap();
+    // A dry run works on a snapshot (VACUUM INTO also takes what's still in the WAL file), so
+    // the library itself isn't opened for writing at all.
+    let _scratch;
+    let target = if apply {
+        PathBuf::from(&library)
+    } else {
+        let lib = Library::new("dry-run");
+        let snapshot = lib.dir.join("snapshot.sqlite3");
+        let source = Connection::open_with_flags(&library, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        source.execute("VACUUM INTO ?1", [snapshot.to_string_lossy()]).unwrap();
+        _scratch = lib;
+        snapshot
+    };
+    let mut conn = db::open(&target).unwrap();
     super::ensure_schema(&conn).unwrap();
     let count = |conn: &Connection, sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
     for backup in backups.split('|').map(str::trim).filter(|b| !b.is_empty()) {
@@ -905,4 +918,70 @@ fn reads_typeface_format_5_and_its_own_download_folder() {
     assert_eq!(source.tags.len(), 1);
     assert!(source.notes.iter().any(|n| n.contains("Typeface kept the Google Fonts")), "{:?}", source.notes);
     assert!(source.notes.iter().any(|n| n.contains("watching 1 folder, and 1 isn't on this Mac") && n.contains("…/x/Fonts")), "{:?}", source.notes);
+}
+
+// ------------------------------------------------------------------------------- relocating
+
+#[test]
+fn a_moved_folder_keeps_its_fonts_tags_and_colors() {
+    let mut lib = Library::new("relocate");
+    let old = lib.dir.join("Design/Fonts").to_string_lossy().into_owned();
+    lib.conn.execute("INSERT INTO folders (path, added_at, kind) VALUES (?1, 0, 'user')", [&old]).unwrap();
+    let folder = lib.conn.last_insert_rowid();
+    let a = format!("{old}/A.otf");
+    let b = format!("{old}/sub/B.otf");
+    lib.font(folder, &a, Some("A-Regular"), "A", "Regular", false, false);
+    let b_key = lib.font(folder, &b, None, "B", "Regular", false, false);
+    lib.conn.execute("UPDATE fonts SET activated = 1 WHERE path = ?1", [&a]).unwrap();
+    lib.conn
+        .execute("INSERT INTO skipped_files (path, folder_id, file_size, mtime, reason) VALUES (?1, ?2, 1, 1, 'bad')", params![format!("{old}/bad.otf"), folder])
+        .unwrap();
+    let t = super::create_tag(&mut lib.conn, "Sci-Fi", None).unwrap();
+    super::assign(&mut lib.conn, &[t.id], &[b_key.clone()], true).unwrap();
+    super::set_location_color(&lib.conn, &old, Some("green")).unwrap();
+    super::set_location_color(&lib.conn, &format!("{old}/sub"), Some("red")).unwrap();
+    super::set_location_color(&lib.conn, "/fonts", Some("blue")).unwrap();
+
+    // Nothing there yet: asks first, changes nothing.
+    let empty = lib.dir.join("Empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let r = super::relocate::relocate(&mut lib.conn, folder, &empty, false).unwrap();
+    assert_eq!((r.moved, r.found, r.checked), (false, 0, 2));
+    assert_eq!(db::get_folder(&lib.conn, folder).unwrap().path, old);
+
+    // The fonts moved to Archive/Fonts.
+    let new_dir = lib.dir.join("Archive/Fonts");
+    std::fs::create_dir_all(new_dir.join("sub")).unwrap();
+    std::fs::write(new_dir.join("A.otf"), b"x").unwrap();
+    std::fs::write(new_dir.join("sub/B.otf"), b"x").unwrap();
+    let r = super::relocate::relocate(&mut lib.conn, folder, &new_dir, false).unwrap();
+    let new = std::fs::canonicalize(&new_dir).unwrap().to_string_lossy().into_owned();
+    assert!(r.moved);
+    assert_eq!((r.found, r.checked), (2, 2));
+    assert_eq!(db::get_folder(&lib.conn, folder).unwrap().path, new);
+    let paths: Vec<String> =
+        lib.conn.prepare("SELECT path FROM fonts WHERE folder_id = ?1 ORDER BY path").unwrap().query_map([folder], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(paths, vec![format!("{new}/A.otf"), format!("{new}/sub/B.otf")]);
+    let skipped: String = lib.conn.query_row("SELECT path FROM skipped_files", [], |r| r.get(0)).unwrap();
+    assert_eq!(skipped, format!("{new}/bad.otf"));
+    assert_eq!(r.active, vec![format!("{new}/A.otf")]);
+    assert_eq!(r.old_paths.len(), 2);
+    // The tag kept by file follows the file.
+    assert_eq!(lib.keys_of("Sci-Fi"), vec![face_key(None, false, false, &format!("{new}/sub/B.otf"), 0)]);
+    let colors = super::location_colors(&lib.conn).unwrap();
+    assert_eq!(colors.get(&new).map(String::as_str), Some("green"));
+    assert_eq!(colors.get(&format!("{new}/sub")).map(String::as_str), Some("red"));
+    assert_eq!(colors.get("/fonts").map(String::as_str), Some("blue"), "other folders are untouched");
+    assert!(!colors.keys().any(|k| k.starts_with(&old)));
+
+    // Folders never overlap, and macOS folders can't be moved.
+    let inside = lib.dir.join("Archive/Fonts/sub");
+    lib.conn.execute("INSERT INTO folders (path, added_at, kind) VALUES (?1, 0, 'user')", [lib.dir.join("Other").to_string_lossy()]).unwrap();
+    let other = lib.conn.last_insert_rowid();
+    std::fs::create_dir_all(lib.dir.join("Other")).unwrap();
+    assert!(super::relocate::relocate(&mut lib.conn, other, &inside, true).is_err(), "inside another library folder");
+    assert!(super::relocate::relocate(&mut lib.conn, lib.system_folder, &empty, true).is_err());
+    // Forcing works when the files really aren't there yet (say, still syncing).
+    let r = super::relocate::relocate(&mut lib.conn, folder, &empty, true).unwrap();
+    assert!(r.moved && r.found == 0);
 }

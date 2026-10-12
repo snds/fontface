@@ -22,6 +22,7 @@ pub mod commands;
 pub mod export;
 pub mod import;
 pub mod named_styles;
+pub mod relocate;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod typeface;

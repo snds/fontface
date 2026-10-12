@@ -9,7 +9,7 @@ use tauri::{AppHandle, State};
 use super::{
     export,
     import::{self, ImportPreview, ImportResult, Source},
-    typeface, Organize, Tag,
+    relocate, typeface, Organize, Tag,
 };
 use crate::{
     error::{AppError, AppResult},
@@ -51,6 +51,26 @@ pub fn tags_assign(state: State<'_, AppState>, tag_ids: Vec<i64>, keys: Vec<Stri
 #[tauri::command(async)]
 pub fn location_color_set(state: State<'_, AppState>, location: String, color: Option<String>) -> AppResult<()> {
     state.write(|conn| super::set_location_color(conn, &location, color.as_deref()))
+}
+
+/// Points a folder that moved at its new place, keeping its fonts' on/off state, tags and
+/// colors. With `force` unset, nothing changes if none of its fonts are there (the UI asks).
+/// The UI rescans the folder afterwards; fonts that were on are turned on again after that.
+#[tauri::command(async)]
+pub fn folder_relocate(state: State<'_, AppState>, folder_id: i64, path: String, force: bool) -> AppResult<relocate::Relocated> {
+    if state.scans()?.contains_key(&folder_id) {
+        return Err(AppError::Invalid("That folder is being scanned. Try again when the scan has finished.".into()));
+    }
+    let result = state.write(|conn| relocate::relocate(conn, folder_id, Path::new(&path), force))?;
+    if result.moved {
+        let old: std::collections::HashSet<&String> = result.old_paths.iter().collect();
+        state.seen_loaded().retain(|p| !old.contains(p));
+        let mut deferred = state.deferred();
+        deferred.retain(|p| !old.contains(p));
+        // Retried after the folder's next scan, like fonts on a drive that wasn't there at launch.
+        deferred.extend(result.active.iter().cloned());
+    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------------- import

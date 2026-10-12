@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { colorVar } from "@/tags/api";
+import { FontContextMenu } from "@/tags/FontMenu";
 import type { Locations } from "@/tags/locations";
 import { leafOf, useTagIndex } from "@/tags/model";
 import { applyTags, TagPicker } from "@/tags/TagPicker";
@@ -127,7 +128,7 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
     : [];
 
   return (
-    <aside className="flex min-h-0 flex-col border-l" aria-label="Font details">
+    <FontContextMenu faces={[face]} render={<aside className="flex min-h-0 flex-col border-l" aria-label="Font details" />}>
       <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-base font-semibold">{font.family}</h2>
@@ -266,6 +267,6 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
           </section>
         </div>
       </ScrollArea>
-    </aside>
+    </FontContextMenu>
   );
 }

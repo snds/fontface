@@ -56,10 +56,12 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
       creating.current = false;
     }
   };
+  // Matching tags come first, so Enter picks the best match; "Create" is last.
+  const createAt = shown.length;
   const choose = (i: number) => {
-    if (canCreate && i === 0) create();
+    if (canCreate && i === createAt) create();
     else {
-      const node = shown[i - (canCreate ? 1 : 0)];
+      const node = shown[i];
       if (node) toggle(node.tag.id);
     }
   };
@@ -100,23 +102,8 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
         onKeyDown={onKeyDown}
       />
       <div id={listId} role="listbox" aria-multiselectable aria-label="Tags" className="-mx-1 max-h-72 overflow-y-auto">
-        {canCreate && (
-          <div
-            id={optionId(0)}
-            role="option"
-            aria-selected={false}
-            className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", at === 0 && "bg-accent")}
-            onMouseEnter={() => setActive(0)}
-            onClick={create}
-          >
-            <Icon name="add" size={16} className="text-muted-foreground" />
-            <span className="truncate">
-              Create “<span className="font-medium">{q}</span>”
-            </span>
-          </div>
-        )}
         {shown.map((node, i) => {
-          const pos = i + (canCreate ? 1 : 0);
+          const pos = i;
           const n = coverage.get(node.tag.id) ?? 0;
           const state = n === 0 ? false : n === faces.length ? true : "mixed";
           // In a multi-select list "selected" means the fonts have the tag; the highlight is
@@ -152,6 +139,21 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
             </div>
           );
         })}
+        {canCreate && (
+          <div
+            id={optionId(createAt)}
+            role="option"
+            aria-selected={false}
+            className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", at === createAt && "bg-accent")}
+            onMouseEnter={() => setActive(createAt)}
+            onClick={create}
+          >
+            <Icon name="add" size={16} className="text-muted-foreground" />
+            <span className="truncate">
+              Create “<span className="font-medium">{q}</span>”
+            </span>
+          </div>
+        )}
         {count === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">No tags yet. Type a name to create one.</p>}
       </div>
       <p className="px-0.5 text-[11px] text-muted-foreground">

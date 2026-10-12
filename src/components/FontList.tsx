@@ -5,27 +5,18 @@ import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuCheckboxItem,
-  ContextMenuContent,
-  ContextMenuGroup,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { colorVar } from "@/tags/api";
-import { openTagDialog } from "@/tags/dialogs";
+import { fontsPayload, pressToDrag } from "@/tags/drag";
+import { FontTagMenuItems } from "@/tags/FontMenu";
 import { openMenuFromKeyboard } from "@/tags/menus";
 import type { Locations } from "@/tags/locations";
-import { tagCoverage, uniqueFaces, useTagIndex, type TagIndex } from "@/tags/model";
+import { uniqueFaces, useTagIndex, type TagIndex } from "@/tags/model";
 import { LocationDots, TagChips } from "@/tags/TagChips";
-import { applyTags, TagPicker } from "@/tags/TagPicker";
+import { TagPicker } from "@/tags/TagPicker";
 import { ActivationSwitch, InstalledBadge } from "./ActivationSwitch";
 
 type Row = { kind: "family"; family: Family } | { kind: "face"; face: Face };
@@ -47,6 +38,9 @@ interface Props {
   onSelect: (id: number) => void;
   onActivate: (ids: number[], active: boolean) => void;
 }
+
+/** Presses on these don't start a drag: the row's own buttons, switches and fields. */
+const ROW_CONTROLS = "button, input, textarea, a, [role=switch], [data-no-drag]";
 
 const rowKey = (row: Row) => (row.kind === "family" ? `f:${row.family.name}` : `s:${row.face.key}`);
 
@@ -202,6 +196,11 @@ export function FontList(props: Props) {
               aria-label="Fonts"
               tabIndex={0}
               onKeyDown={onKeyDown}
+              onPointerDown={(e) => {
+                // Drag rows onto a tag in the sidebar to tag them.
+                const key = (e.target as HTMLElement).closest<HTMLElement>("[data-row-key]")?.dataset.rowKey;
+                if (key) pressToDrag(e, () => fontsPayload(targetsFor(key)), ROW_CONTROLS);
+              }}
               onContextMenuCapture={(e) => {
                 // A right-click inside a row's tag popover keeps the normal menu (Paste, say).
                 if (!e.currentTarget.contains(e.target as Node)) {
@@ -245,49 +244,10 @@ export function FontList(props: Props) {
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="max-h-[min(28rem,var(--available-height))] min-w-56">
-          {menuFaces.length ? <TagMenu faces={menuFaces} index={index} /> : <ContextMenuItem disabled>Right-click a font to tag it</ContextMenuItem>}
+          {menuFaces.length ? <FontTagMenuItems faces={menuFaces} index={index} /> : <ContextMenuItem disabled>Right-click a font to tag it</ContextMenuItem>}
         </ContextMenuContent>
       </ContextMenu>
     </div>
-  );
-}
-
-/** Tags as ticks in the right-click menu. A tag only some of the fonts have says so. */
-function TagMenu({ faces, index }: { faces: Face[]; index: TagIndex }) {
-  const coverage = tagCoverage(faces, index);
-  const what = faces.length === 1 ? "this style" : `${faces.length.toLocaleString()} styles`;
-  return (
-    <>
-      <ContextMenuGroup>
-        <ContextMenuLabel>Tags for {what}</ContextMenuLabel>
-        {index.ordered.map((node) => {
-          const n = coverage.get(node.tag.id) ?? 0;
-          return (
-            <ContextMenuCheckboxItem
-              key={node.tag.id}
-              checked={n === faces.length}
-              closeOnClick={false}
-              onCheckedChange={() => applyTags([node.tag.id], faces, n < faces.length)}
-              style={{ paddingLeft: 6 + node.depth * 14 }}
-              title={node.tag.name}
-            >
-              <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
-              <span className="truncate">{node.label}</span>
-              {n > 0 && n < faces.length && (
-                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
-                  {n}/{faces.length}
-                </span>
-              )}
-            </ContextMenuCheckboxItem>
-          );
-        })}
-      </ContextMenuGroup>
-      {index.ordered.length > 0 && <ContextMenuSeparator />}
-      <ContextMenuItem onClick={() => openTagDialog({ kind: "create", faces })}>
-        <Icon name="new_label" size={16} />
-        New tag…
-      </ContextMenuItem>
-    </>
   );
 }
 
