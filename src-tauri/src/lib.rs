@@ -8,6 +8,7 @@ mod protocol;
 mod scanner;
 mod services;
 mod sfnt;
+mod tags;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -83,6 +84,7 @@ pub fn run() {
             std::fs::create_dir_all(&dir)?;
             let db_path = dir.join("library.sqlite3");
             let mut conn = db::open(&db_path)?;
+            tags::ensure_schema(&conn)?;
             // The macOS font folders and the service folders are always in the library; the UI
             // scans them at launch.
             db::ensure_system_folders(&mut conn)?;
@@ -125,6 +127,18 @@ pub fn run() {
             commands::google_install,
             commands::google_remove,
             commands::adobe_status,
+            tags::commands::tags_list,
+            tags::commands::tags_create,
+            tags::commands::tags_rename,
+            tags::commands::tags_recolor,
+            tags::commands::tags_delete,
+            tags::commands::tags_assign,
+            tags::commands::location_color_set,
+            tags::commands::tags_import_preview,
+            tags::commands::tags_import_apply,
+            tags::commands::tags_export,
+            tags::commands::tags_export_finder,
+            tags::commands::tags_export_font_book,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Fontface");
