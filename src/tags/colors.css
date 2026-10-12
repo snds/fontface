@@ -5,7 +5,8 @@
  * they need 3:1 contrast against the backgrounds they sit on (WCAG 1.4.11). Checked against
  * background, sidebar and accent in each mode:
  *   light: lowest 3.7:1 (amber)   dark: lowest 5.4:1 (indigo)
- * Chip text stays in the foreground color on a light tint of the tag color (17:1 light, 6:1 dark).
+ * Chip text stays in the foreground color on a light tint of the tag color (at least 15:1 light,
+ * 8.9:1 dark).
  */
 :root {
   --tag-gray: oklch(0.56 0.015 260);

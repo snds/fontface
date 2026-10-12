@@ -86,6 +86,22 @@ function ColorSub({ kit, value, defaultColor, onPick }: { kit: Kit; value: TagCo
 
 const failed = (what: string) => (e: unknown) => toast.error(`Couldn't ${what}`, { description: String(e) });
 
+/**
+ * Opens a right-click menu from the keyboard: Shift-F10 (fn-Shift-F10 on most Mac keyboards)
+ * or the Menu key, on whatever has focus. The web view doesn't do this by itself. Returns true
+ * if it handled the key. (VoiceOver's own VO-Shift-M works too.)
+ */
+export function openMenuFromKeyboard(e: React.KeyboardEvent): boolean {
+  if (!(e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) return false;
+  e.preventDefault();
+  const el = e.target as HTMLElement;
+  const box = el.getBoundingClientRect();
+  el.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: box.left + 12, clientY: box.top + box.height / 2 }),
+  );
+  return true;
+}
+
 export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
   const { Item, Separator } = kit;
   return (
@@ -115,9 +131,12 @@ export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
 /** The color items for one location: the palette, and a way back to the default. */
 function LocationItems({ location, color, defaultColor }: { location: string; color: TagColor; defaultColor: TagColor }) {
   const { Item, Separator } = CONTEXT;
+  // Picking the default goes back to following it (a parent folder, or Font Book), rather
+  // than fixing that color in place.
+  const pick = (c: TagColor) => setLocationColor(location, c === defaultColor ? null : c).catch(failed("change the color"));
   return (
     <>
-      <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={(c) => setLocationColor(location, c).catch(failed("change the color"))} />
+      <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={pick} />
       {color !== defaultColor && (
         <>
           <Separator />
@@ -152,7 +171,9 @@ export function LocationMenu({
   if (disabled) return <>{children}</>;
   return (
     <ContextMenu>
-      <ContextMenuTrigger className="block">{children}</ContextMenuTrigger>
+      <ContextMenuTrigger className="block" onKeyDown={openMenuFromKeyboard}>
+        {children}
+      </ContextMenuTrigger>
       <ContextMenuContent className="min-w-44">
         <LocationItems location={location} color={color} defaultColor={defaultColor} />
       </ContextMenuContent>
@@ -170,6 +191,7 @@ export function LocationsMenu({ locations, children }: { locations: Locations; c
     <ContextMenu onOpenChange={(open) => !open && setTarget(null)}>
       <ContextMenuTrigger
         className="block"
+        onKeyDown={openMenuFromKeyboard}
         onContextMenuCapture={(e) => setTarget((e.target as HTMLElement).closest("[data-location]")?.getAttribute("data-location") ?? null)}
       >
         {children}

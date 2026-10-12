@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { Folder } from "@/api";
 import { viewKey, type Family, type LibraryView } from "@/library";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -54,8 +54,20 @@ function buildTree(folder: Folder, families: Family[]): DirNode[] {
   return root.children;
 }
 
-export function useSubfolders(folder: Folder, families: Family[]): DirNode[] {
-  return useMemo(() => buildTree(folder, families), [folder, families]);
+/** True if any of the folder's fonts sit in a folder inside it. Cheaper than the whole tree. */
+function hasSubfolders(folder: Folder, families: Family[]): boolean {
+  const prefix = `${folder.path}/`;
+  return families.some((family) =>
+    family.faces.some((face) => face.copies.some((c) => c.folderId === folder.id && c.path.startsWith(prefix) && c.path.indexOf("/", prefix.length) >= 0)),
+  );
+}
+
+/** A folder's subfolder tree, built only while it's open (it can hold thousands of folders). */
+export function useSubfolders(folder: Folder, families: Family[]): { nodes: DirNode[]; hasChildren: boolean } {
+  const open = useOpenRows().has(openId(folder.path));
+  const nodes = useMemo(() => (open ? buildTree(folder, families) : []), [open, folder, families]);
+  const any = useMemo(() => !open && hasSubfolders(folder, families), [open, folder, families]);
+  return { nodes, hasChildren: open ? nodes.length > 0 : any };
 }
 
 const openId = (path: string) => `loc:${path}`;
@@ -142,7 +154,7 @@ function DirRows({ nodes, depth, open, selected, onView, locations }: RowsProps)
  * A user folder's subfolders, shown under its row when it's open. Each one is a view, and
  * right-clicking one picks its color.
  */
-export function SubfolderTree({
+export const SubfolderTree = memo(function SubfolderTree({
   nodes,
   root,
   view,
@@ -162,4 +174,4 @@ export function SubfolderTree({
       <DirRows nodes={nodes} depth={1} open={open} selected={viewKey(view)} onView={onView} locations={locations} />
     </LocationsMenu>
   );
-}
+});

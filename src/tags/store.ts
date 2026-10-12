@@ -22,6 +22,9 @@ const listeners = new Set<() => void>();
 // change is still being saved (the last one to finish reloads).
 let epoch = 0;
 let pending = 0;
+// Saves run one after another, in the order they were made, so a quick "add then remove"
+// can't reach the database the other way round.
+let queue: Promise<unknown> = Promise.resolve();
 
 function set(next: Partial<OrganizeState>) {
   state = { ...state, ...next };
@@ -57,8 +60,10 @@ export async function reload(): Promise<void> {
 async function change<T>(op: () => Promise<T>): Promise<T> {
   pending++;
   epoch++;
+  const run = queue.then(op, op);
+  queue = run.catch(() => {});
   try {
-    return await op();
+    return await run;
   } finally {
     pending--;
     if (pending === 0) await reload().catch(() => {});

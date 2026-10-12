@@ -22,7 +22,9 @@ export function TagChip({ tag, partial, className }: { tag: Tag; partial?: strin
       title={partial ? `${tag.name}: ${partial}` : tag.name}
     >
       <span className="size-1.5 shrink-0 rounded-full" style={{ background: colorVar(tag.color) }} aria-hidden />
-      <span className="truncate">{leafOf(tag.name)}</span>
+      <span className="truncate" aria-hidden>
+        {leafOf(tag.name)}
+      </span>
     </span>
   );
 }
@@ -38,9 +40,12 @@ export function TagChips({ faces, index, max = 3 }: { faces: Face[]; index: TagI
   const ordered = index.ordered.filter((n) => counts.has(n.tag.id)).map((n) => n.tag);
   const shown = ordered.slice(0, max);
   const rest = ordered.slice(max);
-  const label = ordered.map((t) => t.name).join(", ");
+  const label = ordered
+    .map((t) => (counts.get(t.id)! < faces.length ? `${t.name} (on ${counts.get(t.id)} of ${faces.length} styles)` : t.name))
+    .join(", ");
   return (
-    <span className="flex min-w-0 items-center gap-1" aria-label={`Tags: ${label}`}>
+    <span className="flex min-w-0 items-center gap-1">
+      <span className="sr-only">Tags: {label}.</span>
       {shown.map((t) => {
         const n = counts.get(t.id)!;
         return <TagChip key={t.id} tag={t} partial={n < faces.length ? `${n} of ${faces.length} styles` : undefined} />;
@@ -70,11 +75,8 @@ export function LocationDots({ copies, locations, max = 3 }: { copies: FontSumma
   const places = [...new Set([...byColor.values()].flatMap((s) => [...s]))];
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={<span onClick={(e) => e.stopPropagation()} />}
-        aria-label={`Location: ${places.join("; ")}`}
-        className="flex shrink-0 items-center gap-0.5"
-      >
+      <TooltipTrigger render={<span onClick={(e) => e.stopPropagation()} />} className="flex shrink-0 items-center gap-0.5">
+        <span className="sr-only">In {places.join("; ")}.</span>
         {[...byColor.keys()].slice(0, max).map((color) => (
           <span key={color} className="size-2 rounded-full" style={{ background: colorVar(color) }} />
         ))}

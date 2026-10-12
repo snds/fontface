@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -60,9 +60,13 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [keep, setKeep] = useState(true);
   const [applying, setApplying] = useState(false);
+  // Each preview request gets a number. Closing the dialog or starting another request makes
+  // older answers stale, so a slow one can't land in a dialog that has moved on.
+  const request = useRef(0);
 
   useEffect(() => {
     if (open) return;
+    request.current++;
     setSource(null);
     setPreview(null);
     setLoading(false);
@@ -70,20 +74,23 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
   }, [open]);
 
   const choose = async (kind: ImportSource["kind"]) => {
+    const id = ++request.current;
     const picked = await pickSource(kind).catch(() => null);
-    if (!picked) return;
+    if (!picked || id !== request.current) return;
     setSource(picked);
     setLoading(true);
     try {
       const p = await tagsApi.importPreview(picked);
+      if (id !== request.current) return;
       p.tags.sort((a, b) => byTree(a.name, b.name));
       setPreview(p);
       setChosen(new Set(p.tags.filter((t) => t.suggested).map((t) => t.name)));
     } catch (e) {
+      if (id !== request.current) return;
       toast.error("Couldn't read that", { description: String(e) });
       setSource(null);
     } finally {
-      setLoading(false);
+      if (id === request.current) setLoading(false);
     }
   };
 
@@ -95,8 +102,8 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
       await reload();
       const parts = [
         r.tagsCreated && `${n(r.tagsCreated)} new ${r.tagsCreated === 1 ? "tag" : "tags"}`,
-        `${n(r.added)} ${r.added === 1 ? "style" : "styles"} tagged`,
-        r.kept && `${n(r.kept)} kept for fonts you don't have yet`,
+        `${n(r.styles)} ${r.styles === 1 ? "style" : "styles"} tagged`,
+        r.kept && `tags kept for ${n(r.kept)} ${r.kept === 1 ? "font" : "fonts"} you don't have yet`,
         r.locationColors && `${n(r.locationColors)} location colors`,
       ].filter(Boolean);
       toast.success(`Imported from ${preview.label}`, { description: parts.join(" · ") });
@@ -109,7 +116,6 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
 
   const picked = useMemo(() => preview?.tags.filter((t) => chosen.has(t.name)) ?? [], [preview, chosen]);
   const pendingFonts = picked.reduce((sum, t) => sum + t.unmatched, 0);
-  const newStyles = picked.reduce((sum, t) => sum + t.new, 0);
   const toggle = (name: string, on: boolean) =>
     setChosen((s) => {
       const next = new Set(s);
@@ -126,7 +132,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
           <DialogDescription>
             {preview
               ? `${preview.label}${preview.date ? `, made ${new Date(preview.date * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}` : ""}. Nothing changes until you import.`
-              : "Fonts are matched by their PostScript name, so they're found wherever they are now."}
+              : "Nothing changes until you've seen what each source holds and chosen what to bring in."}
           </DialogDescription>
         </DialogHeader>
 
@@ -241,7 +247,6 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
           {preview && (
             <Button onClick={apply} disabled={!chosen.size || applying}>
               {applying ? "Importing…" : `Import ${n(chosen.size)} ${chosen.size === 1 ? "tag" : "tags"}`}
-              {!applying && newStyles > 0 && <span className="font-normal opacity-70">· {n(newStyles)} styles</span>}
             </Button>
           )}
         </DialogFooter>

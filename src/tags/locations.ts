@@ -34,7 +34,7 @@ const CLOUD: { test: RegExp; label: string; color: TagColor }[] = [
   { test: /\/Library\/CloudStorage\/Dropbox/i, label: "Dropbox", color: "indigo" },
   { test: /^\/Users\/[^/]+\/Dropbox( \([^/]*\))?(\/|$)/i, label: "Dropbox", color: "indigo" },
   { test: /\/Library\/CloudStorage\/OneDrive/i, label: "OneDrive", color: "teal" },
-  { test: /\/Library\/CloudStorage\/Box/i, label: "Box", color: "blue" },
+  { test: /\/Library\/CloudStorage\/Box/i, label: "Box", color: "pink" },
   { test: /\/Library\/Mobile Documents\//i, label: "iCloud Drive", color: "sky" },
   { test: /\/Library\/CloudStorage\//i, label: "Cloud storage", color: "purple" },
 ];

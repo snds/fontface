@@ -34,12 +34,11 @@ export function toggleOpen(id: string, to?: boolean) {
   for (const l of listeners) l();
 }
 
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => listeners.delete(l);
+};
+
 export function useOpenRows(): Set<string> {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => open,
-  );
+  return useSyncExternalStore(subscribe, () => open);
 }

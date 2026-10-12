@@ -18,12 +18,11 @@ export function openTagDialog(d: TagDialog | null) {
   for (const l of listeners) l();
 }
 
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => listeners.delete(l);
+};
+
 export function useTagDialog(): TagDialog | null {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => current,
-  );
+  return useSyncExternalStore(subscribe, () => current);
 }

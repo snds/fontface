@@ -127,9 +127,9 @@ pub enum ExportFormat {
 #[serde(rename_all = "camelCase")]
 pub struct ExportSummary {
     pub tags: usize,
-    /// Font–tag pairs written.
+    /// Different fonts written.
     pub fonts: usize,
-    /// Fonts the format can't hold (Typeface needs a PostScript name).
+    /// Different fonts the format can't hold (Typeface needs a PostScript name).
     pub skipped: usize,
 }
 
@@ -144,10 +144,20 @@ pub fn tags_export(
     path: String,
     tag_ids: Option<Vec<i64>>,
 ) -> AppResult<ExportSummary> {
+    // The save dialog adds the right extension; refuse anything else, so an export can never
+    // land on a file of another kind (a shell profile, say).
+    let ext = match format {
+        ExportFormat::Json => "json",
+        ExportFormat::Csv => "csv",
+        ExportFormat::Typeface => "typeface-backup",
+    };
+    if Path::new(&path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() != Some(ext) {
+        return Err(AppError::Invalid(format!("Exports in this format must end in .{ext}")));
+    }
     let (contents, tags, fonts, skipped) = {
         let conn = state.conn()?;
         let tags = export::collect(&conn, tag_ids.as_deref())?;
-        let (count, fonts) = (tags.len(), tags.iter().map(|t| t.fonts.len()).sum());
+        let (count, fonts) = (tags.len(), export::font_count(&tags));
         match format {
             ExportFormat::Json => (export::to_json(&conn, tags, now())?, count, fonts, 0),
             ExportFormat::Csv => (export::to_csv(&tags), count, fonts, 0),
@@ -185,25 +195,32 @@ pub struct FinderExport {
 pub fn tags_export_finder(state: State<'_, AppState>, tag_ids: Option<Vec<i64>>) -> AppResult<FinderExport> {
     let (plan, skipped_installed) = export::finder_plan(&*state.conn()?, tag_ids.as_deref())?;
     let mut out = FinderExport { skipped_installed, ..Default::default() };
+    let font_dirs: Vec<std::path::PathBuf> =
+        crate::db::system_font_dirs().into_iter().filter_map(|(d, _)| std::fs::canonicalize(d).ok()).collect();
     for (path, names) in plan {
-        match add_finder_tags(&path, &names) {
-            Ok(true) => out.changed += 1,
-            Ok(false) => out.unchanged += 1,
+        match add_finder_tags(&path, &names, &font_dirs) {
+            Ok(Some(true)) => out.changed += 1,
+            Ok(Some(false)) => out.unchanged += 1,
+            Ok(None) => out.skipped_installed += 1,
             Err(e) => out.failed.push(FileProblem { path, reason: e.to_string() }),
         }
     }
     Ok(out)
 }
 
+/// `None`: left alone, because the file (followed through any links) is in a macOS font folder.
 #[cfg(target_os = "macos")]
-fn add_finder_tags(path: &str, names: &std::collections::BTreeSet<String>) -> AppResult<bool> {
-    if crate::services::adobe::is_adobe_path(Path::new(path)) {
+fn add_finder_tags(path: &str, names: &std::collections::BTreeSet<String>, font_dirs: &[std::path::PathBuf]) -> AppResult<Option<bool>> {
+    // Decide by where the file really is now, not by what the library recorded.
+    let real = std::fs::canonicalize(path).map_err(|_| AppError::NotFound("The file isn't there any more".into()))?;
+    if crate::services::adobe::is_adobe_path(Path::new(path)) || crate::services::adobe::is_adobe_path(&real) {
         return Err(AppError::Invalid("Adobe Fonts files are never changed".into()));
     }
-    if !Path::new(path).exists() {
-        return Err(AppError::NotFound("The file isn't there any more".into()));
+    if font_dirs.iter().any(|d| real.starts_with(d)) {
+        return Ok(None);
     }
-    let mut tags = super::macos::finder_tags(path)?;
+    let path = real.to_string_lossy();
+    let mut tags = super::macos::finder_tags(&path)?;
     let before = tags.len();
     for name in names {
         if !tags.iter().any(|t| t == name) {
@@ -211,14 +228,14 @@ fn add_finder_tags(path: &str, names: &std::collections::BTreeSet<String>) -> Ap
         }
     }
     if tags.len() == before {
-        return Ok(false);
+        return Ok(Some(false));
     }
-    super::macos::set_finder_tags(path, &tags)?;
-    Ok(true)
+    super::macos::set_finder_tags(&path, &tags)?;
+    Ok(Some(true))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn add_finder_tags(_: &str, _: &std::collections::BTreeSet<String>) -> AppResult<bool> {
+fn add_finder_tags(_: &str, _: &std::collections::BTreeSet<String>, _: &[std::path::PathBuf]) -> AppResult<Option<bool>> {
     Err(AppError::Unsupported("Finder tags".into()))
 }
 
@@ -227,9 +244,9 @@ fn add_finder_tags(_: &str, _: &std::collections::BTreeSet<String>) -> AppResult
 pub struct FontBookExport {
     /// Collections created or added to.
     pub collections: usize,
-    /// Fonts added across all collections.
+    /// Fonts added, counted once per collection.
     pub added: usize,
-    /// Fonts without a PostScript name, which Font Book can't list.
+    /// Different fonts without a PostScript name, which Font Book can't list.
     pub skipped: usize,
     pub failed: Vec<FileProblem>,
 }
@@ -239,10 +256,9 @@ pub struct FontBookExport {
 #[tauri::command(async)]
 pub fn tags_export_font_book(state: State<'_, AppState>, tag_ids: Option<Vec<i64>>) -> AppResult<FontBookExport> {
     let tags = export::collect(&*state.conn()?, tag_ids.as_deref())?;
-    let mut out = FontBookExport::default();
+    let mut out = FontBookExport { skipped: export::without_postscript_name(&tags), ..Default::default() };
     for tag in tags {
         let mut names: Vec<String> = tag.fonts.iter().filter_map(|f| f.postscript_name.clone()).collect();
-        out.skipped += tag.fonts.len() - names.len();
         names.sort();
         names.dedup();
         if names.is_empty() {

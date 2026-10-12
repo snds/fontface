@@ -245,7 +245,11 @@ export default function App() {
     try {
       const failures = await api.removeFolder(folder.id);
       for (const f of failures) toast.error(`Couldn't turn off ${fileName(f.path)}`, { description: f.error });
-      setView((v) => (v.kind === "folder" && v.id === folder.id ? { kind: "all" } : v));
+      setView((v) =>
+        (v.kind === "folder" && v.id === folder.id) || (v.kind === "location" && v.path.startsWith(`${folder.path}/`))
+          ? { kind: "all" }
+          : v,
+      );
     } catch (e) {
       removedFolders.current.delete(folder.id);
       toast.error(String(e));
@@ -521,10 +525,11 @@ export default function App() {
             </div>
           ) : view.kind === "tag" || view.kind === "location" ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
-              {view.kind === "tag"
-                ? "No fonts have this tag yet. Select fonts in another view, then tag them from the tag button or by right-clicking."
-                : "No fonts in this folder."}
-              {(query || status !== "any") && <span>Your search or the Active/Inactive filter may be hiding some.</span>}
+              {query || status !== "any"
+                ? `No fonts ${view.kind === "tag" ? "with this tag" : "in this folder"} match your search or the Active/Inactive filter.`
+                : view.kind === "tag"
+                  ? "No fonts have this tag yet. Select fonts in another view, then tag them from the tag button or by right-clicking."
+                  : "No fonts in this folder."}
             </div>
           ) : query || status !== "any" ? (
             <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">

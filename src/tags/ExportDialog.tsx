@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,7 @@ const FORMATS: { value: Format; title: string; hint: string; ext?: string }[] = 
   {
     value: "finder",
     title: "Finder tags on the font files",
-    hint: "Adds each tag to the font files, so Finder and Spotlight can find them. Tags already on a file stay. Fonts in the macOS font folders are left alone.",
+    hint: "Adds each tag to the font files, so Finder and Spotlight can find them. Tags already on a file stay. Fonts in the macOS font folders are left alone. Files in cloud folders sync their tags too.",
   },
   {
     value: "fontBook",
@@ -41,10 +41,8 @@ const today = () => new Date().toISOString().slice(0, 10);
 /** Export tags (all, or one tag and the tags inside it) to a file, to Finder tags or to Font Book. */
 export function ExportDialog({ open, tag, onClose }: { open: boolean; tag?: Tag; onClose: () => void }) {
   const [format, setFormat] = useState<Format>("json");
+  // Stays on until the export finishes, even if the dialog is closed and reopened meanwhile.
   const [working, setWorking] = useState(false);
-  useEffect(() => {
-    if (open) setWorking(false);
-  }, [open]);
 
   const ids = tag ? [tag.id] : null;
   const run = async () => {
@@ -71,18 +69,16 @@ export function ExportDialog({ open, tag, onClose }: { open: boolean; tag?: Tag;
           defaultPath: `${base}-${today()}.${spec.ext}`,
           filters: [{ name: spec.title, extensions: [spec.ext!] }],
         });
-        if (!path) {
-          setWorking(false);
-          return;
-        }
+        if (!path) return;
         const r = await tagsApi.exportFile(format, path, ids);
         toast.success("Tags exported", {
-          description: [`${n(r.tags)} tags, ${n(r.fonts)} fonts`, r.skipped && `${n(r.skipped)} without a PostScript name left out`].filter(Boolean).join(" · "),
+          description: [`${n(r.tags)} tags covering ${n(r.fonts)} fonts`, r.skipped && `${n(r.skipped)} without a PostScript name left out`].filter(Boolean).join(" · "),
         });
       }
       onClose();
     } catch (e) {
       toast.error("Couldn't export", { description: String(e) });
+    } finally {
       setWorking(false);
     }
   };

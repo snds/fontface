@@ -11,7 +11,7 @@ import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
 import { toggleOpen, useOpenRows } from "./expanded";
 import { countByTag, useTagIndex, type TagNode } from "./model";
-import { CONTEXT, DROPDOWN, TagMenuItems } from "./menus";
+import { CONTEXT, DROPDOWN, openMenuFromKeyboard, TagMenuItems } from "./menus";
 import { reload, useOrganize } from "./store";
 import { TagDialogHost } from "./TagDialogs";
 
@@ -54,7 +54,7 @@ function TagRow({
   return (
     <div>
       <ContextMenu>
-        <ContextMenuTrigger className={rowClass(selected)} style={{ paddingLeft: 8 + node.depth * 14 }}>
+        <ContextMenuTrigger className={rowClass(selected)} style={{ paddingLeft: 8 + node.depth * 14 }} onKeyDown={openMenuFromKeyboard}>
           {node.children.length > 0 ? (
             <Button
               variant="ghost"
@@ -78,14 +78,7 @@ function TagRow({
             <Icon name="label" size={18} filled style={{ color: colorVar(node.tag.color) }} />
             <span className="truncate">{node.label}</span>
           </button>
-          <span
-            className={cn(
-              "font-mono text-xs text-muted-foreground tabular-nums group-focus-within/item:hidden group-hover/item:hidden",
-              menu && "hidden",
-            )}
-          >
-            {n(count)}
-          </span>
+          <span className="font-mono text-xs text-muted-foreground tabular-nums">{n(count)}</span>
           <DropdownMenu open={menu} onOpenChange={setMenu}>
             <DropdownMenuTrigger
               render={
@@ -93,7 +86,8 @@ function TagRow({
                   variant="ghost"
                   size="icon-xs"
                   aria-label={`More for ${node.tag.name}`}
-                  className={cn("hidden group-focus-within/item:flex group-hover/item:flex", menu && "flex")}
+                  // Invisible until hover or focus, but always there for keyboard and VoiceOver users.
+                  className={cn("opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100", menu && "opacity-100")}
                 />
               }
             >

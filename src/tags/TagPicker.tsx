@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { Face } from "@/library";
 import { Icon } from "@/components/ui/icon";
@@ -42,13 +42,18 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
   const at = Math.min(active, Math.max(0, count - 1));
 
   const toggle = (tagId: number) => applyTags([tagId], faces, (coverage.get(tagId) ?? 0) < faces.length);
+  const creating = useRef(false);
   const create = async () => {
+    if (creating.current) return; // Enter pressed twice before the first one finished
+    creating.current = true;
     try {
       const tag = await createTag(q);
       await setFaceTags([tag.id], faces, true);
       setQuery("");
     } catch (e) {
       toast.error("Couldn't create the tag", { description: String(e) });
+    } finally {
+      creating.current = false;
     }
   };
   const choose = (i: number) => {
@@ -70,6 +75,11 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
   };
 
   const optionId = (i: number) => `${listId}-${i}`;
+  // Keep the highlighted tag in sight as the arrow keys move it.
+  useEffect(() => {
+    document.getElementById(optionId(at))?.scrollIntoView({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [at]);
   const what = faces.length === 1 ? "this style" : `${faces.length.toLocaleString()} styles`;
 
   return (
@@ -94,7 +104,7 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
           <div
             id={optionId(0)}
             role="option"
-            aria-selected={at === 0}
+            aria-selected={false}
             className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", at === 0 && "bg-accent")}
             onMouseEnter={() => setActive(0)}
             onClick={create}
@@ -109,13 +119,14 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
           const pos = i + (canCreate ? 1 : 0);
           const n = coverage.get(node.tag.id) ?? 0;
           const state = n === 0 ? false : n === faces.length ? true : "mixed";
+          // In a multi-select list "selected" means the fonts have the tag; the highlight is
+          // conveyed by aria-activedescendant on the input.
           return (
             <div
               key={node.tag.id}
               id={optionId(pos)}
               role="option"
-              aria-selected={pos === at}
-              aria-checked={state}
+              aria-selected={state === true}
               title={node.tag.name}
               className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", pos === at && "bg-accent")}
               style={{ paddingLeft: q ? undefined : 8 + node.depth * 14 }}
@@ -123,7 +134,10 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
               onClick={() => toggle(node.tag.id)}
             >
               <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
-              <span className="flex-1 truncate">{q ? node.tag.name : node.label}</span>
+              <span className="flex-1 truncate">
+                {q ? node.tag.name : node.label}
+                {state === "mixed" && <span className="sr-only">, on {n} of {faces.length} styles</span>}
+              </span>
               {state === "mixed" && (
                 <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={`${n} of ${faces.length} styles`}>
                   {n}/{faces.length}

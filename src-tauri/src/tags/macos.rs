@@ -16,8 +16,9 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSFontCollection, NSFontCollectionVisibility, NSFontDescriptor, NSFontFamilyAttribute, NSFontNameAttribute,
+    NSMutableFontCollection,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSError, NSString, NSURLTagNamesKey, NSURL};
+use objc2_foundation::{NSArray, NSComparisonResult, NSDictionary, NSError, NSString, NSURLTagNamesKey, NSURL};
 
 use super::import::{Source, SourceFont, SourceTag};
 use crate::error::{AppError, AppResult};
@@ -147,24 +148,41 @@ pub fn font_book_source() -> Source {
     })
 }
 
-/// Adds fonts (by PostScript name) to a Font Book collection, creating it if needed. Fonts
-/// already in it stay, so nothing the user put there is lost. Returns how many were added.
+/// The name of an existing collection that's the same as `name`, ignoring letter case and the
+/// way accented letters are stored. Font Book keeps each collection as a file, and file names
+/// ignore both, so "fun" and "Fun" are one collection.
+fn existing_collection(name: &NSString) -> Option<Retained<NSString>> {
+    NSFontCollection::allFontCollectionNames()
+        .iter()
+        .find(|n| n.caseInsensitiveCompare(name) == NSComparisonResult::Same)
+}
+
+/// Adds fonts (by PostScript name) to a Font Book collection, creating it if needed. Only adds:
+/// the collection's own entries (fonts, families) and its exclusions stay as they are. A
+/// collection that exists but can't be read is left alone. Returns how many fonts were added.
 pub fn add_to_collection(tag_name: &str, postscript_names: &[String]) -> AppResult<usize> {
+    let wanted = tag_name.replace('/', LEVEL_SEPARATOR);
+    if wanted.to_ascii_lowercase().starts_with("com.apple.") {
+        return Err(AppError::Invalid("Font Book keeps names that start with “com.apple.” for itself".into()));
+    }
     autoreleasepool(|_| {
-        let name = NSString::from_str(&tag_name.replace('/', LEVEL_SEPARATOR));
         // SAFETY: AppKit constant.
         let ps_key = unsafe { NSFontNameAttribute };
-        let mut descriptors: Vec<Retained<NSFontDescriptor>> = Vec::new();
-        let mut have = BTreeSet::new();
-        if let Some(existing) = NSFontCollection::fontCollectionWithName_visibility(&name, NSFontCollectionVisibility::User) {
-            for d in existing.queryDescriptors().map(|a| a.to_vec()).unwrap_or_default() {
-                if let Some(ps) = descriptor_string(&d, ps_key) {
-                    have.insert(ps);
-                }
-                descriptors.push(d);
+        let wanted = NSString::from_str(&wanted);
+        let (name, collection, have) = match existing_collection(&wanted) {
+            Some(name) => {
+                let collection = NSMutableFontCollection::fontCollectionWithName_visibility(&name, NSFontCollectionVisibility::User)
+                    .ok_or_else(|| AppError::Invalid("Font Book has a collection with this name that Fontface can't change".into()))?;
+                let entries = collection
+                    .queryDescriptors()
+                    .ok_or_else(|| AppError::Invalid("Font Book's collection couldn't be read, so it was left alone".into()))?;
+                let have: BTreeSet<String> = entries.iter().filter_map(|d| descriptor_string(&d, ps_key)).collect();
+                (name, collection, have)
             }
-        }
-        let mut added = 0;
+            None => (wanted, NSMutableFontCollection::fontCollectionWithDescriptors(&NSArray::new()), BTreeSet::new()),
+        };
+        let mut added: Vec<Retained<NSFontDescriptor>> = Vec::new();
+        let mut have = have;
         for ps in postscript_names {
             if !have.insert(ps.clone()) {
                 continue;
@@ -173,15 +191,14 @@ pub fn add_to_collection(tag_name: &str, postscript_names: &[String]) -> AppResu
             let object: &AnyObject = &value;
             let attributes = NSDictionary::from_slices(&[ps_key], &[object]);
             // SAFETY: the name attribute takes a string.
-            descriptors.push(unsafe { NSFontDescriptor::fontDescriptorWithFontAttributes(Some(&attributes)) });
-            added += 1;
+            added.push(unsafe { NSFontDescriptor::fontDescriptorWithFontAttributes(Some(&attributes)) });
         }
-        if added == 0 {
+        if added.is_empty() {
             return Ok(0);
         }
-        let collection = NSFontCollection::fontCollectionWithDescriptors(&NSArray::from_retained_slice(&descriptors));
+        collection.addQueryForDescriptors(&NSArray::from_retained_slice(&added));
         NSFontCollection::showFontCollection_withName_visibility_error(&collection, &name, NSFontCollectionVisibility::User)
             .map_err(ns_error)?;
-        Ok(added)
+        Ok(added.len())
     })
 }

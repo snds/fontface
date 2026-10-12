@@ -91,11 +91,14 @@ pub struct ImportPreview {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
+    /// Tags created, including parents a nested name needed.
     pub tags_created: usize,
     pub tags_updated: usize,
-    /// Styles that got a tag.
+    /// Tags added to styles (a style that got three tags counts three times).
     pub added: usize,
-    /// Fonts not in the library that will get their tags when they're added.
+    /// Different styles that got at least one tag.
+    pub styles: usize,
+    /// Different fonts not in the library whose tags were kept for when they're added.
     pub kept: usize,
     pub location_colors: usize,
 }
@@ -104,7 +107,8 @@ pub struct ImportResult {
 struct Resolved {
     tag: PlannedTag,
     matched: BTreeSet<String>,
-    pending: BTreeSet<String>,
+    /// For each font not in the library: the keys that keep its tag for later.
+    pending: Vec<(SourceFont, Vec<String>)>,
 }
 
 /// What one source font stands for in the library.
@@ -114,6 +118,10 @@ struct Match {
     pending: Vec<String>,
 }
 
+/// Longest font name an import accepts. Real PostScript names are at most 63 characters; this
+/// leaves room for Typeface's `<name>_<instance>` form while keeping hostile files cheap to read.
+pub const MAX_FONT_NAME: usize = 512;
+
 fn match_font(index: &LibraryIndex, font: &SourceFont) -> Match {
     let keys_of = |faces: Vec<&super::LibraryFace>| -> Vec<String> { faces.into_iter().map(|f| f.key.clone()).collect() };
     match font {
@@ -122,24 +130,32 @@ fn match_font(index: &LibraryIndex, font: &SourceFont) -> Match {
             if !exact.is_empty() {
                 return Match { keys: exact, pending: vec![] };
             }
-            // "<variable font>_<instance>": try the longest prefix that's a PostScript name in
-            // the library, preferring its variable fonts.
+            // "<variable font>_<instance>": the longest prefix that names a variable font in the
+            // library. Only variable fonts: a static font with that name is a different style.
             for (i, _) in name.rmatch_indices('_') {
-                let base = &name[..i];
-                let faces: Vec<_> = index.by_postscript_name(base).collect();
-                if !faces.is_empty() {
-                    let variable: Vec<_> = faces.iter().copied().filter(|f| f.variable).collect();
-                    return Match { keys: keys_of(if variable.is_empty() { faces } else { variable }), pending: vec![] };
+                let variable: Vec<_> = index.by_postscript_name(&name[..i]).filter(|f| f.variable).collect();
+                if !variable.is_empty() {
+                    return Match { keys: keys_of(variable), pending: vec![] };
                 }
             }
+            // Not in the library. Keep the name itself, and for "<base>_<instance>" also the
+            // variable font it would come from (cut at the last "_", as Typeface writes it).
             let mut pending = vec![loose_key(name)];
-            if let Some((base, _)) = name.split_once('_').filter(|(b, _)| !b.is_empty()) {
-                pending.push(loose_key(base));
+            if let Some((base, _)) = name.rsplit_once('_').filter(|(b, _)| !b.is_empty()) {
+                pending.push(super::face_key(Some(base), true, false, "", 0));
+                pending.push(super::face_key(Some(base), true, true, "", 0));
             }
             Match { keys: vec![], pending }
         }
         SourceFont::Key(key) => {
-            let keys = keys_of(index.resolve(key));
+            let mut keys = keys_of(index.resolve(key));
+            // The exact font isn't here (say it was exported as a static font and this library
+            // has the variable one): fall back to its PostScript name, as other sources match.
+            if keys.is_empty() {
+                if let Some(ps) = key_postscript_name(key) {
+                    keys = keys_of(index.by_postscript_name(ps).collect());
+                }
+            }
             let pending = if keys.is_empty() { vec![key.clone()] } else { vec![] };
             Match { keys, pending }
         }
@@ -153,8 +169,12 @@ fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResul
     // Merge tags whose names differ only in letter case (ASCII, like SQLite's NOCASE).
     let mut order: Vec<String> = Vec::new();
     let mut merged: HashMap<String, (String, Vec<&SourceTag>)> = HashMap::new();
+    let mut skipped = 0;
     for tag in &source.tags {
-        let Ok(name) = normalize_name(&tag.name) else { continue };
+        let Ok(name) = normalize_name(&tag.name) else {
+            skipped += 1;
+            continue;
+        };
         let folded = name.to_ascii_lowercase();
         match merged.get_mut(&folded) {
             Some((_, list)) => list.push(tag),
@@ -202,13 +222,15 @@ fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResul
 
         let fonts: BTreeSet<&SourceFont> = parts.iter().flat_map(|p| p.fonts.iter()).collect();
         let mut matched = BTreeSet::new();
-        let mut pending = BTreeSet::new();
+        let mut pending = Vec::new();
         let mut unmatched = 0;
         for font in &fonts {
             let m = matches.entry(font).or_insert_with(|| match_font(index, font));
             if m.keys.is_empty() {
                 unmatched += 1;
-                pending.extend(m.pending.iter().cloned());
+                if !m.pending.is_empty() {
+                    pending.push(((*font).clone(), m.pending.clone()));
+                }
             } else {
                 matched.extend(m.keys.iter().cloned());
             }
@@ -243,6 +265,35 @@ fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResul
     }
 
     let matched_fonts = matches.values().filter(|m| !m.keys.is_empty()).count();
+    let mut notes = source.notes.clone();
+    if skipped > 0 {
+        notes.push(format!(
+            "{skipped} {} left out because {} empty, too long (over {} characters) or {} control characters.",
+            if skipped == 1 { "tag was" } else { "tags were" },
+            if skipped == 1 { "its name is" } else { "their names are" },
+            super::MAX_NAME,
+            if skipped == 1 { "holds" } else { "hold" },
+        ));
+    }
+    // Nested tags need their parents. Ones that neither exist nor appear in the source are
+    // created along the way; say so, since they aren't in the list.
+    let mut implied: BTreeSet<String> = BTreeSet::new();
+    for (name, _) in merged.values() {
+        for parent in super::parent_names(name) {
+            let folded = parent.to_ascii_lowercase();
+            if !merged.contains_key(&folded) && !existing.iter().any(|t| t.name.eq_ignore_ascii_case(&parent)) {
+                implied.insert(folded);
+            }
+        }
+    }
+    if !implied.is_empty() {
+        notes.push(format!(
+            "{} parent {} not in this list will be created if you import the tags nested under {}.",
+            implied.len(),
+            if implied.len() == 1 { "tag" } else { "tags" },
+            if implied.len() == 1 { "it" } else { "them" },
+        ));
+    }
     let preview = ImportPreview {
         label: source.label.clone(),
         date: source.date,
@@ -250,7 +301,7 @@ fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResul
         fonts: matches.len(),
         matched_fonts,
         unmatched_fonts: matches.len() - matched_fonts,
-        notes: source.notes.clone(),
+        notes,
     };
     Ok((out, preview))
 }
@@ -278,35 +329,53 @@ pub fn apply(conn: &mut Connection, source: &Source, chosen: &[String], keep_unm
     let (resolved, _) = resolve(conn, &index, source)?;
     let chosen: BTreeSet<String> = chosen.iter().map(|n| n.trim().to_ascii_lowercase()).collect();
     let mut result = ImportResult::default();
+    let mut styles = BTreeSet::new();
+    let mut kept_fonts = BTreeSet::new();
     let tx = conn.transaction()?;
     let mut touched = BTreeSet::new();
     for r in resolved.iter().filter(|r| chosen.contains(&r.tag.name.to_ascii_lowercase())) {
         let (tag, created) = ensure_tag(&tx, &r.tag.name, &r.tag.color)?;
+        // Styles that already have the tag through a key kept from an earlier import are left
+        // alone, so the preview's "new" count is exactly what gets added.
+        let have = assigned_keys(&tx, tag.id)?;
         let mut added = 0;
         {
             let mut insert =
                 tx.prepare_cached("INSERT OR IGNORE INTO tag_fonts (tag_id, face_key, added_at) VALUES (?1, ?2, ?3)")?;
             let now = super::now();
-            for key in &r.matched {
-                added += insert.execute(rusqlite::params![tag.id, key, now])?;
+            for key in r.matched.iter().filter(|k| !has_loose(&have, k)) {
+                if insert.execute(rusqlite::params![tag.id, key, now])? > 0 {
+                    added += 1;
+                    styles.insert(key.clone());
+                }
             }
             if keep_unmatched {
-                for key in &r.pending {
-                    result.kept += insert.execute(rusqlite::params![tag.id, key, now])?;
+                for (font, keys) in &r.pending {
+                    let mut kept = false;
+                    for key in keys {
+                        kept |= insert.execute(rusqlite::params![tag.id, key, now])? > 0;
+                    }
+                    if kept {
+                        kept_fonts.insert(font.clone());
+                    }
                 }
             }
         }
         result.added += added;
-        if created {
-            result.tags_created += 1;
-        } else if added > 0 {
+        result.tags_created += created;
+        if created == 0 && added > 0 {
             touched.insert(tag.id);
         }
     }
     result.tags_updated = touched.len();
+    result.styles = styles.len();
+    result.kept = kept_fonts.len();
     for (location, color) in &source.location_colors {
-        if colors::is_valid(color) && super::set_location_color_if_unset(&tx, location, color)? {
-            result.location_colors += 1;
+        // A location this library can't use is skipped, not a reason to drop the whole import.
+        match super::set_location_color_if_unset(&tx, location, color) {
+            Ok(true) => result.location_colors += 1,
+            Ok(false) | Err(crate::error::AppError::Invalid(_)) => {}
+            Err(e) => return Err(e),
         }
     }
     tx.commit()?;

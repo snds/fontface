@@ -59,7 +59,11 @@ export interface ImportPreview {
 export interface ImportResult {
   tagsCreated: number;
   tagsUpdated: number;
+  /** Tags added to styles (a style that got three tags counts three times). */
   added: number;
+  /** Different styles that got a tag. */
+  styles: number;
+  /** Different fonts not in the library whose tags were kept for later. */
   kept: number;
   locationColors: number;
 }

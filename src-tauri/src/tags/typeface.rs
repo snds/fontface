@@ -18,11 +18,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::import::{Source, SourceFont, SourceTag};
+use super::import::{Source, SourceFont, SourceTag, MAX_FONT_NAME};
 use crate::error::{AppError, AppResult};
 
 /// Backups are small (a few hundred KB for ~9,000 fonts). Anything far larger isn't one.
-pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct Backup {
@@ -76,6 +76,7 @@ pub fn parse(bytes: &[u8]) -> AppResult<Source> {
         date: backup.date,
         ..Default::default()
     };
+    let mut too_long = 0;
     for entry in backup.tags {
         let note = system_list(&entry.tag.name);
         let fonts = entry
@@ -84,6 +85,11 @@ pub fn parse(bytes: &[u8]) -> AppResult<Source> {
             .filter_map(Value::as_str)
             .map(str::trim)
             .filter(|s| !s.is_empty())
+            .filter(|s| {
+                let ok = s.len() <= MAX_FONT_NAME;
+                too_long += usize::from(!ok);
+                ok
+            })
             .map(|s| SourceFont::PostScript(s.to_string()))
             .collect();
         source.tags.push(SourceTag {
@@ -93,6 +99,9 @@ pub fn parse(bytes: &[u8]) -> AppResult<Source> {
             suggested: note.is_none(),
             note: note.map(str::to_string),
         });
+    }
+    if too_long > 0 {
+        source.notes.push(format!("{too_long} font names were too long to be real fonts and were left out."));
     }
     if !backup.families.is_empty() {
         source.notes.push(format!(

@@ -113,7 +113,7 @@ pub fn is_loose(key: &str) -> bool {
     key.strip_prefix("ps:").is_some_and(|_| key_postscript_name(key).map(str::len) == Some(key.len() - 3))
 }
 
-fn check_key(key: &str) -> AppResult<()> {
+pub(crate) fn check_key(key: &str) -> AppResult<()> {
     let ok = key.len() <= 4400
         && match (key.strip_prefix("ps:"), key.strip_prefix("file:")) {
             (Some(rest), _) => !rest.is_empty(),
@@ -240,9 +240,10 @@ fn subtree(conn: &Connection, tag: &Tag) -> AppResult<Vec<Tag>> {
     Ok(list_tags(conn)?.into_iter().filter(|t| is_within(&t.name, &tag.name)).collect())
 }
 
-/// The color a new tag gets: its parent's, or the least-used color among top-level tags.
+/// The color a new tag gets: the nearest existing parent's, or the least-used color among
+/// top-level tags.
 fn default_color(conn: &Connection, name: &str) -> AppResult<String> {
-    if let Some(parent) = parent_names(name).last() {
+    for parent in parent_names(name).iter().rev() {
         if let Some(p) = find_tag(conn, parent)? {
             return Ok(p.color);
         }
@@ -259,27 +260,30 @@ fn check_color(color: &str) -> AppResult<()> {
     }
 }
 
-/// Returns the tag with this (normalized) name, creating it and any missing parents first.
-/// `color` is used for whatever is created; existing tags keep their colors. Levels that
-/// already exist keep their spelling, so "sci-fi/Aliens" lands under an existing "Sci-Fi".
-pub(crate) fn ensure_tag(tx: &Transaction, name: &str, color: &str) -> AppResult<(Tag, bool)> {
+/// Returns the tag with this (normalized) name, creating it and any missing parents first,
+/// and how many tags were created. `color` is used for whatever is created; existing tags keep
+/// their colors. Levels that already exist keep their spelling, so "sci-fi/Aliens" lands under
+/// an existing "Sci-Fi".
+pub(crate) fn ensure_tag(tx: &Transaction, name: &str, color: &str) -> AppResult<(Tag, usize)> {
     let mut path = String::new();
     let mut last = None;
+    let mut created = 0;
     for level in name.split('/') {
         let wanted = if path.is_empty() { level.to_string() } else { format!("{path}/{level}") };
         match find_tag(tx, &wanted)? {
             Some(tag) => {
                 path = tag.name.clone();
-                last = Some((tag, false));
+                last = Some(tag);
             }
             None => {
                 tx.execute("INSERT INTO tags (name, color, created_at) VALUES (?1, ?2, ?3)", params![wanted, color, now()])?;
-                last = Some((Tag { id: tx.last_insert_rowid(), name: wanted.clone(), color: color.to_string() }, true));
+                last = Some(Tag { id: tx.last_insert_rowid(), name: wanted.clone(), color: color.to_string() });
+                created += 1;
                 path = wanted;
             }
         }
     }
-    last.ok_or_else(|| AppError::Invalid("A tag needs a name".into()))
+    last.map(|t| (t, created)).ok_or_else(|| AppError::Invalid("A tag needs a name".into()))
 }
 
 pub fn create_tag(conn: &mut Connection, name: &str, color: Option<&str>) -> AppResult<Tag> {
@@ -316,6 +320,11 @@ pub fn rename_tag(conn: &mut Connection, id: i64, new_name: &str) -> AppResult<T
         moving.iter().map(|t| (t.id, format!("{new_name}{}", &t.name[tag.name.len()..]))).collect();
     let moving_ids: BTreeSet<i64> = moving.iter().map(|t| t.id).collect();
     for (_, name) in &renamed {
+        if name.chars().count() > MAX_NAME {
+            return Err(AppError::Invalid(format!(
+                "“{name}” would be longer than {MAX_NAME} characters. Choose a shorter name."
+            )));
+        }
         if let Some(other) = find_tag(conn, name)? {
             if !moving_ids.contains(&other.id) {
                 return Err(AppError::Invalid(format!("There's already a tag called “{}”", other.name)));

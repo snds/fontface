@@ -46,13 +46,15 @@ export function ColorSwatches({ value, onChange, label = "Color", defaultColor }
             tabIndex={checked || (current < 0 && i === 0) ? 0 : -1}
             onClick={() => onChange(c)}
             className={cn(
-              "flex size-6 items-center justify-center rounded-full ring-offset-2 ring-offset-popover outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "flex size-6 items-center justify-center rounded-full ring-offset-2 ring-offset-popover outline-none focus-visible:ring-2 focus-visible:ring-foreground",
               checked && "ring-2 ring-foreground/60",
             )}
             style={{ background: colorVar(c) }}
           >
-            {checked && <Icon name="check" size={14} weight={600} className="text-white" />}
-            {!checked && c === defaultColor && <span className="size-1.5 rounded-full bg-white/80" />}
+            {/* The page background contrasts with every swatch: white on the light-mode colors,
+                near-black on the dark-mode ones. */}
+            {checked && <Icon name="check" size={14} weight={600} className="text-background" />}
+            {!checked && c === defaultColor && <span className="size-1.5 rounded-full bg-background/80" />}
           </button>
         );
       })}

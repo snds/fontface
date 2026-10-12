@@ -112,7 +112,11 @@ function NameDialog({
             <div className="flex flex-col gap-2">
               <span className="text-xs text-muted-foreground">Color</span>
               <ColorSwatches value={color} onChange={setColor} />
-              {!color && <span className="text-[11px] text-muted-foreground">If you don't pick one, Fontface picks a color that's not in use yet.</span>}
+              {!color && (
+                <span className="text-[11px] text-muted-foreground">
+                  If you don't pick one, a nested tag takes its parent's color, and any other tag gets the color used least.
+                </span>
+              )}
             </div>
           )}
           {error && (

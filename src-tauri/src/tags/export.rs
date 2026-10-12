@@ -204,14 +204,16 @@ pub fn parse_json(bytes: &[u8]) -> AppResult<Source> {
 }
 
 /// The key if it's one Fontface makes; otherwise rebuilt from the PostScript name and traits.
+/// Anything oversized is dropped, so a hostile file stays cheap to read.
 fn source_font(f: ExportFont) -> Option<SourceFont> {
-    if (f.key.starts_with("ps:") && f.key.len() > 3) || (f.key.starts_with("file:") && f.key.contains('#')) {
+    if super::check_key(&f.key).is_ok() {
         return Some(SourceFont::Key(f.key));
     }
-    match (f.postscript_name.filter(|p| !p.is_empty()), f.variable, f.italic) {
+    let ps = f.postscript_name.filter(|p| !p.is_empty() && p.len() <= super::import::MAX_FONT_NAME);
+    match (ps, f.variable, f.italic) {
         (Some(ps), Some(v), Some(i)) => Some(SourceFont::Key(super::face_key(Some(&ps), v, i, "", 0))),
         (Some(ps), _, _) => Some(SourceFont::PostScript(ps)),
-        (None, _, _) => f.files.into_iter().next().map(SourceFont::File),
+        (None, _, _) => f.files.into_iter().next().filter(|p| p.len() < 4096).map(SourceFont::File),
     }
 }
 
@@ -244,10 +246,11 @@ pub fn to_csv(tags: &[ExportTag]) -> String {
 }
 
 /// Quotes a CSV field when needed (RFC 4180). Font names come from font files, so a value that
-/// a spreadsheet would run as a formula gets a leading apostrophe (OWASP's advice).
+/// a spreadsheet would run as a formula gets a leading apostrophe (OWASP's advice). Semicolons
+/// and tabs are quoted too: spreadsheets in some regions split on them.
 fn csv_field(v: &str) -> String {
     let v = if v.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{v}") } else { v.to_string() };
-    if v.contains([',', '"', '\n', '\r']) || v.starts_with(' ') || v.ends_with(' ') {
+    if v.contains([',', ';', '\t', '"', '\n', '\r']) || v.starts_with(' ') || v.ends_with(' ') {
         format!("\"{}\"", v.replace('"', "\"\""))
     } else {
         v
@@ -255,36 +258,43 @@ fn csv_field(v: &str) -> String {
 }
 
 /// A Typeface backup with the same tags. Fonts without a PostScript name are left out.
-/// Returns the file and how many fonts were left out.
+/// Returns the file and how many different fonts were left out.
 pub fn to_typeface(tags: &[ExportTag], now: i64) -> (String, usize) {
-    let mut skipped = 0;
     let list: Vec<(String, Vec<String>)> = tags
         .iter()
         .map(|t| {
-            let names: BTreeSet<String> = t
-                .fonts
-                .iter()
-                .filter_map(|f| {
-                    let ps = f.postscript_name.clone();
-                    if ps.is_none() {
-                        skipped += 1;
-                    }
-                    ps
-                })
-                .collect();
+            let names: BTreeSet<String> = t.fonts.iter().filter_map(|f| f.postscript_name.clone()).collect();
             (t.name.clone(), names.into_iter().collect())
         })
         .collect();
-    (super::typeface::write(&list, now as f64), skipped)
+    (super::typeface::write(&list, now as f64), without_postscript_name(tags))
+}
+
+/// Different fonts across these tags.
+pub fn font_count(tags: &[ExportTag]) -> usize {
+    tags.iter().flat_map(|t| t.fonts.iter().map(|f| &f.key)).collect::<BTreeSet<_>>().len()
+}
+
+/// Different fonts across these tags that have no PostScript name.
+pub fn without_postscript_name(tags: &[ExportTag]) -> usize {
+    tags.iter().flat_map(|t| t.fonts.iter()).filter(|f| f.postscript_name.is_none()).map(|f| &f.key).collect::<BTreeSet<_>>().len()
 }
 
 /// Writes a file next to its destination first, then moves it into place, so a failed export
-/// never leaves half a file behind.
+/// never leaves half a file behind. The temporary file gets a fresh name and is only ever
+/// created new, so it can't follow a planted link or clash with another export.
 pub fn write_file(path: &Path, contents: &str) -> AppResult<()> {
+    use std::io::Write;
     let name = path.file_name().ok_or_else(|| AppError::Invalid("Choose a file name".into()))?;
-    let tmp = path.with_file_name(format!(".{}.fontface-tmp", name.to_string_lossy()));
-    std::fs::write(&tmp, contents)?;
-    if let Err(e) = std::fs::rename(&tmp, path) {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = path.with_file_name(format!(".{}.{}-{stamp}.fontface-tmp", name.to_string_lossy(), std::process::id()));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(contents.as_bytes()).and_then(|_| f.sync_all()))
+        .and_then(|_| std::fs::rename(&tmp, path));
+    if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
         return Err(e.into());
     }

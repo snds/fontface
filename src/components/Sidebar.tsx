@@ -150,10 +150,10 @@ function UserFolder({ folder, families, row, view, onView, locations }: {
   onView: (v: LibraryView) => void;
   locations: ReturnType<typeof useLocations>;
 }) {
-  const nodes = useSubfolders(folder, families);
+  const { nodes, hasChildren } = useSubfolders(folder, families);
   return (
     <>
-      {row(folder, <SubfolderToggle path={folder.path} label={folder.label} hasChildren={nodes.length > 0} />)}
+      {row(folder, <SubfolderToggle path={folder.path} label={folder.label} hasChildren={hasChildren} />)}
       <SubfolderTree nodes={nodes} root={folder.path} view={view} onView={onView} locations={locations} />
     </>
   );

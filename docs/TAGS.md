@@ -8,12 +8,17 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 
 ## Using tags
 
-- **Make a tag:** the label button in the sidebar's Tags section, or "Create" in any tag picker.
+- **Make a tag:** the "+" (New tag) button in the sidebar's Tags section, or "Create" in any tag picker.
 - **Tag fonts:** the tag button on a row (shown on hover), right-click a row, or the "Tag" button
   in the detail panel. A family row tags every style in the family, even ones the current view
   hides.
 - **Tag many at once:** Cmd-click rows to add them to the selection, Shift-click to select a
-  range, Cmd-A to select every row. A bar appears with a "Tags…" button. Escape clears it.
+  range. With the list focused, Cmd-A selects every row and Escape clears the selection. A bar
+  appears with a "Tags…" button. Selected rows get a bar along their left edge.
+- **Keyboard:** right-click menus (rows, tags, locations) also open with Shift-F10 (fn-Shift-F10
+  on most Mac keyboards) on whatever has focus, or with VoiceOver's VO-Shift-M. Rows can't take
+  focus yet, so selecting a range still needs the pointer; Cmd-A then "Tags…" works from the
+  keyboard.
 - **Nest tags** with `/`: "Sci-Fi/Star Trek" sits under "Sci-Fi". A tag's view shows its own
   fonts and those of every tag inside it.
 - **Rename, recolor, export or delete** a tag from its "…" button or by right-clicking it.
@@ -24,9 +29,11 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 
 ## Location colors
 
-Right-click a location in the sidebar to pick its color. "Use default color" goes back to the
-default. The color tints the location's icon, and each font row shows a small dot in the color
-of the places its copies live (hover for the list).
+Right-click a location in the sidebar (or focus it and press Shift-F10) to pick its color.
+Picking the color marked "(default)", or "Use default color", goes back to the default, so the
+location follows its parent folder or Font Book again. The color tints the location's icon, and
+each font row shows a small dot in the color of the places its copies live (hover for the list;
+screen readers hear the places).
 
 | Location | Default color | Notes |
 |---|---|---|
@@ -37,7 +44,7 @@ of the places its copies live (hover for the list).
 | iCloud Drive (`~/Library/Mobile Documents/…`) | Sky | |
 | Dropbox (`~/Library/CloudStorage/Dropbox*` or `~/Dropbox`) | Indigo | |
 | OneDrive (`~/Library/CloudStorage/OneDrive*`) | Teal | |
-| Box (`~/Library/CloudStorage/Box*`) | Blue | |
+| Box (`~/Library/CloudStorage/Box*`) | Pink | Box's own blue is taken by Google Fonts |
 | Any other `~/Library/CloudStorage/*` | Purple | |
 | Any other folder you add | Amber | Like a manila folder |
 
@@ -52,9 +59,10 @@ They're CSS tokens (`--tag-<name>` in `src/tags/colors.css`) with a light and a 
 only ever color icons, dots and chip markers, never text, so they need 3:1 contrast against the
 background (WCAG 1.4.11). Measured against the background, sidebar and highlight colors:
 
-- Light mode: 3.7:1 at the lowest (amber), most above 3.8:1.
+- Light mode: 3.7:1 at the lowest (amber, on the highlight color), most above 3.8:1.
 - Dark mode: 5.4:1 at the lowest (indigo).
-- Chip text stays in the normal text color on a light tint of the tag color: 17:1 (light), 6:1 (dark).
+- Chip text stays in the normal text color on a light tint of the tag color: at least 15:1
+  (light) and 8.9:1 (dark).
 
 ## Data model
 
@@ -74,11 +82,14 @@ Rust):
 |---|---|
 | Has a PostScript name | `ps:<PostScript name>\|<var or static>\|<i or r>` |
 | Has no PostScript name | `file:<path>#<face index>` |
-| Kept from an import, not in the library yet | `ps:<PostScript name>` (matches any kind or slant) |
+| Kept from an import, not in the library yet | `ps:<PostScript name>` (matches any kind or slant), or a full key |
 
 So every copy of a font shares its tags, a rescan keeps them, and a font you delete and
-download again gets them back. The last form lets an import remember fonts you don't have yet:
-they get their tags the moment you add them (for example, from Google Fonts).
+download again gets them back. Keys kept from an import let it remember fonts you don't have
+yet: they get their tags the moment you add them (for example, from Google Fonts).
+
+Known limit: a PostScript name may legally contain `|`. A font named, say, `X|var|i` would share
+its key with font `X` (variable, italic). No real font does this; Fontface doesn't guard it.
 
 **Names.** `/` nests. Names are unique ignoring letter case (`Style/Sans` and `style/sans` are
 the same tag). Each level is trimmed, so " Sci-Fi / Star Trek " becomes "Sci-Fi/Star Trek".
@@ -127,7 +138,13 @@ to 2026):
 - `date` is Unix seconds. `version` 2 has no `mainFonts`; 4 adds `locations`.
 - `fonts` holds PostScript names. A named instance of a variable font is written
   `<variable font's PostScript name>_<instance>`, such as `Inter-Regular_Bold`. Fontface tags the
-  variable font itself, since it stores one row per variable file.
+  variable font itself, since it stores one row per variable file. Only a variable font counts:
+  a static `Inter-Regular` is a different style and isn't tagged.
+- A name that isn't in the library is kept as is, and an instance name is also kept for the
+  variable font it comes from (cut at the last `_`, upright or italic), so either arriving later
+  gets the tag.
+- Names over 512 characters and files over 16 MB are refused, so a damaged or hostile file
+  stays cheap to read.
 - Tag names nest with `/`, like Fontface's. Parent tags appear as entries of their own, often
   empty. Some backups spell the same tag two ways (`Style/Sans` and `style/sans`); the preview
   merges them and says so.
@@ -140,7 +157,9 @@ to 2026):
 Real-world check (2026-10-12), the newest backup against a copy of the library: 33 tags naming
 7,744 fonts. 4,881 match the library (4,202 by exact name, 679 through variable-font instances);
 2,863 aren't in it, mostly Google Fonts that Typeface had downloaded itself. Every hand-made
-Sci-Fi tag matched completely. Fonts that don't match can be kept for later (ticked by default).
+Sci-Fi tag matched completely. Importing the 30 ticked tags tagged 4,284 different styles and
+kept tags for 2,860 fonts not in the library yet ("Remember…", ticked by default). The April 2025
+backup (41 tags after merging seven `style/…` and `Style/…` pairs) matches 5,347 of 8,992 fonts.
 
 ### Finder tags and Font Book
 
@@ -200,10 +219,15 @@ Export tags… exports every tag, or (from a tag's menu) one tag and the tags in
 }
 ```
 
-- `key` is the Fontface key described above. On import it's matched first; without it, the
-  PostScript name (with `variable` and `italic` if present), then the first file.
-- A font that isn't in the library is exported with what's known: `key`, `postscriptName`, and
-  no `family`, `style` or `files`.
+- `key` is the Fontface key described above. On import it's matched first. If that exact font
+  isn't in the library (exported as a static font, say, and this library has the variable one),
+  any font with the same PostScript name gets the tag. Without a usable key: the PostScript name
+  (with `variable` and `italic` if present), then the first file.
+- A font that isn't in the library is exported with what its key says: `key`, plus
+  `postscriptName`, `variable` and `italic` for a PostScript key, or `files` for a file key. It
+  has no `family` or `style`.
+- Malformed entries (bad keys, names over 200 characters, unknown location keys) are skipped,
+  and the preview says how many; they never stop the rest of the import.
 - `files` lists every copy. They're for people; matching never needs them.
 - An import only sets location colors that aren't set yet, and never changes existing tags' colors.
 - A file whose `version` is higher than 1 is refused with a request to update Fontface.
@@ -212,8 +236,12 @@ Export tags… exports every tag, or (from a tag's menu) one tag and the tags in
 
 Columns: `tag, color, postscript_name, family, style, variable, italic, file`. `variable` and
 `italic` are `yes`, `no` or empty. `file` is the first copy. Quoting follows RFC 4180, with CRLF
-line ends. A value starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading
-`'`, so a spreadsheet never runs a font's name as a formula (font names come from the files).
+line ends; values with a semicolon or tab are quoted too, for spreadsheets set to split on them.
+A value starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`, so a
+spreadsheet never runs a font's name as a formula (font names come from the files).
+
+JSON and CSV exports include each font's file paths, which contain your user name. Keep that in
+mind before sharing one.
 
 ### Typeface backup
 
@@ -226,16 +254,25 @@ export says how many. Typeface hasn't been tried with it yet.
 - Writes through `NSURL setResourceValue:forKey:` with `NSURLTagNamesKey`.
 - Tags already on a file are kept; Fontface only adds. A file that already has every tag is left alone.
 - Nested names are written in full ("Sci-Fi/Star Trek").
-- Fonts in the macOS font folders are skipped (system files, and the macOS license). Adobe Fonts
-  files are never in the library, and are refused again here.
+- Fonts in the macOS font folders (`~/Library/Fonts`, `/Library/Fonts`, `/System/Library/Fonts`)
+  are skipped: Fontface never changes those folders, which belong to the OS and Font Book. The
+  check uses where each file really is (following links), not just which library folder listed it.
+- Adobe Fonts files are never in the library, and are refused again here, also after following links.
+- Files in cloud folders (Google Drive, iCloud, Dropbox) sync their Finder tags to that service.
 
 ### Font Book collections
 
 - One collection per tag, through `NSFontCollection showFontCollection:withName:visibility:error:`
   with user visibility. Nested names use " › " ("Sci-Fi › Star Trek"), because a collection name
   can't hold `/`. Importing turns " › " back into `/`.
-- A collection that already exists keeps its fonts; Fontface only adds. This matters because
+- A collection that already exists keeps everything in it (fonts, whole families, exclusions);
+  Fontface only adds, with `NSMutableFontCollection addQueryForDescriptors:`. This matters because
   Typeface and Font Book may already have collections with the same names.
+- An existing collection is found ignoring letter case and how accented letters are stored
+  ("fun" adds to "Fun"), because Font Book keeps collections as files and file names ignore both.
+- A collection that exists but can't be read is left alone and reported. Names starting with
+  `com.apple.` are refused; they're Font Book's own. A tag called "Favorites" becomes a collection
+  of that name, not Font Book's built-in Favorites.
 - Entries are PostScript names, so Font Book only lists fonts that are turned on, and fonts
   without a PostScript name can't be added.
 

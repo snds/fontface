@@ -300,6 +300,8 @@ fn typeface_import_previews_then_applies_once() {
     assert_eq!(sans.matched, 2);
     assert_eq!(preview.fonts, 6);
     assert_eq!(preview.unmatched_fonts, 1);
+    // "Sci-Fi/Star Trek", "Style" and "typeface" aren't in the file; the preview says so.
+    assert!(preview.notes.iter().any(|n| n.starts_with("3 parent tags not in this list")));
 
     let chosen: Vec<String> = preview.tags.iter().filter(|t| t.suggested).map(|t| t.name.clone()).collect();
     assert!(!chosen.contains(&"typeface/active".to_string()));
@@ -322,6 +324,13 @@ fn typeface_import_previews_then_applies_once() {
     assert!(again.tags.iter().filter(|t| t.suggested).all(|t| t.exists && t.new == 0));
     let result = import::apply(&mut lib.conn, &source, &chosen, true).unwrap();
     assert_eq!((result.added, result.kept, result.tags_created), (0, 0, 0));
+
+    // Nor once a kept font arrives: it already has the tag through the kept key.
+    lib.user("/fonts/Missing-Font.otf", "Missing-Font", "Missing");
+    let again = import::preview(&lib.conn, &source).unwrap();
+    assert!(again.tags.iter().filter(|t| t.suggested).all(|t| t.new == 0));
+    let result = import::apply(&mut lib.conn, &source, &chosen, true).unwrap();
+    assert_eq!((result.added, result.tags_updated), (0, 0));
     assert_eq!(lib.tag_names(), names(&["Fixed Width", "Sci-Fi", "Sci-Fi/Star Trek", "Sci-Fi/Star Trek/TNG", "Style", "Style/Sans"]));
 }
 
@@ -332,13 +341,108 @@ fn unmatched_fonts_are_only_kept_when_asked() {
     import::apply(&mut lib.conn, &source, &names(&["Later"]), false).unwrap();
     assert!(lib.keys_of("Later").is_empty());
     let result = import::apply(&mut lib.conn, &source, &names(&["later"]), true).unwrap();
-    // A named instance is also kept under its variable font's name.
-    assert_eq!(result.kept, 3);
-    assert_eq!(lib.keys_of("Later"), names(&["ps:Afacad-Regular", "ps:Afacad-Regular_SemiBold", "ps:Gone-Bold"]));
+    assert_eq!(result.kept, 2, "counts fonts, not keys");
+    // A named instance is also kept under its variable font (either slant), never a static one.
+    assert_eq!(
+        lib.keys_of("Later"),
+        names(&["ps:Afacad-Regular_SemiBold", "ps:Afacad-Regular|var|i", "ps:Afacad-Regular|var|r", "ps:Gone-Bold"])
+    );
     // When the font arrives, the loose key matches it.
     let key = lib.user("/fonts/Gone-Bold.otf", "Gone-Bold", "Gone");
     let index = LibraryIndex::load(&lib.conn).unwrap();
     assert_eq!(index.resolve("ps:Gone-Bold").first().map(|f| f.key.clone()), Some(key));
+}
+
+#[test]
+fn instances_only_match_variable_fonts() {
+    let mut lib = Library::new("instances");
+    lib.user("/fonts/Static.otf", "Static-Regular", "Static");
+    lib.user("/fonts/Foo.otf", "Foo", "Foo");
+    let source = Source { tags: vec![tag("T", &["Static-Regular_Bold", "Foo_Bar"])], ..Default::default() };
+    let preview = import::preview(&lib.conn, &source).unwrap();
+    assert_eq!((preview.tags[0].matched, preview.tags[0].unmatched), (0, 2), "a static font isn't the instance");
+    import::apply(&mut lib.conn, &source, &names(&["T"]), true).unwrap();
+    // Kept for later instead, so the right fonts get it when they arrive.
+    assert!(lib.keys_of("T").contains(&"ps:Foo_Bar".to_string()));
+    assert!(lib.keys_of("T").contains(&"ps:Static-Regular|var|r".to_string()));
+    assert!(!lib.keys_of("T").iter().any(|k| k == "ps:Foo" || k == "ps:Static-Regular|static|r"));
+}
+
+#[test]
+fn a_fontface_key_falls_back_to_the_postscript_name() {
+    let mut lib = Library::new("fallback");
+    lib.font(lib.user_folder, "/fonts/Inter[wght].ttf", Some("Inter-Regular"), "Inter", "Regular", true, false);
+    let source = Source {
+        tags: vec![SourceTag {
+            name: "Body".into(),
+            color: None,
+            fonts: vec![SourceFont::Key("ps:Inter-Regular|static|r".into())],
+            suggested: true,
+            note: None,
+        }],
+        ..Default::default()
+    };
+    import::apply(&mut lib.conn, &source, &names(&["Body"]), true).unwrap();
+    assert_eq!(lib.keys_of("Body"), names(&["ps:Inter-Regular|var|r"]));
+}
+
+#[test]
+fn bad_entries_in_a_tags_file_are_skipped_not_fatal() {
+    let mut lib = typeface_library("bad-json");
+    let long = "x".repeat(super::MAX_NAME + 1);
+    let json = format!(
+        r#"{{"format":"fontface-tags","version":1,"tags":[
+            {{"name":"Good","color":"teal","fonts":[{{"key":"ps:Okuda|static|r"}}]}},
+            {{"name":"{long}","color":"red","fonts":[]}}],
+          "locationColors":{{"service:google":"blue","relative/path":"red","/fonts":"green","/elsewhere":"neon"}}}}"#
+    );
+    let source = export::parse_json(json.as_bytes()).unwrap();
+    let preview = import::preview(&lib.conn, &source).unwrap();
+    assert_eq!(preview.tags.len(), 1);
+    assert!(preview.notes.iter().any(|n| n.contains("1 tag was left out")));
+    let result = import::apply(&mut lib.conn, &source, &names(&["Good"]), true).unwrap();
+    assert_eq!(result.location_colors, 1, "only the usable location color is set");
+    assert_eq!(lib.keys_of("Good"), names(&["ps:Okuda|static|r"]));
+}
+
+#[test]
+fn huge_font_names_are_dropped() {
+    let backup = format!(r#"{{"version":3,"tags":[{{"tag":{{"name":"T"}},"fonts":["{}","Okuda"]}}]}}"#, "_".repeat(100_000));
+    let source = typeface::parse(backup.as_bytes()).unwrap();
+    assert_eq!(source.tags[0].fonts, vec![SourceFont::PostScript("Okuda".into())]);
+    assert!(source.notes.iter().any(|n| n.contains("too long")));
+}
+
+#[test]
+fn creating_and_importing_count_new_parents() {
+    let mut lib = Library::new("parents");
+    let sci = super::create_tag(&mut lib.conn, "Sci-Fi", Some("blue")).unwrap();
+    let deep = super::create_tag(&mut lib.conn, "Sci-Fi/Star Trek/TNG", None).unwrap();
+    assert_eq!(deep.color, sci.color, "takes the nearest existing parent's color");
+    let source = Source { tags: vec![tag("P/Q/R", &[])], ..Default::default() };
+    let result = import::apply(&mut lib.conn, &source, &names(&["P/Q/R"]), true).unwrap();
+    assert_eq!(result.tags_created, 3);
+}
+
+#[test]
+fn renames_respect_the_name_limit() {
+    let mut lib = Library::new("rename-long");
+    let parent = super::create_tag(&mut lib.conn, "A", None).unwrap();
+    super::create_tag(&mut lib.conn, &format!("A/{}", "x".repeat(150)), None).unwrap();
+    assert!(super::rename_tag(&mut lib.conn, parent.id, &"y".repeat(150)).is_err());
+    assert_eq!(lib.tag_names().len(), 2, "nothing was renamed");
+}
+
+#[test]
+fn export_files_are_written_whole() {
+    let lib = Library::new("write");
+    let target = lib.dir.join("out.json");
+    export::write_file(&target, "first").unwrap();
+    export::write_file(&target, "second").unwrap();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "second");
+    let leftovers = std::fs::read_dir(&lib.dir).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with("fontface-tmp")).count();
+    assert_eq!(leftovers, 0);
+    assert!(export::write_file(&lib.dir.join("missing-folder/out.json"), "x").is_err());
 }
 
 #[test]
@@ -419,6 +523,7 @@ fn csv_quotes_and_defuses_formulas() {
     }];
     let csv = export::to_csv(&tags);
     let mut lines = csv.split("\r\n");
+    assert!(export::to_csv(&[export::ExportTag { name: "a;=1".into(), color: "red".into(), fonts: tags[0].fonts.clone() }]).contains("\"a;=1\""), "semicolons are quoted");
     assert_eq!(lines.next(), Some("tag,color,postscript_name,family,style,variable,italic,file"));
     assert_eq!(
         lines.next(),

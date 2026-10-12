@@ -29,5 +29,5 @@ core-foundation = "0.10"
 core-text = "21"
 # Finder tags (NSURL) and Font Book collections (NSFontCollection), for tag import and export.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObjCRuntime", "NSObject", "NSString", "NSURL"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSFontCollection", "NSFontDescriptor"] }
