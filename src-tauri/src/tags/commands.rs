@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use super::{
     export,
@@ -76,7 +76,19 @@ fn read_source_file(path: &str, max: u64) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-fn load_source(state: &AppState, request: &ImportRequest) -> AppResult<Source> {
+/// Runs AppKit work on the main thread and waits for it. Apple doesn't document NSFontCollection
+/// as safe on other threads, and commands run on worker threads.
+#[cfg(target_os = "macos")]
+fn on_main_thread<T: Send + 'static>(app: &AppHandle, f: impl FnOnce() -> T + Send + 'static) -> AppResult<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(f());
+    })
+    .map_err(|e| AppError::Other(e.to_string()))?;
+    rx.recv().map_err(|_| AppError::Other("Font Book didn't answer".into()))
+}
+
+fn load_source(app: &AppHandle, state: &AppState, request: &ImportRequest) -> AppResult<Source> {
     match request {
         ImportRequest::Typeface { path } => typeface::parse(&read_source_file(path, typeface::MAX_BYTES)?),
         ImportRequest::Fontface { path } => export::parse_json(&read_source_file(path, typeface::MAX_BYTES)?),
@@ -86,30 +98,31 @@ fn load_source(state: &AppState, request: &ImportRequest) -> AppResult<Source> {
             Ok(super::macos::finder_source(paths.iter()))
         }
         #[cfg(target_os = "macos")]
-        ImportRequest::FontBook => Ok(super::macos::font_book_source()),
+        ImportRequest::FontBook => on_main_thread(app, super::macos::font_book_source),
         #[cfg(not(target_os = "macos"))]
         ImportRequest::Finder | ImportRequest::FontBook => {
-            let _ = state;
+            let _ = (app, state);
             Err(AppError::Unsupported("Finder tags and Font Book collections".into()))
         }
     }
 }
 
 #[tauri::command(async)]
-pub fn tags_import_preview(state: State<'_, AppState>, source: ImportRequest) -> AppResult<ImportPreview> {
-    let source = load_source(&state, &source)?;
+pub fn tags_import_preview(app: AppHandle, state: State<'_, AppState>, source: ImportRequest) -> AppResult<ImportPreview> {
+    let source = load_source(&app, &state, &source)?;
     import::preview(&*state.conn()?, &source)
 }
 
 /// Applies the tags the user ticked in the preview (by name).
 #[tauri::command(async)]
 pub fn tags_import_apply(
+    app: AppHandle,
     state: State<'_, AppState>,
     source: ImportRequest,
     tags: Vec<String>,
     keep_unmatched: bool,
 ) -> AppResult<ImportResult> {
-    let source = load_source(&state, &source)?;
+    let source = load_source(&app, &state, &source)?;
     state.write(|conn| import::apply(conn, &source, &tags, keep_unmatched))
 }
 
@@ -254,7 +267,7 @@ pub struct FontBookExport {
 /// Adds each tag's fonts to a Font Book collection of the same name. Fonts already in a
 /// collection stay there.
 #[tauri::command(async)]
-pub fn tags_export_font_book(state: State<'_, AppState>, tag_ids: Option<Vec<i64>>) -> AppResult<FontBookExport> {
+pub fn tags_export_font_book(app: AppHandle, state: State<'_, AppState>, tag_ids: Option<Vec<i64>>) -> AppResult<FontBookExport> {
     let tags = export::collect(&*state.conn()?, tag_ids.as_deref())?;
     let mut out = FontBookExport { skipped: export::without_postscript_name(&tags), ..Default::default() };
     for tag in tags {
@@ -264,7 +277,7 @@ pub fn tags_export_font_book(state: State<'_, AppState>, tag_ids: Option<Vec<i64
         if names.is_empty() {
             continue;
         }
-        match add_to_font_book(&tag.name, &names) {
+        match add_to_font_book(&app, tag.name.clone(), names) {
             Ok(added) => {
                 if added > 0 {
                     out.collections += 1;
@@ -278,11 +291,11 @@ pub fn tags_export_font_book(state: State<'_, AppState>, tag_ids: Option<Vec<i64
 }
 
 #[cfg(target_os = "macos")]
-fn add_to_font_book(name: &str, postscript_names: &[String]) -> AppResult<usize> {
-    super::macos::add_to_collection(name, postscript_names)
+fn add_to_font_book(app: &AppHandle, name: String, postscript_names: Vec<String>) -> AppResult<usize> {
+    on_main_thread(app, move || super::macos::add_to_collection(&name, &postscript_names))?
 }
 
 #[cfg(not(target_os = "macos"))]
-fn add_to_font_book(_: &str, _: &[String]) -> AppResult<usize> {
+fn add_to_font_book(_: &AppHandle, _: String, _: Vec<String>) -> AppResult<usize> {
     Err(AppError::Unsupported("Font Book collections".into()))
 }
