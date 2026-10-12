@@ -659,6 +659,67 @@ fn real_typeface_backup() {
     }
 }
 
+/// Imports one or more Typeface backups into a library file, in place, the way the Import
+/// dialog does: preview, then apply the tags it ticks, keeping tags for fonts not in the
+/// library yet. Backups are applied in the order given, so tags merge into the first spelling.
+///
+/// Dry run (prints the previews, changes nothing):
+///   FONTFACE_TYPEFACE_BACKUPS='a.typeface-backup|b.typeface-backup' FONTFACE_LIBRARY=/path/library.sqlite3 \
+///     cargo test import_typeface_backups -- --ignored --nocapture
+/// Add FONTFACE_APPLY_TO=<the same path as FONTFACE_LIBRARY> to write. Fontface's own library
+/// also needs FONTFACE_REAL_LIBRARY=yes, and Fontface must not be running.
+#[test]
+#[ignore]
+fn import_typeface_backups() {
+    let (Ok(backups), Ok(library)) = (std::env::var("FONTFACE_TYPEFACE_BACKUPS"), std::env::var("FONTFACE_LIBRARY")) else {
+        panic!("set FONTFACE_TYPEFACE_BACKUPS (paths separated by |) and FONTFACE_LIBRARY");
+    };
+    let apply = std::env::var("FONTFACE_APPLY_TO").ok().as_deref() == Some(library.as_str());
+    let real = library.contains("/design.snds.fontface/");
+    if apply && real && std::env::var("FONTFACE_REAL_LIBRARY").ok().as_deref() != Some("yes") {
+        panic!("{library} is Fontface's own library. Set FONTFACE_REAL_LIBRARY=yes (and quit Fontface) to change it.");
+    }
+    let mut conn = db::open(std::path::Path::new(&library)).unwrap();
+    super::ensure_schema(&conn).unwrap();
+    let count = |conn: &Connection, sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    for backup in backups.split('|').map(str::trim).filter(|b| !b.is_empty()) {
+        let source = typeface::parse(&std::fs::read(backup).unwrap()).unwrap();
+        let matcher = import::Matcher::load(&conn).unwrap().with_named_styles(&source);
+        let p = import::preview_with(&conn, &matcher, &source).unwrap();
+        println!("\n{backup}\n{}: {} tags, {} fonts named, {} matched ({} named styles of variable fonts, {} tidied names), {} not in the library",
+            p.label, p.tags.len(), p.fonts, p.matched_fonts, p.named_style_matches, p.tidied_matches, p.unmatched_fonts);
+        for t in &p.tags {
+            println!("  {:<40} {:>5} fonts → {:>5} styles ({:>5} new), {:>5} not in the library{}",
+                t.name, t.fonts, t.matched, t.new, t.unmatched, if t.suggested { "" } else { "  (not ticked)" });
+        }
+        for n in &p.notes {
+            println!("  note: {n}");
+        }
+        // With FONTFACE_DUMP_MISSING=<folder>, also write the fonts not found, for a report.
+        if let Ok(dir) = std::env::var("FONTFACE_DUMP_MISSING") {
+            let name = std::path::Path::new(backup).file_stem().unwrap().to_string_lossy().to_string();
+            let file = PathBuf::from(dir).join(format!("missing-{name}.json"));
+            std::fs::write(&file, serde_json::to_string(&p.missing).unwrap()).unwrap();
+            println!("  wrote {} missing fonts to {}", p.missing.len(), file.display());
+        }
+        if apply {
+            let chosen: Vec<String> = p.tags.iter().filter(|t| t.suggested).map(|t| t.name.clone()).collect();
+            let r = import::apply_with(&mut conn, &matcher, &source, &chosen, true).unwrap();
+            println!("  applied {} tags: {} created, {} updated, {} tags added to {} styles, tags kept for {} fonts not in the library",
+                chosen.len(), r.tags_created, r.tags_updated, r.added, r.styles, r.kept);
+        }
+    }
+    let tags = count(&conn, "SELECT COUNT(*) FROM tags");
+    let rows = count(&conn, "SELECT COUNT(*) FROM tag_fonts");
+    // Assignments whose font is in the library, and the different styles they cover.
+    let index = LibraryIndex::load(&conn).unwrap();
+    let keys: Vec<String> = conn.prepare("SELECT face_key FROM tag_fonts").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    let styles: std::collections::BTreeSet<&str> = keys.iter().flat_map(|k| index.resolve(k)).map(|f| f.key.as_str()).collect();
+    let kept = keys.iter().filter(|k| index.resolve(k).is_empty()).count();
+    println!("\n{}: {tags} tags, {rows} tag assignments, {} different styles tagged, {kept} assignments kept for fonts not in the library",
+        if apply { "after" } else { "unchanged" }, styles.len());
+}
+
 /// Lets the dump above write any serializable value through one closure.
 mod erased {
     pub trait Json {
@@ -669,4 +730,179 @@ mod erased {
             serde_json::to_string(self).unwrap()
         }
     }
+}
+
+// ------------------------------------------------------- named styles, tidied names, missing
+
+/// A font file with only the tables a test needs. With `face` = Some(i), a collection whose
+/// face `i` holds the tables (the faces before it are empty).
+fn sfnt(tables: &[(&[u8; 4], Vec<u8>)], face: Option<u32>) -> Vec<u8> {
+    let faces = face.map_or(1, |i| i + 1) as usize;
+    let header = if face.is_some() { 12 + 4 * faces } else { 0 };
+    let dir_len = |n: usize| 12 + 16 * n;
+    // Empty faces first (no tables), then the real one.
+    let mut out = Vec::new();
+    if face.is_some() {
+        out.extend_from_slice(b"ttcf");
+        out.extend_from_slice(&[0, 1, 0, 0]);
+        out.extend_from_slice(&(faces as u32).to_be_bytes());
+        for i in 0..faces {
+            let at = header + dir_len(0) * i;
+            out.extend_from_slice(&(at as u32).to_be_bytes());
+        }
+        for _ in 0..faces - 1 {
+            out.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        }
+    }
+    let start = out.len();
+    out.extend_from_slice(&[0, 1, 0, 0]);
+    out.extend_from_slice(&(tables.len() as u16).to_be_bytes());
+    out.extend_from_slice(&[0; 6]);
+    let mut at = start + dir_len(tables.len());
+    let mut data = Vec::new();
+    for (tag, bytes) in tables {
+        out.extend_from_slice(*tag);
+        out.extend_from_slice(&[0; 4]);
+        out.extend_from_slice(&(at as u32).to_be_bytes());
+        out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+        data.extend_from_slice(bytes);
+        at += bytes.len();
+    }
+    out.extend_from_slice(&data);
+    out
+}
+
+/// A `name` table with Windows English records.
+fn name_table(records: &[(u16, &str)]) -> Vec<u8> {
+    let mut head = Vec::new();
+    let mut strings = Vec::new();
+    head.extend_from_slice(&0u16.to_be_bytes());
+    head.extend_from_slice(&(records.len() as u16).to_be_bytes());
+    head.extend_from_slice(&((6 + 12 * records.len()) as u16).to_be_bytes());
+    for (id, text) in records {
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for v in [3u16, 1, 0x0409, *id, utf16.len() as u16, strings.len() as u16] {
+            head.extend_from_slice(&v.to_be_bytes());
+        }
+        strings.extend_from_slice(&utf16);
+    }
+    head.extend_from_slice(&strings);
+    head
+}
+
+/// An `fvar` table with one axis. Each instance is (style name id, PostScript name id).
+fn fvar_table(instances: &[(u16, Option<u16>)], with_ps_ids: bool) -> Vec<u8> {
+    let size: u16 = if with_ps_ids { 10 } else { 8 };
+    let mut t = Vec::new();
+    for v in [1u16, 0, 16, 2, 1, 20, instances.len() as u16, size] {
+        t.extend_from_slice(&v.to_be_bytes());
+    }
+    t.extend_from_slice(b"wght");
+    for fixed in [100u32 << 16, 400 << 16, 900 << 16] {
+        t.extend_from_slice(&fixed.to_be_bytes());
+    }
+    t.extend_from_slice(&[0, 0, 1, 0]);
+    for (style, ps) in instances {
+        t.extend_from_slice(&style.to_be_bytes());
+        t.extend_from_slice(&[0, 0]);
+        t.extend_from_slice(&(400u32 << 16).to_be_bytes());
+        if with_ps_ids {
+            t.extend_from_slice(&ps.unwrap_or(0xFFFF).to_be_bytes());
+        }
+    }
+    t
+}
+
+fn variable_font(face: Option<u32>) -> Vec<u8> {
+    let name = name_table(&[(6, "Var-Regular"), (256, "Condensed Thin"), (257, "Var-CondensedThin"), (258, "Bold"), (259, "Has Spaces")]);
+    // Bold has no PostScript name of its own; "Has Spaces" isn't a valid one.
+    let fvar = fvar_table(&[(256, Some(257)), (258, None), (258, Some(259))], true);
+    sfnt(&[(b"fvar", fvar), (b"name", name)], face)
+}
+
+#[test]
+fn named_styles_are_read_from_fvar() {
+    use super::named_styles::parse;
+    let name = name_table(&[(256, "Condensed Thin"), (257, "Var-CondensedThin"), (259, "Has Spaces")]);
+    assert_eq!(parse(&fvar_table(&[(256, Some(257)), (258, None), (258, Some(259))], true), &name), vec!["Var-CondensedThin".to_string()]);
+    assert!(parse(&fvar_table(&[(256, Some(257))], false), &name).is_empty(), "records without the field have no names");
+    assert!(parse(&[0, 1], &name).is_empty(), "a cut-off table reads as nothing");
+    assert!(parse(&fvar_table(&[(256, Some(999))], true), &name).is_empty(), "a name id that isn't in the table");
+}
+
+#[test]
+fn named_styles_tag_their_variable_font() {
+    let mut lib = Library::new("named-styles");
+    let single = lib.dir.join("Var.ttf");
+    std::fs::write(&single, variable_font(None)).unwrap();
+    let key = lib.font(lib.user_folder, single.to_str().unwrap(), Some("Var-Regular"), "Var", "Regular", true, false);
+    // A collection whose second face is the variable one.
+    let ttc = lib.dir.join("Coll.ttc");
+    std::fs::write(&ttc, variable_font(Some(1))).unwrap();
+    lib.conn
+        .execute(
+            "INSERT INTO fonts (folder_id, path, face_index, file_size, mtime, family, subfamily, postscript_name,
+                weight, width, italic, monospace, variable, glyph_count, format)
+             VALUES (?1, ?2, 1, 1, 1, 'Coll', 'Regular', 'Coll-Regular', 400, 5, 0, 0, 1, 10, 'OpenType')",
+            params![lib.user_folder, ttc.to_str().unwrap()],
+        )
+        .unwrap();
+    let coll_key = face_key(Some("Coll-Regular"), true, false, "", 0);
+
+    let source = Source { tags: vec![tag("Narrow", &["Var-CondensedThin", "Var-Bold", "Not-Here"])], ..Default::default() };
+    let p = import::preview(&lib.conn, &source).unwrap();
+    assert_eq!((p.matched_fonts, p.unmatched_fonts, p.named_style_matches), (1, 2, 1));
+    assert_eq!(p.tags[0].matched, 2, "the single file and the collection both declare Var-CondensedThin");
+    assert!(p.notes.iter().any(|n| n.contains("named style inside variable fonts") && n.contains("Var-CondensedThin")), "{:?}", p.notes);
+    let missing: Vec<&str> = p.missing.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(missing, vec!["Not-Here", "Var-Bold"]);
+    assert_eq!(p.missing[0].tags, vec!["Narrow".to_string()]);
+
+    import::apply(&mut lib.conn, &source, &names(&["Narrow"]), false).unwrap();
+    let mut want = vec![key, coll_key];
+    want.sort();
+    assert_eq!(lib.keys_of("Narrow"), want);
+}
+
+#[test]
+fn named_styles_are_only_read_when_needed() {
+    let lib = Library::new("named-lazy");
+    // A variable font row whose file doesn't exist: matching by name must not need it.
+    lib.font(lib.user_folder, "/nowhere/Var.ttf", Some("Var-Regular"), "Var", "Regular", true, false);
+    let source = Source { tags: vec![tag("Plain", &["Var-Regular", "Var-Regular_Bold"])], ..Default::default() };
+    let p = import::preview(&lib.conn, &source).unwrap();
+    assert_eq!((p.matched_fonts, p.named_style_matches, p.missing.len()), (2, 0, 0));
+}
+
+#[test]
+fn names_match_once_tidied_like_macos() {
+    use super::import::tidy_postscript;
+    assert_eq!(tidy_postscript("D3 Factorism Katakana"), "D3-Factorism-Katakana");
+    assert_eq!(tidy_postscript("MDRS-FD01(c)Zhimetcardozo,2009"), "MDRS-FD01cZhimetcardozo,2009");
+    assert_eq!(tidy_postscript("ltr-09:30/60"), "ltr-09:3060");
+    assert_eq!(tidy_postscript("Okuda"), "Okuda");
+
+    let mut lib = Library::new("tidied");
+    let d3 = lib.user("/fonts/D3.ttf", "D3 Factorism Katakana", "D3 Factorism Katakana");
+    lib.user("/fonts/Okuda.otf", "Okuda", "Okuda");
+    let source = Source { tags: vec![tag("Sci-Fi", &["D3-Factorism-Katakana", "Okuda"])], ..Default::default() };
+    let p = import::preview(&lib.conn, &source).unwrap();
+    assert_eq!((p.matched_fonts, p.tidied_matches), (2, 1));
+    assert!(p.notes.iter().any(|n| n.contains("D3-Factorism-Katakana")));
+    import::apply(&mut lib.conn, &source, &names(&["Sci-Fi"]), false).unwrap();
+    assert!(lib.keys_of("Sci-Fi").contains(&d3));
+}
+
+#[test]
+fn reads_typeface_format_5_and_its_own_download_folder() {
+    let v5 = r#"{ "version": 5, "date": 1790869265.07, "meta": { "digests": [2] }, "fontData": [],
+      "families": [], "mainFonts": [],
+      "locations": ["/Users/x/Library/Containers/com.criminalbird.typeface/Data/Library/Application Support/downloads/Google",
+                    "/Users/x/Fonts"],
+      "tags": [ { "tag": { "name": "Fun" }, "fonts": ["Okuda"] } ] }"#;
+    let source = typeface::parse(v5.as_bytes()).unwrap();
+    assert_eq!(source.label, "Typeface backup (format 5)");
+    assert_eq!(source.tags.len(), 1);
+    assert!(source.notes.iter().any(|n| n.contains("Typeface kept the Google Fonts")), "{:?}", source.notes);
+    assert!(source.notes.iter().any(|n| n.contains("watching 1 folder, and 1 isn't on this Mac") && n.contains("…/x/Fonts")), "{:?}", source.notes);
 }

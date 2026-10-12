@@ -107,10 +107,18 @@ fn load_source(app: &AppHandle, state: &AppState, request: &ImportRequest) -> Ap
     }
 }
 
+/// The library, ready to match `source`. Reading named styles from font files happens after
+/// the database lock is released, so the rest of the app isn't held up.
+fn matcher_for(state: &AppState, source: &Source) -> AppResult<import::Matcher> {
+    let matcher = import::Matcher::load(&*state.conn()?)?;
+    Ok(matcher.with_named_styles(source))
+}
+
 #[tauri::command(async)]
 pub fn tags_import_preview(app: AppHandle, state: State<'_, AppState>, source: ImportRequest) -> AppResult<ImportPreview> {
     let source = load_source(&app, &state, &source)?;
-    import::preview(&*state.conn()?, &source)
+    let matcher = matcher_for(&state, &source)?;
+    import::preview_with(&*state.conn()?, &matcher, &source)
 }
 
 /// Applies the tags the user ticked in the preview (by name).
@@ -123,7 +131,8 @@ pub fn tags_import_apply(
     keep_unmatched: bool,
 ) -> AppResult<ImportResult> {
     let source = load_source(&app, &state, &source)?;
-    state.write(|conn| import::apply(conn, &source, &tags, keep_unmatched))
+    let matcher = matcher_for(&state, &source)?;
+    state.write(|conn| import::apply_with(conn, &matcher, &source, &tags, keep_unmatched))
 }
 
 // ---------------------------------------------------------------------------------- export
