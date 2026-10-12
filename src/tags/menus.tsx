@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { toast } from "sonner";
 import {
   ContextMenu,
@@ -23,6 +24,7 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { COLOR_NAMES, PALETTE, colorVar, type Tag, type TagColor } from "./api";
 import { openTagDialog } from "./dialogs";
+import type { Locations } from "./locations";
 import { recolorTag, setLocationColor } from "./store";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -110,6 +112,25 @@ export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
   );
 }
 
+/** The color items for one location: the palette, and a way back to the default. */
+function LocationItems({ location, color, defaultColor }: { location: string; color: TagColor; defaultColor: TagColor }) {
+  const { Item, Separator } = CONTEXT;
+  return (
+    <>
+      <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={(c) => setLocationColor(location, c).catch(failed("change the color"))} />
+      {color !== defaultColor && (
+        <>
+          <Separator />
+          <Item onClick={() => setLocationColor(location, null).catch(failed("reset the color"))}>
+            <Icon name="restart_alt" size={16} />
+            Use default color ({COLOR_NAMES[defaultColor]})
+          </Item>
+        </>
+      )}
+    </>
+  );
+}
+
 /**
  * Right-click a location (a folder, Font Book, a service) to pick its color. Wraps the row in
  * a plain block, so the row's own layout is untouched.
@@ -128,21 +149,36 @@ export function LocationMenu({
   disabled?: boolean;
   children: React.ReactNode;
 }) {
-  const { Item, Separator } = CONTEXT;
   if (disabled) return <>{children}</>;
   return (
     <ContextMenu>
       <ContextMenuTrigger className="block">{children}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-44">
-        <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={(c) => setLocationColor(location, c).catch(failed("change the color"))} />
-        {color !== defaultColor && (
-          <>
-            <Separator />
-            <Item onClick={() => setLocationColor(location, null).catch(failed("reset the color"))}>
-              <Icon name="restart_alt" size={16} />
-              Use default color ({COLOR_NAMES[defaultColor]})
-            </Item>
-          </>
+        <LocationItems location={location} color={color} defaultColor={defaultColor} />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/**
+ * One right-click menu for many location rows (a subfolder tree can have thousands). Each row
+ * names its location in a `data-location` attribute.
+ */
+export function LocationsMenu({ locations, children }: { locations: Locations; children: React.ReactNode }) {
+  const [target, setTarget] = useState<string | null>(null);
+  return (
+    <ContextMenu onOpenChange={(open) => !open && setTarget(null)}>
+      <ContextMenuTrigger
+        className="block"
+        onContextMenuCapture={(e) => setTarget((e.target as HTMLElement).closest("[data-location]")?.getAttribute("data-location") ?? null)}
+      >
+        {children}
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-44">
+        {target ? (
+          <LocationItems location={target} color={locations.colorOf(target)} defaultColor={locations.defaultOf(target)} />
+        ) : (
+          <ContextMenuItem disabled>Right-click a folder to change its color</ContextMenuItem>
         )}
       </ContextMenuContent>
     </ContextMenu>
