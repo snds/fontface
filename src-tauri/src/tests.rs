@@ -782,7 +782,7 @@ mod purchases_flow {
         crate::services::ensure_service_folders(&mut conn, &data).unwrap();
         purchases::add_watch_folder(&conn, &purchases::validate_watch_folder(&dir.join("Downloads")).unwrap()).unwrap();
 
-        let new = purchases::check_folders(&conn).unwrap();
+        let new = purchases::check_folders(&conn, &data).unwrap();
         assert_eq!(new.len(), 1);
         let find = purchases::finds(&conn).unwrap().remove(0);
         assert_eq!(find.contents.fonts.len(), 2, "two desktop fonts; webfont, clutter and the escaping entry skipped: {:?}", find.contents.fonts);
@@ -790,9 +790,9 @@ mod purchases_flow {
         assert_eq!(find.contents.licenses, vec!["Andale/License/EULA Desktop.txt"]);
         #[cfg(target_os = "macos")]
         assert_eq!(find.store.as_deref(), Some("myfonts"), "store read from the download's origin");
-        assert!(purchases::check_folders(&conn).unwrap().is_empty(), "unchanged downloads aren't re-reported");
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty(), "unchanged downloads aren't re-reported");
 
-        let source = purchases::find_source(&conn, find.id).unwrap();
+        let source = purchases::find_source(&conn, &data, find.id).unwrap();
         let store = source.store.clone().unwrap_or_else(|| purchases::OTHER.into());
         let result = purchases::import(&data, &source.path, &store, source.origin_url, source.referrer).unwrap();
         purchases::mark_imported(&conn, find.id, &store, &result.dir).unwrap();
@@ -860,7 +860,7 @@ mod purchases_flow {
         std::fs::write(family.join("Licensing.pdf"), b"license").unwrap();
         std::fs::write(family.join("Broken.otf"), b"not a font").unwrap();
 
-        let new = purchases::check_folders(&conn).unwrap();
+        let new = purchases::check_folders(&conn, &data).unwrap();
         assert_eq!(new.len(), 1, "one download, not one per file");
         let find = purchases::finds(&conn).unwrap().remove(0);
         assert!(find.is_folder);
@@ -870,7 +870,7 @@ mod purchases_flow {
         assert_eq!(find.contents.skipped_fonts, vec!["Webfonts/AndaleMono-web.ttf"], "the web copy is left out");
         assert_eq!(find.contents.unreadable, vec!["Broken.otf"], "a bad file is shown, not silently dropped");
 
-        let source = purchases::find_source(&conn, find.id).unwrap();
+        let source = purchases::find_source(&conn, &data, find.id).unwrap();
         let result = purchases::import(&data, &source.path, "other", None, None).unwrap();
         assert!(std::path::Path::new(&result.dir).join("Licensing.pdf").exists());
         assert_eq!(result.files.len(), 3);
@@ -879,7 +879,7 @@ mod purchases_flow {
         purchases::dismiss(&conn, find.id).unwrap();
         std::fs::write(family.join(".DS_Store"), b"finder").unwrap();
         std::fs::write(family.join("OTF/.DS_Store"), b"finder").unwrap();
-        assert!(purchases::check_folders(&conn).unwrap().is_empty());
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty());
         // A zip next to its own unzipped folder counts once.
         crate::tests::copy_plain(ANDALE_MONO, dir.join("Downloads/Andale Family.zip")).ok();
         let _ = std::fs::remove_dir_all(&dir);
@@ -888,22 +888,22 @@ mod purchases_flow {
     /// A recorded download that's renamed or moved keeps its state instead of being offered again.
     #[test]
     fn a_moved_download_is_not_offered_again() {
-        let (dir, _data, conn) = setup("moved");
+        let (dir, data, conn) = setup("moved");
         crate::tests::copy_plain(ANDALE_MONO, dir.join("Downloads/Andale.ttf")).unwrap();
-        let first = purchases::check_folders(&conn).unwrap();
+        let first = purchases::check_folders(&conn, &data).unwrap();
         purchases::dismiss(&conn, first[0]).unwrap();
         std::fs::rename(dir.join("Downloads/Andale.ttf"), dir.join("Downloads/Andale renamed.ttf")).unwrap();
-        assert!(purchases::check_folders(&conn).unwrap().is_empty(), "not new again");
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty(), "not new again");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Symlinks (e.g. one restored from a hostile zip pointing at a system file) are never followed.
     #[test]
     fn symlinked_downloads_are_ignored() {
-        let (dir, _data, conn) = setup("symlink");
+        let (dir, data, conn) = setup("symlink");
         std::os::unix::fs::symlink(ANDALE_MONO, dir.join("Downloads/Linked.ttf")).unwrap();
         std::os::unix::fs::symlink("/dev/zero", dir.join("Downloads/Zero.otf")).unwrap();
-        assert!(purchases::check_folders(&conn).unwrap().is_empty());
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -930,7 +930,7 @@ mod purchases_flow {
         crate::tests::copy_plain(ANDALE_MONO, dir.join("Downloads/New.ttf")).unwrap();
         let got = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("an event");
         println!("event: {got:?}");
-        assert!(purchases::record(&conn, &dir.join("Downloads/New.ttf")).unwrap().is_some());
+        assert!(purchases::record(&conn, &data, &dir.join("Downloads/New.ttf")).unwrap().is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -940,7 +940,7 @@ mod purchases_flow {
     #[test]
     #[ignore]
     fn watcher_sees_a_moved_in_folder_as_one_download() {
-        let (dir, _data, conn) = setup("watch-folder");
+        let (dir, data, conn) = setup("watch-folder");
         let staging = dir.join("staging/Andale Family");
         std::fs::create_dir_all(staging.join("OTF")).unwrap();
         crate::tests::copy_plain(ANDALE_MONO, staging.join("OTF/AndaleMono.ttf")).unwrap();
@@ -963,11 +963,386 @@ mod purchases_flow {
         println!("event paths {paths:?} -> units {units:?}");
         assert_eq!(units.len(), 1);
         let unit = units.into_iter().next().unwrap();
-        let id = purchases::record(&conn, &unit).unwrap().expect("recorded as new");
+        let id = purchases::record(&conn, &data, &unit).unwrap().expect("recorded as new");
         let find = purchases::finds(&conn).unwrap().into_iter().find(|f| f.id == id).unwrap();
         assert!(find.is_folder);
         assert_eq!(find.contents.licenses, vec!["EULA.txt"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ------------------------------------------------------------ replace, trials, transfers
+
+    const ARIAL: &str = "/System/Library/Fonts/Supplemental/Arial.ttf";
+    const ARIAL_BOLD: &str = "/System/Library/Fonts/Supplemental/Arial Bold.ttf";
+    const COURIER: &str = "/System/Library/Fonts/Supplemental/Courier New.ttf";
+    const GEORGIA: &str = "/System/Library/Fonts/Supplemental/Georgia.ttf";
+
+    /// A "newer version" of a font: the same faces, different bytes (padding after the tables).
+    fn newer(src: &str) -> Vec<u8> {
+        let mut bytes = std::fs::read(src).unwrap();
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        bytes
+    }
+
+    fn postscript(path: &str) -> String {
+        crate::scanner::parse_file(&std::fs::read(path).unwrap()).unwrap().remove(0).postscript_name.unwrap()
+    }
+
+    fn set_store(conn: &rusqlite::Connection, id: i64, store: &str) {
+        conn.execute("UPDATE purchase_finds SET store = ?2 WHERE id = ?1", rusqlite::params![id, store]).unwrap();
+    }
+
+    fn status_of(conn: &rusqlite::Connection, id: i64) -> String {
+        conn.query_row("SELECT status FROM purchase_finds WHERE id = ?1", [id], |r| r.get(0)).unwrap()
+    }
+
+    /// Hidden leftovers (half-made imports, set-aside old copies) in a store's folder.
+    fn leftovers(store_dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(store_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".import-") || n.starts_with(".replaced-"))
+            .collect()
+    }
+
+    fn write_download(folder: &std::path::Path, files: &[(&str, Vec<u8>)]) {
+        std::fs::create_dir_all(folder).unwrap();
+        for (name, bytes) in files {
+            std::fs::write(folder.join(name), bytes).unwrap();
+        }
+    }
+
+    /// Imports a watched download the way the app does, and returns (find id, purchase folder).
+    fn import_find(conn: &rusqlite::Connection, data: &std::path::Path, store: &str) -> (i64, String) {
+        let ids = purchases::check_folders(conn, data).unwrap();
+        assert_eq!(ids.len(), 1, "one new download");
+        let source = purchases::find_source(conn, data, ids[0]).unwrap();
+        let result = purchases::import(data, &source.path, store, None, None).unwrap();
+        purchases::mark_imported(conn, ids[0], store, &result.dir).unwrap();
+        (ids[0], result.dir)
+    }
+
+    /// A newer download of an imported purchase (same store, its families, one of its faces) is
+    /// offered as a Replace. Replacing swaps the files, keeps faces the download doesn't have and
+    /// the old license, and reports which faces were on so the same ones are turned back on.
+    #[test]
+    fn replace_swaps_in_a_newer_version_and_keeps_what_was_on() {
+        let (dir, data, conn) = setup("replace");
+        write_download(
+            &dir.join("Downloads/Arial v1"),
+            &[
+                ("Arial.ttf", std::fs::read(ARIAL).unwrap()),
+                ("Arial Bold.ttf", std::fs::read(ARIAL_BOLD).unwrap()),
+                ("EULA.txt", b"license v1".to_vec()),
+            ],
+        );
+        let (_, old_dir) = import_find(&conn, &data, "myfonts");
+
+        // Version 2 updates the regular style only, with a new license.
+        write_download(&dir.join("Downloads/Arial v2"), &[("Arial.ttf", newer(ARIAL)), ("EULA.txt", b"license v2".to_vec())]);
+        let ids = purchases::check_folders(&conn, &data).unwrap();
+        assert_eq!(ids.len(), 1, "different files: offered, not taken for the old download");
+        set_store(&conn, ids[0], "myfonts");
+        let mut finds = purchases::finds(&conn).unwrap();
+        purchases::link_replacements(&mut finds, &data);
+        let v2 = finds.iter().find(|f| f.id == ids[0]).unwrap();
+        assert_eq!(v2.replaces.as_deref(), Some(old_dir.as_str()), "offered as a Replace, not a second import");
+        assert!(finds.iter().filter(|f| f.id != ids[0]).all(|f| f.replaces.is_none()));
+
+        // Only the regular was on. The fake turns nothing off in the OS; it reports what it would.
+        let turned_off_in = std::cell::RefCell::new(None);
+        let source = purchases::find_source(&conn, &data, ids[0]).unwrap();
+        let result = purchases::replace(
+            &data,
+            std::path::Path::new(&old_dir),
+            &source.path,
+            source.store.as_deref(),
+            None,
+            None,
+            |d| {
+                *turned_off_in.borrow_mut() = Some(d.to_path_buf());
+                Ok(vec![format!("{old_dir}/Arial.ttf")])
+            },
+            |_| panic!("nothing to turn back on after a successful swap"),
+        )
+        .unwrap();
+        purchases::mark_imported(&conn, ids[0], &result.store, &result.dir).unwrap();
+
+        assert_eq!(turned_off_in.borrow().as_deref(), Some(std::path::Path::new(&old_dir)), "old fonts turned off first");
+        assert_eq!(result.dir, old_dir, "same folder, so the library keeps its place");
+        assert_eq!(result.files, vec!["Arial Bold.ttf", "Arial.ttf"]);
+        assert_eq!(result.was_active_faces, vec![postscript(ARIAL)], "the UI turns exactly these back on");
+        assert!(result.old_faces.contains(&postscript(ARIAL_BOLD)));
+        let folder = std::path::Path::new(&old_dir);
+        assert_eq!(std::fs::read(folder.join("Arial.ttf")).unwrap(), newer(ARIAL), "the new version is in place");
+        assert_eq!(std::fs::read(folder.join("Arial Bold.ttf")).unwrap(), std::fs::read(ARIAL_BOLD).unwrap(), "untouched style kept");
+        let listed = purchases::imported(&data);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].font_files, 2);
+        assert_eq!(listed[0].license_files.len(), 2, "the old license stays with the new one: {:?}", listed[0].license_files);
+        assert!(leftovers(folder.parent().unwrap()).is_empty());
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// If the swap fails after the old fonts were turned off, they're turned back on and the old
+    /// copy is untouched. A replace interrupted by a crash is undone at the next launch.
+    #[test]
+    fn a_failed_replace_puts_the_old_version_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, data, conn) = setup("replace-fail");
+        write_download(&dir.join("Downloads/Arial v1"), &[("Arial.ttf", std::fs::read(ARIAL).unwrap())]);
+        let (_, old_dir) = import_find(&conn, &data, "myfonts");
+        let folder = std::path::PathBuf::from(&old_dir);
+        write_download(&dir.join("Downloads/Arial v2"), &[("Arial.ttf", newer(ARIAL))]);
+
+        let on = vec![format!("{old_dir}/Arial.ttf")];
+        let restored = std::cell::RefCell::new(Vec::new());
+        let result = purchases::replace(
+            &data,
+            &folder,
+            &dir.join("Downloads/Arial v2"),
+            Some("myfonts"),
+            None,
+            None,
+            |d| {
+                // Something goes wrong between turning the fonts off and swapping the files.
+                std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o000)).unwrap();
+                Ok(on.clone())
+            },
+            |paths| restored.borrow_mut().extend_from_slice(paths),
+        );
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(*restored.borrow(), on, "the fonts that were turned off are turned back on");
+        assert_eq!(std::fs::read(folder.join("Arial.ttf")).unwrap(), std::fs::read(ARIAL).unwrap(), "old version untouched");
+        assert!(leftovers(folder.parent().unwrap()).is_empty(), "the copied new files are cleaned up");
+
+        // A download from another store, or of another family, is refused before anything changes.
+        let refuse = |store: &str, source: &std::path::Path| {
+            purchases::replace(&data, &folder, source, Some(store), None, None, |_| panic!("not turned off"), |_| {})
+        };
+        assert!(refuse("fontspring", &dir.join("Downloads/Arial v2")).is_err());
+        write_download(&dir.join("Downloads/Courier"), &[("Courier New.ttf", std::fs::read(COURIER).unwrap())]);
+        assert!(refuse("myfonts", &dir.join("Downloads/Courier")).is_err());
+
+        // Crash after the old copy was set aside but before the new one landed: it goes back.
+        let aside = folder.with_file_name(format!(".replaced-{}", folder.file_name().unwrap().to_string_lossy()));
+        std::fs::rename(&folder, &aside).unwrap();
+        purchases::sweep_leftovers(&data);
+        assert!(folder.join("Arial.ttf").exists() && !aside.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A purchase that may be a trial gets a reminder 30 days after import. "I bought it" clears
+    /// the flag, and a later Replace from the same store doesn't bring it back.
+    #[test]
+    fn trial_reminder_after_30_days_until_the_user_says_they_bought_it() {
+        let (dir, data, _conn) = setup("trial");
+        let file = dir.join("Downloads/Arial.ttf");
+        crate::tests::copy_plain(ARIAL, &file).unwrap();
+        let result = purchases::import(&data, &file, "fontstore", None, None).unwrap();
+        let item = || purchases::imported(&data).into_iter().find(|i| i.dir == result.dir).unwrap();
+        assert!(item().may_be_trial, "Fontstore downloads may be trials");
+        assert!(!item().trial_reminder, "no reminder right after import");
+
+        let day = 24 * 60 * 60;
+        assert!(!purchases::trial_reminder_due(1_000_000, true, 1_000_000 + 29 * day));
+        assert!(purchases::trial_reminder_due(1_000_000, true, 1_000_000 + 30 * day));
+        assert!(!purchases::trial_reminder_due(1_000_000, false, 1_000_000 + 90 * day));
+
+        // Imported 31 days ago.
+        let sidecar = std::path::Path::new(&result.dir).join(".fontface-purchase.json");
+        let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        meta["importedAt"] = serde_json::json!(now - 31 * day);
+        std::fs::write(&sidecar, serde_json::to_vec(&meta).unwrap()).unwrap();
+        assert!(item().trial_reminder, "reminder shows after 30 days");
+
+        purchases::confirm_license(&data, std::path::Path::new(&result.dir)).unwrap();
+        assert!(!item().may_be_trial && !item().trial_reminder, "I bought it clears the flag and the reminder");
+
+        crate::tests::copy_plain(ARIAL, dir.join("Downloads/Arial old.ttf")).unwrap();
+        std::fs::write(dir.join("Downloads/Arial new.ttf"), newer(ARIAL)).unwrap();
+        purchases::replace(
+            &data,
+            std::path::Path::new(&result.dir),
+            &dir.join("Downloads/Arial new.ttf"),
+            Some("fontstore"),
+            None,
+            None,
+            |_| Ok(Vec::new()),
+            |_| {},
+        )
+        .unwrap();
+        assert!(!item().may_be_trial, "a newer version of a bought font isn't a trial again");
+        assert!(purchases::confirm_license(&data, &dir.join("Downloads")).is_err(), "only Fontface's own folders");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// "License transferred" turns the fonts off and removes the import, like "subscription
+    /// ended" does for one item, and the download isn't offered again, even after it moves.
+    /// If the files can't be deleted, the fonts are turned back on.
+    #[test]
+    fn a_transferred_license_turns_fonts_off_and_removes_the_import() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, data, conn) = setup("transfer");
+        crate::tests::copy_plain(ARIAL, dir.join("Downloads/Arial.ttf")).unwrap();
+        let (id, import_dir) = import_find(&conn, &data, "myfonts");
+        let folder = std::path::PathBuf::from(&import_dir);
+
+        // Deleting fails: the fonts come back on and the purchase stays.
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let restored = std::cell::RefCell::new(Vec::new());
+        let on = vec![format!("{import_dir}/Arial.ttf")];
+        let failed = purchases::remove_import(&data, &folder, |_| Ok(on.clone()), |p| restored.borrow_mut().extend_from_slice(p));
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(failed.is_err());
+        assert_eq!(*restored.borrow(), on);
+        assert!(purchases::is_import_dir(&data, &folder));
+
+        let turned_off_in = std::cell::RefCell::new(None);
+        purchases::remove_import(
+            &data,
+            &folder,
+            |d| {
+                *turned_off_in.borrow_mut() = Some(d.to_path_buf());
+                Ok(on.clone())
+            },
+            |_| panic!("removed fine: nothing to turn back on"),
+        )
+        .unwrap();
+        purchases::forget_removed(&conn, &import_dir, "transferred").unwrap();
+        assert_eq!(turned_off_in.borrow().as_deref(), Some(folder.as_path()), "fonts turned off before deleting");
+        assert!(!folder.exists() && purchases::imported(&data).is_empty(), "the import is gone");
+        assert_eq!(status_of(&conn, id), "transferred");
+        assert!(purchases::finds(&conn).unwrap().is_empty(), "not listed anywhere");
+
+        // The original download, tidied into a subfolder, isn't offered again.
+        std::fs::create_dir_all(dir.join("Downloads/Old fonts")).unwrap();
+        std::fs::rename(dir.join("Downloads/Arial.ttf"), dir.join("Downloads/Old fonts/Arial.ttf")).unwrap();
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty());
+        assert!(purchases::remove_import(&data, &dir.join("Downloads"), |_| panic!(), |_| {}).is_err(), "only Fontface's folders");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An imported download moved into a subfolder of a watched folder (a new top-level item) is
+    /// matched by its files' contents and isn't offered again. A dismissed download that's still
+    /// in place doesn't hide a fresh copy of it.
+    #[test]
+    fn an_imported_folder_moved_into_a_subfolder_is_not_offered_again() {
+        let (dir, data, conn) = setup("moved-in");
+        write_download(
+            &dir.join("Downloads/Andale Family"),
+            &[("AndaleMono.ttf", std::fs::read(ANDALE_MONO).unwrap()), ("EULA.txt", b"license".to_vec())],
+        );
+        let (_, import_dir) = import_find(&conn, &data, "myfonts");
+        std::fs::create_dir_all(dir.join("Downloads/Fonts")).unwrap();
+        std::fs::rename(dir.join("Downloads/Andale Family"), dir.join("Downloads/Fonts/Andale Family")).unwrap();
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty(), "same fonts: not offered again");
+        let row: (String, Option<String>) = conn
+            .query_row("SELECT status, imported_dir FROM purchase_finds WHERE path LIKE '%/Downloads/Fonts'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(row, ("imported".to_string(), Some(import_dir)), "linked to the purchase that holds them");
+
+        // A dismissed download still in place: a second copy of it is a deliberate download.
+        crate::tests::copy_plain(GEORGIA, dir.join("Downloads/Georgia.ttf")).unwrap();
+        let georgia = purchases::check_folders(&conn, &data).unwrap();
+        purchases::dismiss(&conn, georgia[0]).unwrap();
+        crate::tests::copy_plain(GEORGIA, dir.join("Downloads/Georgia copy.ttf")).unwrap();
+        assert_eq!(purchases::check_folders(&conn, &data).unwrap().len(), 1, "offered again");
+        // Once the dismissed one is moved away into the subfolder, that subfolder isn't offered.
+        std::fs::rename(dir.join("Downloads/Georgia.ttf"), dir.join("Downloads/Fonts/Georgia.ttf")).unwrap();
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Font files of one family downloaded one at a time go into one folder, not one each. A file
+    /// with a face that folder already has, or a possible trial, gets its own folder.
+    #[test]
+    fn loose_files_of_one_family_are_grouped_on_import() {
+        let (dir, data, conn) = setup("group");
+        crate::tests::copy_plain(ARIAL, dir.join("Downloads/Arial.ttf")).unwrap();
+        let (_, arial) = import_find(&conn, &data, "github");
+
+        // A second style arrives: a plain "Add to library", not a Replace.
+        crate::tests::copy_plain(ARIAL_BOLD, dir.join("Downloads/Arial Bold.ttf")).unwrap();
+        let ids = purchases::check_folders(&conn, &data).unwrap();
+        set_store(&conn, ids[0], "github");
+        let mut finds = purchases::finds(&conn).unwrap();
+        purchases::link_replacements(&mut finds, &data);
+        assert!(finds.iter().all(|f| f.replaces.is_none()), "a new style isn't a new version");
+        let bold = purchases::import(&data, &dir.join("Downloads/Arial Bold.ttf"), "github", None, None).unwrap();
+        assert_eq!(bold.dir, arial, "joins the family's folder");
+        assert_eq!(bold.files, vec!["Arial Bold.ttf"], "only the new file is reported, so only it is turned on");
+        let listed = purchases::imported(&data);
+        assert_eq!((listed.len(), listed[0].font_files), (1, 2));
+
+        // Another family, a face the folder already has, a possible trial, another store: apart.
+        let courier = purchases::import(&data, std::path::Path::new(COURIER), "github", None, None).unwrap();
+        let again = purchases::import(&data, std::path::Path::new(ARIAL), "github", None, None).unwrap();
+        crate::tests::copy_plain(ARIAL_BOLD, dir.join("Downloads/Arial Bold Trial.ttf")).unwrap();
+        let trial = purchases::import(&data, &dir.join("Downloads/Arial Bold Trial.ttf"), "github", None, None).unwrap();
+        let elsewhere = purchases::import(&data, std::path::Path::new(ARIAL_BOLD), "fontspring", None, None).unwrap();
+        for other in [&courier.dir, &again.dir, &trial.dir, &elsewhere.dir] {
+            assert_ne!(other, &arial);
+        }
+        assert_eq!(purchases::imported(&data).len(), 5);
+        assert!(leftovers(std::path::Path::new(&arial).parent().unwrap()).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// When the watcher stops (its channel closes) mid-batch, the batch is still checked.
+    #[test]
+    fn the_watcher_worker_checks_its_last_batch_before_stopping() {
+        let (dir, data, _conn) = setup("flush");
+        let file = dir.join("Downloads/Arial.ttf");
+        crate::tests::copy_plain(ARIAL, &file).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(crate::services::purchase_watch::Msg::Item(file)).unwrap();
+        drop(tx); // the watcher was dropped right after the event
+        let announced = std::cell::RefCell::new(Vec::new());
+        crate::services::purchase_watch::worker(&data.join("db.sqlite3"), &data, rx, |ids| {
+            announced.borrow_mut().extend_from_slice(ids)
+        });
+        assert_eq!(announced.borrow().len(), 1, "the pending download was recorded and announced");
+        let conn = db::open(&data.join("db.sqlite3")).unwrap();
+        assert_eq!(purchases::finds(&conn).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two folder checks never run at once: one asked for while another runs waits for it and
+    /// gets its result.
+    #[test]
+    fn only_one_folder_check_runs_at_a_time() {
+        let key = format!("single-flight-test-{}", std::process::id());
+        let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (started_tx, started) = std::sync::mpsc::channel();
+        let leader = {
+            let (key, runs) = (key.clone(), runs.clone());
+            std::thread::spawn(move || {
+                purchases::single_flight(&key, || {
+                    runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    started_tx.send(()).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    Ok(vec![7, 8])
+                })
+            })
+        };
+        started.recv().unwrap();
+        let shared = purchases::single_flight(&key, || {
+            runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![99])
+        });
+        assert_eq!(shared.unwrap(), vec![7, 8], "the second caller got the running check's result");
+        assert_eq!(leader.join().unwrap().unwrap(), vec![7, 8]);
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1, "only one check ran");
+        assert_eq!(purchases::single_flight(&key, || Ok(vec![99])).unwrap(), vec![99], "a later check runs anew");
+        let failed = purchases::single_flight(&key, || Err(crate::error::AppError::Other("disk gone".into())));
+        assert!(failed.is_err());
     }
 }
 

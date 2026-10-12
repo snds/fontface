@@ -595,14 +595,14 @@ pub fn restart_purchase_watcher(app: &AppHandle) {
     if !on || folders.is_empty() {
         return;
     }
-    let (watcher, failed) = services::purchase_watch::start(app.clone(), state.db_path.clone(), &folders);
+    let (watcher, failed) = services::purchase_watch::start(app.clone(), state.db_path.clone(), state.data_dir.clone(), &folders);
     *state.purchase_watch_failed.lock().unwrap_or_else(|p| p.into_inner()) = failed.into_iter().collect();
     *slot = watcher;
     drop(slot);
-    let (handle, db_path) = (app.clone(), state.db_path.clone());
+    let (handle, db_path, data_dir) = (app.clone(), state.db_path.clone(), state.data_dir.clone());
     std::thread::spawn(move || {
         if let Ok(conn) = db::open(&db_path) {
-            if let Ok(new) = purchases::check_folders(&conn) {
+            if let Ok(new) = purchases::check_folders(&conn, &data_dir) {
                 if !new.is_empty() {
                     let _ = handle.emit("purchases-changed", &new);
                 }
@@ -618,6 +618,8 @@ pub async fn purchases_status(app: AppHandle) -> AppResult<PurchasesStatus> {
         let conn = db::open(&state.db_path)?;
         let watching = purchases::watching(&conn);
         let failed = state.purchase_watch_failed.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let mut finds = purchases::finds(&conn)?;
+        purchases::link_replacements(&mut finds, &state.data_dir);
         Ok(PurchasesStatus {
             watching,
             folders: purchases::watch_folders(&conn)?
@@ -629,7 +631,7 @@ pub async fn purchases_status(app: AppHandle) -> AppResult<PurchasesStatus> {
                     path,
                 })
                 .collect(),
-            finds: purchases::finds(&conn)?,
+            finds,
             imported: purchases::imported(&state.data_dir),
             stores: purchases::STORES,
         })
@@ -687,7 +689,7 @@ pub async fn purchases_remove_folder(app: AppHandle, path: String) -> AppResult<
 pub async fn purchases_check_now(app: AppHandle) -> AppResult<usize> {
     blocking(move || {
         let state = app.state::<AppState>();
-        Ok(purchases::check_folders(&db::open(&state.db_path)?)?.len())
+        Ok(purchases::check_folders(&db::open(&state.db_path)?, &state.data_dir)?.len())
     })
     .await
 }
@@ -704,7 +706,7 @@ pub async fn purchases_detect_store(path: String) -> AppResult<Option<String>> {
 pub async fn purchases_import(app: AppHandle, id: i64, store: Option<String>) -> AppResult<purchases::ImportResult> {
     blocking(move || {
         let state = app.state::<AppState>();
-        let source = purchases::find_source(&db::open(&state.db_path)?, id)?;
+        let source = purchases::find_source(&db::open(&state.db_path)?, &state.data_dir, id)?;
         // One import per download, whether it was picked from the list or by hand.
         let _op = FamilyOp::start(&state, &format!("purchase-path:{}", source.path.display()))?;
         let store = store.filter(|s| !s.is_empty()).or(source.store).unwrap_or_else(|| purchases::OTHER.into());
@@ -757,25 +759,61 @@ pub async fn purchases_dismiss(app: AppHandle, id: i64) -> AppResult<()> {
     blocking(move || app.state::<AppState>().write(|conn| purchases::dismiss(conn, id))).await
 }
 
+/// Replaces an imported purchase with a newer download of it (same store, same families). The
+/// new files are copied and checked first. Only then are the old fonts turned off and swapped
+/// out; if the swap fails, they're turned back on. The UI then rescans the folder and turns the
+/// same faces back on.
+#[tauri::command]
+pub async fn purchases_replace(app: AppHandle, id: i64, dir: String) -> AppResult<purchases::Replaced> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let source = purchases::find_source(&db::open(&state.db_path)?, &state.data_dir, id)?;
+        let _op = FamilyOp::start(&state, &format!("purchase-path:{}", source.path.display()))?;
+        let _dir_op = FamilyOp::start(&state, &format!("purchase-dir:{dir}"))?;
+        let result = purchases::replace(
+            &state.data_dir,
+            Path::new(&dir),
+            &source.path,
+            source.store.as_deref(),
+            source.origin_url,
+            source.referrer,
+            |d| turn_off_under(&state, d),
+            |paths| restore(&state, paths),
+        )?;
+        state.write(|conn| purchases::mark_imported(conn, id, &result.store, &result.dir))?;
+        Ok(result)
+    })
+    .await
+}
+
+/// "I bought it": clears an imported purchase's trial flag (and its reminder).
+#[tauri::command]
+pub async fn purchases_confirm_license(app: AppHandle, dir: String) -> AppResult<()> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let _op = FamilyOp::start(&state, &format!("purchase-dir:{dir}"))?;
+        purchases::confirm_license(&state.data_dir, Path::new(&dir))
+    })
+    .await
+}
+
 /// Removes an imported purchase: its fonts are turned off and the copied files deleted.
 /// The original download is not touched.
 #[tauri::command]
 pub async fn purchases_remove(app: AppHandle, dir: String) -> AppResult<()> {
-    blocking(move || remove_import(&app.state::<AppState>(), Path::new(&dir))).await
+    blocking(move || remove_import(&app.state::<AppState>(), Path::new(&dir), "dismissed")).await
 }
 
-fn remove_import(state: &AppState, dir: &Path) -> AppResult<()> {
-    if !purchases::is_import_dir(&state.data_dir, dir) {
-        return Err(AppError::Invalid("That isn't a purchase Fontface imported".into()));
-    }
+/// The license was transferred to someone else: like Remove, and the download isn't offered again.
+#[tauri::command]
+pub async fn purchases_transferred(app: AppHandle, dir: String) -> AppResult<()> {
+    blocking(move || remove_import(&app.state::<AppState>(), Path::new(&dir), "transferred")).await
+}
+
+fn remove_import(state: &AppState, dir: &Path, status: &str) -> AppResult<()> {
     let _op = FamilyOp::start(state, &format!("purchase-dir:{}", dir.display()))?;
-    let turned_off = turn_off_under(state, dir)?;
-    if let Err(e) = purchases::delete_import_dir(dir) {
-        restore(state, &turned_off);
-        return Err(e.into());
-    }
-    state.write(|conn| purchases::forget_removed(conn, &dir.to_string_lossy()))?;
-    Ok(())
+    purchases::remove_import(&state.data_dir, dir, |d| turn_off_under(state, d), |paths| restore(state, paths))?;
+    state.write(|conn| purchases::forget_removed(conn, &dir.to_string_lossy(), status))
 }
 
 /// Shows an imported purchase's folder (with its license files) in Finder / Explorer.
@@ -804,7 +842,7 @@ pub async fn purchases_subscription_ended(app: AppHandle, store: String) -> AppR
         let state = app.state::<AppState>();
         let mut report = RemovalReport { removed: 0, failed: Vec::new() };
         for item in purchases::imported(&state.data_dir).into_iter().filter(|i| i.store == store && i.subscription_bound) {
-            match remove_import(&state, Path::new(&item.dir)) {
+            match remove_import(&state, Path::new(&item.dir), "dismissed") {
                 Ok(()) => report.removed += 1,
                 Err(e) => report.failed.push((item.label, e.to_string())),
             }

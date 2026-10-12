@@ -110,6 +110,11 @@ How it works:
 - The store comes from the download's origin, which macOS records in `kMDItemWhereFroms`. On Windows it's the `Zone.Identifier` stream. It's matched against a list of store domains.
 - Importing copies only desktop font files and license files into `Services/Purchases/<Store>/<Family>/`. They go through a hidden temporary folder, with a `.fontface-purchase.json` file that records the store, the origin and flags. The original download stays put.
 - The import folder is a library folder of kind `service`, so the normal scan and activation apply.
+- An import has two steps: `prepare` copies into the hidden folder, and `place` moves it into `<Store>/<Family>/`. A single font file instead joins a folder of its family from the same store (hard-linked in, so a scan never sees half a file).
+- Replace (`purchases::replace`) prepares the new version, then turns the old fonts off, then swaps. The old folder is renamed to `.replaced-<name>` while the new one moves in, and is renamed back if that fails. At startup, a leftover `.replaced-<name>` goes back if `<name>` is missing and is deleted otherwise. Turning fonts off and back on is passed in as functions, so tests run without touching the OS.
+- Fonts are matched by content: each font's fingerprint (length + 64-bit hash) is kept on the find and in the sidecar, with its families and faces. `record` uses them to skip downloads whose fonts are already imported; `link_replacements` uses them to offer Replace.
+- Lock order: the scan write turn, then the activation lock, then the DB mutex. File changes in the Purchases folder take turns through a separate lock that's only held for file work, never while waiting for the other three.
+- `check_folders` is single-flight per library: a second caller waits for the running check and gets its result.
 - Its tables come from an idempotent `ensure_schema` (no `user_version` bump), so they merge cleanly with other features.
 
 **Cloud storage.**

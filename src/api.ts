@@ -173,6 +173,8 @@ export interface PurchaseFind {
   importedDir: string | null;
   /** The original download no longer exists. */
   missing: boolean;
+  /** An imported purchase (its folder) this looks like a newer version of: offer "Replace". */
+  replaces: string | null;
 }
 
 export interface PurchaseImported {
@@ -187,6 +189,8 @@ export interface PurchaseImported {
   licenseFiles: string[];
   subscriptionBound: boolean;
   mayBeTrial: boolean;
+  /** May be a trial and was added at least 30 days ago: remind the user. */
+  trialReminder: boolean;
 }
 
 export interface PurchaseStore {
@@ -218,7 +222,19 @@ export interface PurchasesStatus {
 
 export interface ImportResult {
   dir: string;
+  /** Font files this import added to the folder (it may have joined a folder of its family). */
   files: string[];
+}
+
+export interface ReplaceResult {
+  dir: string;
+  store: string;
+  /** Every font file now in the folder. */
+  files: string[];
+  /** PostScript names of the faces that were on before the swap. */
+  wasActiveFaces: string[];
+  /** PostScript names of every face the old copy had. */
+  oldFaces: string[];
 }
 
 export const api = {
@@ -248,6 +264,9 @@ export const api = {
   purchasesRetryWatch: () => invoke<boolean>("purchases_retry_watch"),
   purchasesDismiss: (id: number) => invoke<void>("purchases_dismiss", { id }),
   purchasesRemove: (dir: string) => invoke<void>("purchases_remove", { dir }),
+  purchasesReplace: (id: number, dir: string) => invoke<ReplaceResult>("purchases_replace", { id, dir }),
+  purchasesConfirmLicense: (dir: string) => invoke<void>("purchases_confirm_license", { dir }),
+  purchasesTransferred: (dir: string) => invoke<void>("purchases_transferred", { dir }),
   purchasesSubscriptionEnded: (store: string) => invoke<RemovalReport>("purchases_subscription_ended", { store }),
   purchasesReveal: (dir: string) => invoke<void>("purchases_reveal", { dir }),
 };

@@ -367,7 +367,7 @@ export default function App() {
     service: ServiceId,
     dir: string,
     files: string[],
-    pick: (name: string) => boolean = () => true,
+    pick: (name: string, font: FontSummary) => boolean = () => true,
   ) => {
     const verb = service === "google" ? "Downloaded" : "Added";
     const nameOf = (f: FontSummary) => f.path.slice(dir.length + 1);
@@ -387,7 +387,7 @@ export default function App() {
     const arrived = new Set(added.map(nameOf));
 
     // Faces with a new copy here; turn on one copy each, preferring the new one.
-    const newIds = new Set(added.filter((f) => pick(nameOf(f))).map((f) => f.id));
+    const newIds = new Set(added.filter((f) => pick(nameOf(f), f)).map((f) => f.id));
     const faces = groupFamilies(list).flatMap((fam) => fam.faces).filter((face) => face.copies.some((c) => newIds.has(c.id)));
     const ids = activationIds(
       faces.map((face) => {
@@ -424,18 +424,41 @@ export default function App() {
     }
   };
 
+  // A single font file may join a folder of its family: turn on only the files this import added.
   const importPurchase = (find: PurchaseFind, store: string | null) =>
     purchaseOp(`path:${find.path}`, async () => {
       const result = await api.purchasesImport(find.id, store);
-      await bringIntoLibrary("purchases", result.dir, result.files);
+      await bringIntoLibrary("purchases", result.dir, result.files, (name) => result.files.includes(name));
       toast.success(`Added ${find.contents.families[0] ?? find.name} to your library`);
     });
 
   const importPurchasePath = (path: string, store: string | null) =>
     purchaseOp(`path:${path}`, async () => {
       const result = await api.purchasesImportPath(path, store);
-      await bringIntoLibrary("purchases", result.dir, result.files);
+      await bringIntoLibrary("purchases", result.dir, result.files, (name) => result.files.includes(name));
       toast.success("Added to your library");
+    });
+
+  /**
+   * Swaps a newer download in for an imported purchase, then turns the same faces back on (and
+   * faces that are new in this version, if any were on). Nothing is turned on if it was all off.
+   */
+  const replacePurchase = (find: PurchaseFind, dir: string) =>
+    purchaseOp(`path:${find.path}`, async () => {
+      mutationEpoch.current++;
+      let result;
+      try {
+        result = await api.purchasesReplace(find.id, dir);
+      } finally {
+        mutationEpoch.current++;
+      }
+      const wasOn = new Set(result.wasActiveFaces);
+      const old = new Set(result.oldFaces);
+      await bringIntoLibrary("purchases", result.dir, result.files, (_, font) => {
+        const ps = font.postscriptName;
+        return !!ps && (wasOn.has(ps) || (wasOn.size > 0 && !old.has(ps)));
+      });
+      toast.success(`Updated ${find.contents.families[0] ?? find.name} to the new version`);
     });
 
   const rescanPurchases = async () => {
@@ -443,11 +466,12 @@ export default function App() {
     if (folder) await rescan(folder).catch(() => {});
   };
 
-  const removePurchase = (item: PurchaseImported) =>
+  /** Removes an imported purchase. `transferred`: the license went to someone else. */
+  const removePurchase = (item: PurchaseImported, transferred = false) =>
     purchaseOp(`dir:${item.dir}`, async () => {
       mutationEpoch.current++;
       try {
-        await api.purchasesRemove(item.dir);
+        await (transferred ? api.purchasesTransferred(item.dir) : api.purchasesRemove(item.dir));
       } finally {
         mutationEpoch.current++;
         await rescanPurchases();
@@ -605,6 +629,7 @@ export default function App() {
                 onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
                 onImport={importPurchase}
                 onImportPath={importPurchasePath}
+                onReplace={replacePurchase}
                 onRemove={removePurchase}
                 onSubscriptionEnded={purchaseSubscriptionEnded}
               />

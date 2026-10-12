@@ -21,7 +21,7 @@ use crate::db;
 
 const SETTLE: Duration = Duration::from_secs(2);
 
-enum Msg {
+pub enum Msg {
     Item(PathBuf),
     /// Events were dropped: check everything.
     Rescan,
@@ -29,7 +29,7 @@ enum Msg {
 
 /// Starts watching `folders`. Folders that can't be watched are skipped (and reported back);
 /// the rest are watched. Dropping the returned watcher stops it and its worker thread.
-pub fn start(app: AppHandle, db_path: PathBuf, folders: &[String]) -> (Option<RecommendedWatcher>, Vec<(String, String)>) {
+pub fn start(app: AppHandle, db_path: PathBuf, data_dir: PathBuf, folders: &[String]) -> (Option<RecommendedWatcher>, Vec<(String, String)>) {
     let roots: Vec<PathBuf> = folders.iter().map(PathBuf::from).collect();
     let (tx, rx) = mpsc::channel::<Msg>();
     let callback_roots = roots.clone();
@@ -68,13 +68,20 @@ pub fn start(app: AppHandle, db_path: PathBuf, folders: &[String]) -> (Option<Re
     if watched == 0 {
         return (None, failed);
     }
-    std::thread::spawn(move || worker(app, db_path, rx));
+    std::thread::spawn(move || {
+        worker(&db_path, &data_dir, rx, |new| {
+            let _ = app.emit("purchases-changed", new);
+        })
+    });
     (Some(watcher), failed)
 }
 
-/// Runs until the watcher is dropped (the channel closes).
-fn worker(app: AppHandle, db_path: PathBuf, rx: mpsc::Receiver<Msg>) {
-    while let Ok(first) = rx.recv() {
+/// Runs until the watcher is dropped (the channel closes). Downloads still waiting in the
+/// current batch when that happens are checked first, so none is lost.
+pub fn worker(db_path: &Path, data_dir: &Path, rx: mpsc::Receiver<Msg>, announce: impl Fn(&[i64])) {
+    let mut closed = false;
+    while !closed {
+        let Ok(first) = rx.recv() else { return };
         let mut batch: HashSet<PathBuf> = HashSet::new();
         let mut rescan = false;
         let mut take = |m: Msg| match m {
@@ -89,7 +96,10 @@ fn worker(app: AppHandle, db_path: PathBuf, rx: mpsc::Receiver<Msg>) {
             match rx.recv_timeout(left) {
                 Ok(m) => take(m),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    closed = true; // finish this batch, then stop
+                    break;
+                }
             }
         }
         // Still changing? Its next event brings it back.
@@ -100,7 +110,7 @@ fn worker(app: AppHandle, db_path: PathBuf, rx: mpsc::Receiver<Msg>) {
         if settled.is_empty() && !rescan {
             continue;
         }
-        let conn = match db::open(&db_path) {
+        let conn = match db::open(db_path) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("fontface: purchases watcher couldn't open the library: {e}");
@@ -109,19 +119,19 @@ fn worker(app: AppHandle, db_path: PathBuf, rx: mpsc::Receiver<Msg>) {
         };
         let mut new: Vec<i64> = Vec::new();
         for p in &settled {
-            match purchases::record(&conn, p) {
+            match purchases::record(&conn, data_dir, p) {
                 Ok(Some(id)) => new.push(id),
                 Ok(None) => {}
                 Err(e) => eprintln!("fontface: couldn't check {}: {e}", p.display()),
             }
         }
         if rescan {
-            if let Ok(ids) = purchases::check_folders(&conn) {
+            if let Ok(ids) = purchases::check_folders(&conn, data_dir) {
                 new.extend(ids);
             }
         }
         if !new.is_empty() {
-            let _ = app.emit("purchases-changed", &new);
+            announce(&new);
         }
     }
 }

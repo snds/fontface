@@ -27,11 +27,17 @@ interface Props {
   onStatus?: (status: PurchasesStatus) => void;
   onImport: (find: PurchaseFind, store: string | null) => Promise<void>;
   onImportPath: (path: string, store: string | null) => Promise<void>;
-  onRemove: (item: PurchaseImported) => Promise<void>;
+  /** Swaps a newer download in for the imported purchase in `dir`. */
+  onReplace: (find: PurchaseFind, dir: string) => Promise<void>;
+  /** `transferred`: the license went to someone else (the download isn't offered again). */
+  onRemove: (item: PurchaseImported, transferred?: boolean) => Promise<void>;
   onSubscriptionEnded: (store: string, name: string) => Promise<void>;
 }
 
-type Confirm = { kind: "remove"; item: PurchaseImported } | { kind: "ended"; store: string; name: string };
+type Confirm =
+  | { kind: "remove"; item: PurchaseImported }
+  | { kind: "transferred"; item: PurchaseImported }
+  | { kind: "ended"; store: string; name: string };
 
 /** The page a download came from: a host to show, and whether it can be opened (https only). */
 const source = (url: string | null) => {
@@ -81,7 +87,7 @@ function StoreSelect({
   );
 }
 
-export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath, onRemove, onSubscriptionEnded }: Props) {
+export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath, onReplace, onRemove, onSubscriptionEnded }: Props) {
   const [status, setStatus] = useState<PurchasesStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -134,6 +140,11 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
   const newFinds = status?.finds.filter((f) => f.status === "new") ?? [];
   const tooLarge = newFinds.filter((f) => f.contents.tooLarge);
   const pendingPaths = [...busy].filter((k) => k.startsWith("path:")).map((k) => k.slice(5));
+  const reminders = status?.imported.filter((i) => i.trialReminder) ?? [];
+  /** Imported purchases with a newer version being swapped in right now. */
+  const replacing = new Set(newFinds.filter((f) => f.replaces && busy.has(`path:${f.path}`)).map((f) => f.replaces));
+  const boughtIt = (item: PurchaseImported) =>
+    run(() => api.purchasesConfirmLicense(item.dir), `${item.label} is no longer marked as a trial`);
   const byStore = useMemo(() => {
     const map = new Map<string, PurchaseImported[]>();
     for (const item of status?.imported ?? []) {
@@ -291,6 +302,8 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
             const chosen = storeChoice[find.id] ?? find.store ?? "";
             const from = source(find.referrer ?? find.originUrl);
             const key = `path:${find.path}`;
+            // A newer version of something already imported (and still filed under the same store).
+            const older = find.replaces && chosen === (find.store ?? "") ? status.imported.find((i) => i.dir === find.replaces) : undefined;
             return (
               <div key={find.id} className="flex flex-wrap items-center gap-3 border-b py-2.5 last:border-b-0">
                 <Icon
@@ -340,6 +353,12 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                     <span>{when(find.foundAt)}</span>
                     {find.missing && <span className="text-destructive">The download is gone</span>}
                   </div>
+                  {older && (
+                    <p className="text-xs">
+                      Looks like a new version of “{older.label}”, added {when(older.importedAt)}. Replace swaps in the new
+                      files and turns the same styles back on.
+                    </p>
+                  )}
                 </div>
                 <StoreSelect
                   label={`Store for ${find.name}`}
@@ -347,15 +366,31 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                   stores={status.stores}
                   onChange={(v) => setStoreChoice((c) => ({ ...c, [find.id]: v }))}
                 />
-                <Button
-                  size="sm"
-                  disabled={busy.has(key) || find.missing}
-                  aria-label={`Add ${find.name} to the library`}
-                  onClick={() => run(() => onImport(find, chosen || null))}
-                >
-                  {busy.has(key) ? <Icon name="progress_activity" size={16} className="animate-spin" /> : <Icon name="add" size={16} />}
-                  Add to library
-                </Button>
+                {older ? (
+                  <Button
+                    size="sm"
+                    disabled={busy.has(key) || busy.has(`dir:${older.dir}`) || find.missing}
+                    aria-label={`Replace ${older.label} with ${find.name}`}
+                    onClick={() => run(() => onReplace(find, older.dir))}
+                  >
+                    {busy.has(key) ? (
+                      <Icon name="progress_activity" size={16} className="animate-spin" />
+                    ) : (
+                      <Icon name="swap_horiz" size={16} />
+                    )}
+                    Replace
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={busy.has(key) || find.missing}
+                    aria-label={`Add ${find.name} to the library`}
+                    onClick={() => run(() => onImport(find, chosen || null))}
+                  >
+                    {busy.has(key) ? <Icon name="progress_activity" size={16} className="animate-spin" /> : <Icon name="add" size={16} />}
+                    Add to library
+                  </Button>
+                )}
                 <Button size="sm" variant="ghost" aria-label={`Dismiss ${find.name}`} onClick={() => run(() => api.purchasesDismiss(find.id))}>
                   Dismiss
                 </Button>
@@ -364,6 +399,38 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
           })}
         </section>
 
+        {reminders.length > 0 && (
+          <section aria-labelledby="reminders" className="border-b px-4 py-3">
+            <h3 id="reminders" className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              Reminders · {reminders.length}
+            </h3>
+            {reminders.map((item) => (
+              <div key={item.dir} className="flex flex-wrap items-center gap-3 border-b py-2.5 last:border-b-0">
+                <Icon name="schedule" size={22} className="text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{item.label} may be a trial</div>
+                  <p className="text-xs text-muted-foreground">
+                    Added from {item.storeName} on {when(item.importedAt)}. Trial fonts usually can't be used for paid work.
+                    If you bought a license, say so. If not, remove it.
+                  </p>
+                </div>
+                <Button size="sm" variant="outline" disabled={busy.has(`dir:${item.dir}`)} onClick={() => boughtIt(item)}>
+                  <Icon name="check" size={16} />I bought it
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Remove ${item.label}`}
+                  disabled={busy.has(`dir:${item.dir}`) || replacing.has(item.dir)}
+                  onClick={() => ask({ kind: "remove", item })}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+          </section>
+        )}
+
         <section aria-labelledby="in-library" className="px-4 py-3">
           <h3 id="in-library" className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             In your library · {status.imported.length}
@@ -371,7 +438,7 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
           {pendingPaths.map((p) => (
             <div key={p} className="flex items-center gap-2 border-b py-2 text-sm text-muted-foreground" role="status">
               <Icon name="progress_activity" size={16} className="animate-spin" />
-              Adding {fileName(p)}…
+              {newFinds.some((f) => f.path === p && replacing.has(f.replaces)) ? "Updating" : "Adding"} {fileName(p)}…
             </div>
           ))}
           {status.imported.length === 0 && pendingPaths.length === 0 && (
@@ -399,48 +466,74 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                     </Button>
                   )}
                 </div>
-                {items.map((item) => (
-                  <div key={item.dir} className="flex flex-wrap items-center gap-2 border-b py-2 last:border-b-0">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm">{item.label}</span>
-                        {item.subscriptionBound && (
-                          <Badge variant="outline" title="The license ends with your subscription">
-                            Subscription
-                          </Badge>
-                        )}
-                        {item.mayBeTrial && (
-                          <Badge variant="outline" title="Trial fonts usually aren't licensed for commercial work">
-                            May be a trial
-                          </Badge>
-                        )}
+                {items.map((item) => {
+                  const itemBusy = busy.has(`dir:${item.dir}`) || storeBusy || replacing.has(item.dir);
+                  return (
+                    <div key={item.dir} className="flex flex-wrap items-center gap-2 border-b py-2 last:border-b-0">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm">{item.label}</span>
+                          {item.subscriptionBound && (
+                            <Badge variant="outline" title="The license ends with your subscription">
+                              Subscription
+                            </Badge>
+                          )}
+                          {item.mayBeTrial && (
+                            <Badge variant="outline" title="Trial fonts usually aren't licensed for commercial work">
+                              May be a trial
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {item.fontFiles} {item.fontFiles === 1 ? "font file" : "font files"} · added {when(item.importedAt)} ·{" "}
+                          {item.licenseFiles.length ? `license: ${list(item.licenseFiles, 2)}` : "no license file was included"}
+                        </div>
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {item.fontFiles} {item.fontFiles === 1 ? "font file" : "font files"} · added {when(item.importedAt)} ·{" "}
-                        {item.licenseFiles.length ? `license: ${list(item.licenseFiles, 2)}` : "no license file was included"}
-                      </div>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        aria-label={`Show ${item.label} in Finder`}
+                        onClick={() => api.purchasesReveal(item.dir).catch((e) => toast.error(message(e)))}
+                      >
+                        <Icon name="folder_open" size={14} />
+                        Show
+                      </Button>
+                      {item.mayBeTrial && (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          aria-label={`I bought ${item.label}`}
+                          title="You have a license: stop marking it as a trial"
+                          disabled={itemBusy}
+                          onClick={() => boughtIt(item)}
+                        >
+                          <Icon name="check" size={14} />I bought it
+                        </Button>
+                      )}
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        aria-label={`Mark ${item.label} as transferred`}
+                        title="You passed this license on to someone else"
+                        disabled={itemBusy}
+                        onClick={() => ask({ kind: "transferred", item })}
+                      >
+                        <Icon name="move_item" size={14} />
+                        License transferred…
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        aria-label={`Remove ${item.label}`}
+                        disabled={itemBusy}
+                        onClick={() => ask({ kind: "remove", item })}
+                      >
+                        <Icon name="delete" size={14} />
+                        Remove
+                      </Button>
                     </div>
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      aria-label={`Show ${item.label} in Finder`}
-                      onClick={() => api.purchasesReveal(item.dir).catch((e) => toast.error(message(e)))}
-                    >
-                      <Icon name="folder_open" size={14} />
-                      Show
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      aria-label={`Remove ${item.label}`}
-                      disabled={busy.has(`dir:${item.dir}`) || storeBusy}
-                      onClick={() => ask({ kind: "remove", item })}
-                    >
-                      <Icon name="delete" size={14} />
-                      Remove
-                    </Button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             );
           })}
@@ -482,12 +575,18 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirm?.kind === "remove" ? `Remove “${confirm.item.label}”?` : `Remove all ${confirm?.kind === "ended" ? confirm.name : ""} fonts?`}
+              {confirm?.kind === "remove"
+                ? `Remove “${confirm.item.label}”?`
+                : confirm?.kind === "transferred"
+                  ? `Mark “${confirm.item.label}” as transferred?`
+                  : `Remove all ${confirm?.kind === "ended" ? confirm.name : ""} fonts?`}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirm?.kind === "remove"
                 ? "Its fonts are turned off and the copy Fontface made is deleted. Your original download isn't touched."
-                : "Fonts from this subscription may only be used while it's active. They'll be turned off and the copies Fontface made deleted."}
+                : confirm?.kind === "transferred"
+                  ? "Use this when you've passed the license on to someone else, so you can't keep using these fonts. They're turned off and the copy Fontface made is deleted. Fontface won't offer this download again. Your original download isn't touched."
+                  : "Fonts from this subscription may only be used while it's active. They'll be turned off and the copies Fontface made deleted."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -498,10 +597,11 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                 const c = confirm;
                 setConfirmOpen(false);
                 if (c?.kind === "remove") run(() => onRemove(c.item), `Removed ${c.item.label}`);
+                if (c?.kind === "transferred") run(() => onRemove(c.item, true), `Removed ${c.item.label}`);
                 if (c?.kind === "ended") run(() => onSubscriptionEnded(c.store, c.name));
               }}
             >
-              Remove
+              {confirm?.kind === "transferred" ? "Turn off and remove" : "Remove"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

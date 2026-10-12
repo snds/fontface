@@ -17,6 +17,10 @@ use std::{
     collections::{HashMap, HashSet},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Condvar, Mutex, MutexGuard,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -49,6 +53,8 @@ const MAX_NAME_CHARS: usize = 120;
 const PARTIAL_SUFFIXES: &[&str] = &[".crdownload", ".download", ".part", ".partial", ".tmp"];
 /// Folder names inside downloads that hold web, app or ebook fonts, not desktop fonts.
 const NON_DESKTOP_FOLDERS: &[&str] = &["web", "webfont", "webfonts", "webkit", "kit", "embed", "epub", "app", "apps", "mobile", "woff", "woff2"];
+/// How long after import a purchase that may be a trial gets a reminder.
+pub const TRIAL_REMINDER_SECS: i64 = 30 * 24 * 60 * 60;
 
 // ------------------------------------------------------------------------------------ stores
 
@@ -240,6 +246,13 @@ pub struct Contents {
     /// Font files that couldn't be read or aren't valid fonts (shown, never silently dropped).
     #[serde(default)]
     pub unreadable: Vec<String>,
+    /// A fingerprint of each file in `fonts` (same order), to recognise the same fonts wherever
+    /// they turn up again.
+    #[serde(default)]
+    pub prints: Vec<String>,
+    /// The faces in `fonts`: PostScript name + variable/static + slant.
+    #[serde(default)]
+    pub faces: Vec<String>,
 }
 
 /// True for app or bundle folders, which are never font downloads.
@@ -271,6 +284,25 @@ struct Candidate {
     /// One key per face: PostScript name + variable/static + slant (as the library groups fonts).
     keys: Vec<String>,
     cff: bool,
+    print: String,
+}
+
+/// A stable fingerprint of a file's bytes: its length and a 64-bit hash (FxHash-style mixing,
+/// eight bytes at a time). For recognising files again, not for security.
+fn fingerprint(bytes: &[u8]) -> String {
+    const K: u64 = 0x517c_c1b7_2722_0a95;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut words = bytes.chunks_exact(8);
+    for w in &mut words {
+        h = (h.rotate_left(5) ^ u64::from_le_bytes(w.try_into().unwrap_or_default())).wrapping_mul(K);
+    }
+    for &b in words.remainder() {
+        h = (h.rotate_left(5) ^ u64::from(b)).wrapping_mul(K);
+    }
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    format!("{h:016x}-{}", bytes.len())
 }
 
 fn candidate(rel: String, bytes: &[u8]) -> Option<Candidate> {
@@ -289,7 +321,13 @@ fn candidate(rel: String, bytes: &[u8]) -> Option<Candidate> {
         cff: visible.iter().all(|f| f.format.starts_with("OpenType CFF")),
         families: visible.iter().map(|f| f.family.clone()).collect(),
         keys,
+        print: fingerprint(bytes),
     })
+}
+
+/// The PostScript name inside a face key.
+fn key_postscript(key: &str) -> &str {
+    key.rsplitn(3, '|').last().unwrap_or(key)
 }
 
 /// Reads a regular file of at most `max` bytes (never a symlink, pipe or device).
@@ -441,14 +479,20 @@ pub fn inspect(path: &Path) -> AppResult<Option<Contents>> {
     for i in desktop {
         let c = &found[i];
         contents.fonts.push(c.rel.clone());
+        contents.prints.push(c.print.clone());
+        contents.faces.extend(c.keys.iter().cloned());
         for f in &c.families {
             if !contents.families.contains(f) {
                 contents.families.push(f.clone());
             }
         }
     }
+    contents.faces.sort();
+    contents.faces.dedup();
     if contents.too_large {
         contents.fonts.clear();
+        contents.prints.clear();
+        contents.faces.clear();
     }
     names.extend(contents.fonts.iter().cloned());
     names.extend(contents.families.iter().cloned());
@@ -615,6 +659,8 @@ pub struct Find {
     pub imported_dir: Option<String>,
     /// The original download no longer exists.
     pub missing: bool,
+    /// An imported purchase this looks like a newer version of (see `link_replacements`).
+    pub replaces: Option<String>,
 }
 
 pub fn finds(conn: &Connection) -> AppResult<Vec<Find>> {
@@ -640,6 +686,7 @@ pub fn finds(conn: &Connection) -> AppResult<Vec<Find>> {
             status: r.get(6)?,
             found_at: r.get(7)?,
             imported_dir: r.get(8)?,
+            replaces: None,
             path,
         })
     })?;
@@ -667,8 +714,9 @@ pub fn unit_for(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
 }
 
 /// Records a download if it's new or changed. Returns its id if it holds fonts and is newly
-/// offered. A recorded download that was only moved or renamed keeps its state, quietly.
-pub fn record(conn: &Connection, path: &Path) -> AppResult<Option<i64>> {
+/// offered. A recorded download that was only moved or renamed keeps its state, quietly, and so
+/// does one whose fonts Fontface already has (e.g. an imported folder moved into a subfolder).
+pub fn record(conn: &Connection, data_dir: &Path, path: &Path) -> AppResult<Option<i64>> {
     let Ok(meta) = std::fs::symlink_metadata(path) else { return Ok(None) };
     let kind_ok = (meta.is_file() && is_candidate_file(path)) || (meta.is_dir() && !is_bundle(path));
     if !kind_ok || is_adobe_path(path) {
@@ -721,28 +769,40 @@ pub fn record(conn: &Connection, path: &Path) -> AppResult<Option<i64>> {
     let urls = origin(path);
     let store = store_for(&urls).map(|s| s.id.to_string());
     let mut status = if contents.fonts.is_empty() { "empty" } else { "new" };
+    let mut imported_dir = None;
+    if status == "new" {
+        if let Some((known, dir)) = already_handled(conn, data_dir, &key, &contents)? {
+            status = known;
+            imported_dir = dir;
+        }
+    }
 
     let _turn = crate::db::scan_write_turn(); // take turns with scan writers
     if unchanged(conn)? {
         return Ok(None); // recorded by a concurrent check meanwhile
     }
-    // Already imported or dismissed, and the fonts are the same: just refresh the stamp.
+    // Already imported, dismissed or transferred, and the fonts are the same: just refresh the stamp.
     let previous: Option<(String, String)> = conn
         .query_row("SELECT status, contents FROM purchase_finds WHERE path = ?1", [&key], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     if let Some((old_status, old_contents)) = &previous {
         let same_fonts = serde_json::from_str::<Contents>(old_contents).is_ok_and(|c| c.fonts == contents.fonts);
-        if (old_status == "imported" || old_status == "dismissed") && same_fonts {
-            status = if old_status == "imported" { "imported" } else { "dismissed" };
+        if same_fonts {
+            status = match old_status.as_str() {
+                "imported" => "imported",
+                "dismissed" => "dismissed",
+                "transferred" => "transferred",
+                _ => status,
+            };
         }
     }
     conn.execute(
-        "INSERT INTO purchase_finds (path, file_size, mtime, store, origin_url, referrer, contents, status, found_at, file_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO purchase_finds (path, file_size, mtime, store, origin_url, referrer, contents, status, found_at, file_id, imported_dir)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT (path) DO UPDATE SET file_size = excluded.file_size, mtime = excluded.mtime,
             store = excluded.store, origin_url = excluded.origin_url, referrer = excluded.referrer,
             contents = excluded.contents, status = excluded.status, found_at = excluded.found_at,
-            file_id = excluded.file_id",
+            file_id = excluded.file_id, imported_dir = COALESCE(excluded.imported_dir, purchase_finds.imported_dir)",
         params![
             key,
             size,
@@ -753,13 +813,61 @@ pub fn record(conn: &Connection, path: &Path) -> AppResult<Option<i64>> {
             serde_json::to_string(&contents).unwrap_or_default(),
             status,
             now(),
-            id
+            id,
+            imported_dir
         ],
     )?;
     if status != "new" {
         return Ok(None);
     }
     Ok(Some(conn.query_row("SELECT id FROM purchase_finds WHERE path = ?1", [&key], |r| r.get(0))?))
+}
+
+/// Whether every font in a download is one Fontface has already dealt with, judged by the files'
+/// fingerprints, so the same fonts aren't offered twice wherever they turn up:
+/// - in an imported purchase, or imported before → ("imported", the purchase folder holding them);
+/// - in a download that was transferred, or dismissed and has since moved → ("dismissed", None).
+///
+/// A dismissed download that's still where it was doesn't count: downloading the same fonts
+/// again on purpose offers them again.
+fn already_handled(
+    conn: &Connection,
+    data_dir: &Path,
+    key: &str,
+    contents: &Contents,
+) -> AppResult<Option<(&'static str, Option<String>)>> {
+    if contents.prints.is_empty() || contents.prints.len() != contents.fonts.len() {
+        return Ok(None);
+    }
+    let imports = records(data_dir);
+    let mut imported: HashSet<String> = imports.iter().flat_map(|r| r.meta.prints.iter().cloned()).collect();
+    let mut set_aside: HashSet<String> = HashSet::new();
+    let mut stmt = conn.prepare(
+        "SELECT path, status, contents FROM purchase_finds
+         WHERE path != ?1 AND status IN ('imported', 'dismissed', 'transferred')",
+    )?;
+    let rows = stmt.query_map([key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+    for row in rows {
+        let (path, status, json) = row?;
+        let Ok(c) = serde_json::from_str::<Contents>(&json) else { continue };
+        match status.as_str() {
+            "imported" => imported.extend(c.prints),
+            "transferred" => set_aside.extend(c.prints),
+            _ if !Path::new(&path).exists() => set_aside.extend(c.prints),
+            _ => {}
+        }
+    }
+    if contents.prints.iter().all(|p| imported.contains(p)) {
+        let dir = imports
+            .iter()
+            .find(|r| contents.prints.iter().any(|p| r.meta.prints.contains(p)))
+            .map(|r| r.dir.to_string_lossy().into_owned());
+        return Ok(Some(("imported", dir)));
+    }
+    if contents.prints.iter().all(|p| imported.contains(p) || set_aside.contains(p)) {
+        return Ok(Some(("dismissed", None)));
+    }
+    Ok(None)
 }
 
 /// After importing a picked file or folder, marks a find for the same download as imported,
@@ -793,21 +901,77 @@ pub fn check_not_nested(existing: &[String], new: &str) -> AppResult<()> {
 
 /// Looks at every item directly inside the watched folders. Returns the ids of new finds that
 /// hold fonts. Folders that can't be read are skipped (`folder_problem` explains them).
-pub fn check_folders(conn: &Connection) -> AppResult<Vec<i64>> {
-    let mut new = Vec::new();
-    for folder in watch_folders(conn)? {
-        let Ok(entries) = std::fs::read_dir(&folder) else { continue };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') || is_partial(&name) {
-                continue;
-            }
-            if let Ok(Some(id)) = record(conn, &entry.path()) {
-                new.push(id);
+///
+/// One check runs at a time per library: asked for while one is running (the watcher, "Check
+/// now" and the check at startup can overlap), it waits for that one and shares its result.
+pub fn check_folders(conn: &Connection, data_dir: &Path) -> AppResult<Vec<i64>> {
+    let key = conn.path().unwrap_or_default().to_string();
+    single_flight(&key, || {
+        let mut new = Vec::new();
+        for folder in watch_folders(conn)? {
+            let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') || is_partial(&name) {
+                    continue;
+                }
+                if let Ok(Some(id)) = record(conn, data_dir, &entry.path()) {
+                    new.push(id);
+                }
             }
         }
+        Ok(new)
+    })
+}
+
+#[derive(Default)]
+struct Flight {
+    result: Mutex<Option<Result<Vec<i64>, String>>>,
+    done: Condvar,
+}
+
+/// Checks in progress, by key (the library's database path).
+static FLIGHTS: Mutex<Vec<(String, Arc<Flight>)>> = Mutex::new(Vec::new());
+
+/// Runs `run` unless a run with the same key is already in progress; then waits for that run
+/// and returns its result instead.
+pub(crate) fn single_flight(key: &str, run: impl FnOnce() -> AppResult<Vec<i64>>) -> AppResult<Vec<i64>> {
+    let (flight, leader) = {
+        let mut flights = FLIGHTS.lock().unwrap_or_else(|p| p.into_inner());
+        match flights.iter().find(|(k, _)| k == key) {
+            Some((_, f)) => (f.clone(), false),
+            None => {
+                let f = Arc::new(Flight::default());
+                flights.push((key.to_string(), f.clone()));
+                (f, true)
+            }
+        }
+    };
+    if !leader {
+        let mut result = flight.result.lock().unwrap_or_else(|p| p.into_inner());
+        while result.is_none() {
+            result = flight.done.wait(result).unwrap_or_else(|p| p.into_inner());
+        }
+        return result.clone().unwrap_or(Ok(Vec::new())).map_err(AppError::Other);
     }
-    Ok(new)
+    /// Hands the result to anyone waiting, even if `run` panics, and lets the next run start.
+    struct Land<'a> {
+        key: &'a str,
+        flight: Arc<Flight>,
+        result: Option<Result<Vec<i64>, String>>,
+    }
+    impl Drop for Land<'_> {
+        fn drop(&mut self) {
+            FLIGHTS.lock().unwrap_or_else(|p| p.into_inner()).retain(|(k, _)| k != self.key);
+            let result = self.result.take().unwrap_or_else(|| Err("The check stopped unexpectedly".into()));
+            *self.flight.result.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
+            self.flight.done.notify_all();
+        }
+    }
+    let mut land = Land { key, flight, result: None };
+    let result = run();
+    land.result = Some(result.as_ref().map(Clone::clone).map_err(ToString::to_string));
+    result
 }
 
 pub fn dismiss(conn: &Connection, id: i64) -> AppResult<()> {
@@ -829,13 +993,33 @@ struct Sidecar {
     license_files: Vec<String>,
     subscription_bound: bool,
     may_be_trial: bool,
+    /// The user said they bought it, so it's never flagged as a trial again (kept on Replace).
+    #[serde(default)]
+    license_confirmed: bool,
+    /// What the folder's font files are, worked out from the files whenever the folder changes.
+    #[serde(default)]
+    families: Vec<String>,
+    #[serde(default)]
+    faces: Vec<String>,
+    #[serde(default)]
+    prints: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     pub dir: String,
+    /// Font files this import added to the folder.
     pub files: Vec<String>,
+}
+
+/// File changes in the Purchases folder (placing, grouping, replacing, removing, sidecar edits)
+/// take turns through this lock. It's only held for file work, never while waiting for the
+/// activation lock or the database, so it can't deadlock with them.
+static PLACE: Mutex<()> = Mutex::new(());
+
+fn place_lock() -> MutexGuard<'static, ()> {
+    PLACE.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// A file or folder name that's safe to write on macOS and Windows: no separators or control
@@ -858,16 +1042,20 @@ fn safe_name(s: &str) -> String {
     if stem.is_empty() { format!("Untitled{ext}") } else { format!("{stem}{ext}") }
 }
 
+/// `name`, then "name 2", "name 3"… with the extension kept.
+fn numbered(name: &str) -> impl Iterator<Item = String> + '_ {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s, format!(".{e}")),
+        None => (name, String::new()),
+    };
+    (1..1000).map(move |n| if n == 1 { name.to_string() } else { format!("{stem} {n}{ext}") })
+}
+
 /// Writes `bytes` under a new name in `dir`, adding " 2", " 3"… if the name is taken. The file
 /// system decides what "taken" means, so case-insensitive and Unicode-normalizing volumes work.
 fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> AppResult<String> {
     let name = safe_name(name);
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) => (s.to_string(), format!(".{e}")),
-        None => (name.clone(), String::new()),
-    };
-    for n in 1..1000 {
-        let candidate = if n == 1 { name.clone() } else { format!("{stem} {n}{ext}") };
+    for candidate in numbered(&name) {
         match std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join(&candidate)) {
             Ok(mut f) => {
                 f.write_all(bytes)?;
@@ -880,10 +1068,110 @@ fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> AppResult<String> {
     Err(AppError::Other(format!("Too many files named {name}")))
 }
 
-/// Copies a download's desktop font files and license files into the Purchases folder:
-/// `<Store>/<Family>/`. Files are gathered in a hidden folder first and then moved into place in
-/// one step, so a library scan never sees a half-copied purchase. The original isn't touched.
-pub fn import(data_dir: &Path, source: &Path, store_id: &str, origin_url: Option<String>, referrer: Option<String>) -> AppResult<ImportResult> {
+/// Puts a finished file into `dir` under a new name, all at once (a hard link never replaces an
+/// existing file, so a scan never sees half a file). Falls back to copying if linking fails.
+fn link_new(from: &Path, dir: &Path, name: &str) -> AppResult<String> {
+    let name = safe_name(name);
+    for candidate in numbered(&name) {
+        match std::fs::hard_link(from, dir.join(&candidate)) {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return write_new(dir, &name, &std::fs::read(from)?),
+        }
+    }
+    Err(AppError::Other(format!("Too many files named {name}")))
+}
+
+/// Replaces a sidecar in one step (written next to it, then renamed over it).
+fn write_sidecar(dir: &Path, meta: &Sidecar) -> AppResult<()> {
+    let tmp = dir.join(format!("{SIDECAR}.tmp"));
+    std::fs::write(&tmp, serde_json::to_vec_pretty(meta).unwrap_or_default())?;
+    std::fs::rename(&tmp, dir.join(SIDECAR)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.into()
+    })
+}
+
+/// The font files directly in a folder, sorted by name.
+fn font_files_in(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) && scanner::is_font_file(p))
+        .collect();
+    files.sort();
+    files
+}
+
+fn file_name_of(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// What the font files in a folder are: (families, face keys, fingerprints).
+fn describe_dir(dir: &Path) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let (mut families, mut faces, mut prints) = (Vec::new(), Vec::new(), Vec::new());
+    for path in font_files_in(dir) {
+        let Some(c) = read_capped(&path, MAX_FONT_BYTES).and_then(|b| candidate(file_name_of(&path), &b)) else { continue };
+        for f in c.families {
+            if !families.contains(&f) {
+                families.push(f);
+            }
+        }
+        faces.extend(c.keys);
+        prints.push(c.print);
+    }
+    faces.sort();
+    faces.dedup();
+    (families, faces, prints)
+}
+
+fn describe_into(dir: &Path, meta: &mut Sidecar) {
+    (meta.families, meta.faces, meta.prints) = describe_dir(dir);
+}
+
+/// Adds fonts that joined a folder to its sidecar's description.
+fn add_description(meta: &mut Sidecar, families: &[String], faces: &[String], prints: &[String]) {
+    for f in families {
+        if !meta.families.contains(f) {
+            meta.families.push(f.clone());
+        }
+    }
+    meta.faces.extend(faces.iter().cloned());
+    meta.faces.sort();
+    meta.faces.dedup();
+    meta.prints.extend(prints.iter().cloned());
+}
+
+/// Copied files waiting in a hidden folder next to the store's purchases, not yet in the
+/// library. Dropping it unplaced deletes them.
+pub struct Prepared {
+    tmp: PathBuf,
+    store_dir: PathBuf,
+    label: String,
+    sidecar: Sidecar,
+    /// Font files copied.
+    pub files: Vec<String>,
+    licenses: Vec<String>,
+    /// A single font file (not a zip or folder): it joins a folder of its family if there is one.
+    loose: bool,
+}
+
+impl Drop for Prepared {
+    fn drop(&mut self) {
+        // Placed: tmp is empty (nothing to do). Abandoned or failed: clean it up.
+        if !self.tmp.as_os_str().is_empty() {
+            let _ = std::fs::remove_dir_all(&self.tmp);
+        }
+    }
+}
+
+static NONCE: AtomicU64 = AtomicU64::new(0);
+
+/// Step 1 of an import: copies a download's desktop font files and license files into a hidden
+/// folder inside `<Store>/`. The original isn't touched.
+pub fn prepare(data_dir: &Path, source: &Path, store_id: &str, origin_url: Option<String>, referrer: Option<String>) -> AppResult<Prepared> {
     let real = std::fs::canonicalize(source)?;
     if is_adobe_path(&real) {
         return Err(AppError::Invalid("That's an Adobe Fonts file managed by Creative Cloud".into()));
@@ -899,96 +1187,274 @@ pub fn import(data_dir: &Path, source: &Path, store_id: &str, origin_url: Option
     let store_dir = root.join(safe_name(&store_name(store_id)));
     std::fs::create_dir_all(&store_dir)?;
 
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let tmp = store_dir.join(format!(".import-{nonce}"));
-    std::fs::create_dir_all(&tmp)?;
-    let fail = |e: AppError| {
-        let _ = std::fs::remove_dir_all(&tmp);
-        e
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = store_dir.join(format!(".import-{nanos}-{}", NONCE.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir(&tmp)?;
+    let label = safe_name(&contents.families.first().cloned().unwrap_or_else(|| {
+        real.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Fonts".into())
+    }));
+    let mut prepared = Prepared {
+        tmp,
+        store_dir,
+        label,
+        sidecar: Sidecar {
+            store: store_id.to_string(),
+            store_name: store_name(store_id),
+            origin_url,
+            referrer,
+            source_name: file_name_of(&real),
+            imported_at: now(),
+            license_files: Vec::new(),
+            subscription_bound: store.is_some_and(|s| s.subscription_bound),
+            may_be_trial: store.is_some_and(|s| s.may_be_trial) || contents.trial,
+            license_confirmed: false,
+            families: contents.families.clone(),
+            faces: contents.faces.clone(),
+            prints: Vec::new(),
+        },
+        files: Vec::new(),
+        licenses: Vec::new(),
+        loose: real.is_file() && !is_archive(&real),
     };
 
     let font_set: HashSet<&String> = contents.fonts.iter().collect();
     let license_set: HashSet<&String> = contents.licenses.iter().collect();
-    let (mut fonts, mut licenses) = (Vec::new(), Vec::new());
     let mut save = |rel: &str, bytes: &[u8], is_font: bool| -> AppResult<()> {
         let base = rel.rsplit(['/', '\\']).next().unwrap_or(rel);
-        let written = write_new(&tmp, base, bytes)?;
-        if is_font { fonts.push(written) } else { licenses.push(written) }
-        Ok(())
-    };
-    let copied = (|| -> AppResult<()> {
-        if real.is_dir() {
-            for rel in contents.fonts.iter().chain(contents.licenses.iter()) {
-                let max = if font_set.contains(rel) { MAX_FONT_BYTES } else { 32 * 1024 * 1024 };
-                if let Some(bytes) = read_capped(&real.join(rel), max) {
-                    save(rel, &bytes, font_set.contains(rel))?;
-                }
-            }
-        } else if is_archive(&real) {
-            let mut archive = zip::ZipArchive::new(std::fs::File::open(&real)?)
-                .map_err(|e| AppError::Invalid(format!("Not a readable zip: {e}")))?;
-            let mut budget = MAX_ARCHIVE_READ;
-            for i in 0..archive.len().min(MAX_ARCHIVE_ENTRIES) {
-                let Ok(mut entry) = archive.by_index(i) else { continue };
-                let Some(name) = archive_entry_name(&entry) else { continue };
-                let (is_font, is_license) = (font_set.contains(&name), license_set.contains(&name));
-                if !is_font && !is_license {
-                    continue;
-                }
-                if let Some(bytes) = read_entry(&mut entry, &mut budget) {
-                    if !is_font || scanner::parse_file(&bytes).is_ok() {
-                        save(&name, &bytes, is_font)?;
-                    }
-                }
-            }
-        } else if let Some(bytes) = read_capped(&real, MAX_FONT_BYTES) {
-            let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "font".into());
-            save(&name, &bytes, true)?;
+        let written = write_new(&prepared.tmp, base, bytes)?;
+        if is_font {
+            prepared.files.push(written);
+            prepared.sidecar.prints.push(fingerprint(bytes));
+        } else {
+            prepared.licenses.push(written);
         }
         Ok(())
-    })();
-    drop(save);
-    copied.map_err(fail)?;
-    if fonts.is_empty() {
-        return Err(fail(AppError::Invalid("No desktop font files could be copied from it".into())));
-    }
-
-    let sidecar = Sidecar {
-        store: store_id.to_string(),
-        store_name: store_name(store_id),
-        origin_url,
-        referrer,
-        source_name: real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-        imported_at: now(),
-        license_files: licenses,
-        subscription_bound: store.is_some_and(|s| s.subscription_bound),
-        may_be_trial: store.is_some_and(|s| s.may_be_trial) || contents.trial,
     };
-    std::fs::write(tmp.join(SIDECAR), serde_json::to_vec_pretty(&sidecar).unwrap_or_default())
-        .map_err(|e| fail(e.into()))?;
+    if real.is_dir() {
+        for rel in contents.fonts.iter().chain(contents.licenses.iter()) {
+            let max = if font_set.contains(rel) { MAX_FONT_BYTES } else { 32 * 1024 * 1024 };
+            if let Some(bytes) = read_capped(&real.join(rel), max) {
+                save(rel, &bytes, font_set.contains(rel))?;
+            }
+        }
+    } else if is_archive(&real) {
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&real)?)
+            .map_err(|e| AppError::Invalid(format!("Not a readable zip: {e}")))?;
+        let mut budget = MAX_ARCHIVE_READ;
+        for i in 0..archive.len().min(MAX_ARCHIVE_ENTRIES) {
+            let Ok(mut entry) = archive.by_index(i) else { continue };
+            let Some(name) = archive_entry_name(&entry) else { continue };
+            let (is_font, is_license) = (font_set.contains(&name), license_set.contains(&name));
+            if !is_font && !is_license {
+                continue;
+            }
+            if let Some(bytes) = read_entry(&mut entry, &mut budget) {
+                if !is_font || scanner::parse_file(&bytes).is_ok() {
+                    save(&name, &bytes, is_font)?;
+                }
+            }
+        }
+    } else if let Some(bytes) = read_capped(&real, MAX_FONT_BYTES) {
+        save(&file_name_of(&real), &bytes, true)?;
+    }
+    if prepared.files.is_empty() {
+        return Err(AppError::Invalid("No desktop font files could be copied from it".into()));
+    }
+    prepared.sidecar.license_files = prepared.licenses.clone();
+    Ok(prepared)
+}
 
-    // Move into place under a name nobody else has taken; another import may be racing for it.
-    let label = safe_name(&contents.families.first().cloned().unwrap_or_else(|| {
-        real.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Fonts".into())
-    }));
+/// Step 2 of an import: moves the prepared files into the library in one step, as a new
+/// `<Store>/<Family>/` folder. A single font file joins a folder of its family from the same
+/// store instead (fonts downloaded one at a time end up together), unless it has a face that
+/// folder already has.
+pub fn place(mut prepared: Prepared) -> AppResult<ImportResult> {
+    let _place = place_lock();
+    if prepared.loose {
+        if let Some(target) = group_target(&prepared) {
+            return merge_into(prepared, &target);
+        }
+    }
+    write_sidecar(&prepared.tmp, &prepared.sidecar)?;
+    // Move into place under a name nobody else has taken.
     let mut dest = None;
-    for n in 1..1000 {
-        let candidate = if n == 1 { store_dir.join(&label) } else { store_dir.join(format!("{label} {n}")) };
+    for name in numbered(&prepared.label) {
+        let candidate = prepared.store_dir.join(name);
         if candidate.exists() {
             continue;
         }
-        match std::fs::rename(&tmp, &candidate) {
+        match std::fs::rename(&prepared.tmp, &candidate) {
             Ok(()) => {
                 dest = Some(candidate);
                 break;
             }
             Err(_) if candidate.exists() => continue, // lost a race for this name
-            Err(e) => return Err(fail(AppError::Other(format!("Couldn't move the fonts into place: {e}")))),
+            Err(e) => return Err(AppError::Other(format!("Couldn't move the fonts into place: {e}"))),
         }
     }
-    let dest = dest.ok_or_else(|| fail(AppError::Other("Couldn't find a free folder name".into())))?;
+    let dest = dest.ok_or_else(|| AppError::Other("Couldn't find a free folder name".into()))?;
+    prepared.tmp = PathBuf::new(); // placed: nothing for Drop to clean up
     let dir = std::fs::canonicalize(&dest).unwrap_or(dest).to_string_lossy().into_owned();
-    Ok(ImportResult { dir, files: fonts })
+    Ok(ImportResult { dir, files: std::mem::take(&mut prepared.files) })
+}
+
+/// The folder a single prepared font file should join: an import from the same store whose
+/// families include the file's, that doesn't have any of its faces yet (that would be a newer
+/// version, see `replace`), and that's flagged as a trial only if the file is too.
+fn group_target(prepared: &Prepared) -> Option<PathBuf> {
+    let Sidecar { families, faces, .. } = &prepared.sidecar;
+    if families.is_empty() {
+        return None;
+    }
+    let mut items: Vec<PathBuf> = std::fs::read_dir(&prepared.store_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .collect();
+    items.sort();
+    items.into_iter().filter_map(|d| read_record(&d)).find_map(|r| {
+        let fits = r.meta.store == prepared.sidecar.store
+            && r.meta.may_be_trial == prepared.sidecar.may_be_trial
+            && families.iter().all(|f| r.meta.families.contains(f))
+            && !faces.iter().any(|k| r.meta.faces.contains(k));
+        fits.then_some(r.dir)
+    })
+}
+
+/// Adds prepared files to an existing purchase folder and updates its sidecar.
+fn merge_into(prepared: Prepared, target: &Path) -> AppResult<ImportResult> {
+    let mut meta = read_record(target).ok_or_else(|| AppError::NotFound("That purchase is no longer in the library".into()))?.meta;
+    let mut files = Vec::new();
+    for name in &prepared.files {
+        files.push(link_new(&prepared.tmp.join(name), target, name)?);
+    }
+    for name in &prepared.licenses {
+        meta.license_files.push(link_new(&prepared.tmp.join(name), target, name)?);
+    }
+    add_description(&mut meta, &prepared.sidecar.families, &prepared.sidecar.faces, &prepared.sidecar.prints);
+    write_sidecar(target, &meta)?;
+    let dir = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf()).to_string_lossy().into_owned();
+    Ok(ImportResult { dir, files })
+}
+
+/// Copies a download's desktop font files and license files into the Purchases folder:
+/// `<Store>/<Family>/`. Files are gathered in a hidden folder first and then moved into place in
+/// one step, so a library scan never sees a half-copied purchase. The original isn't touched.
+pub fn import(data_dir: &Path, source: &Path, store_id: &str, origin_url: Option<String>, referrer: Option<String>) -> AppResult<ImportResult> {
+    place(prepare(data_dir, source, store_id, origin_url, referrer)?)
+}
+
+/// Puts a prepared download in place of an imported purchase folder, keeping the folder's name.
+/// Old fonts whose faces the download has are dropped; the rest stay, and so do the old license
+/// files. The old folder is set aside first and put back if the swap fails.
+fn swap(mut prepared: Prepared, old_dir: &Path) -> AppResult<ImportResult> {
+    let _place = place_lock();
+    let old = read_record(old_dir).ok_or_else(|| AppError::NotFound("That purchase is no longer in the library".into()))?;
+    let mut meta = prepared.sidecar.clone();
+    for path in font_files_in(old_dir) {
+        let Some(bytes) = read_capped(&path, MAX_FONT_BYTES) else { continue };
+        let found = candidate(file_name_of(&path), &bytes);
+        let keys = found.as_ref().map(|c| c.keys.clone()).unwrap_or_default();
+        if keys.is_empty() || !keys.iter().all(|k| prepared.sidecar.faces.contains(k)) {
+            let kept = write_new(&prepared.tmp, &file_name_of(&path), &bytes)?;
+            prepared.files.push(kept);
+            if let Some(c) = found {
+                add_description(&mut meta, &c.families, &c.keys, &[c.print]);
+            }
+        }
+    }
+    for name in &old.meta.license_files {
+        let Some(bytes) = read_capped(&old_dir.join(name), 32 * 1024 * 1024) else { continue };
+        let same = prepared.licenses.iter().any(|l| std::fs::read(prepared.tmp.join(l)).is_ok_and(|b| b == bytes));
+        if !same {
+            let kept = write_new(&prepared.tmp, name, &bytes)?;
+            prepared.licenses.push(kept);
+        }
+    }
+    meta.license_files = prepared.licenses.clone();
+    meta.license_confirmed = old.meta.license_confirmed;
+    meta.may_be_trial &= !meta.license_confirmed;
+    write_sidecar(&prepared.tmp, &meta)?;
+
+    // The backup's name says where it goes back, so an interrupted swap is undone at startup.
+    let backup = old_dir.with_file_name(format!(".replaced-{}", file_name_of(old_dir)));
+    let _ = std::fs::remove_dir_all(&backup);
+    std::fs::rename(old_dir, &backup).map_err(|e| AppError::Other(format!("Couldn't set the old copy aside: {e}")))?;
+    if let Err(e) = std::fs::rename(&prepared.tmp, old_dir) {
+        let _ = std::fs::rename(&backup, old_dir);
+        return Err(AppError::Other(format!("Couldn't move the new version into place: {e}")));
+    }
+    prepared.tmp = PathBuf::new(); // placed
+    let _ = std::fs::remove_dir_all(&backup);
+    let dir = std::fs::canonicalize(old_dir).unwrap_or_else(|_| old_dir.to_path_buf()).to_string_lossy().into_owned();
+    let mut files = std::mem::take(&mut prepared.files);
+    files.sort();
+    Ok(ImportResult { dir, files })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Replaced {
+    pub dir: String,
+    pub store: String,
+    /// Every font file now in the folder.
+    pub files: Vec<String>,
+    /// PostScript names of the faces that were on before; the UI turns these back on.
+    pub was_active_faces: Vec<String>,
+    /// PostScript names of every face the old copy had. A face that's new in this version is
+    /// turned on too if any face was on.
+    pub old_faces: Vec<String>,
+}
+
+/// PostScript names of the faces in a font file.
+fn postscript_names(path: &Path) -> Vec<String> {
+    read_capped(path, MAX_FONT_BYTES)
+        .and_then(|b| scanner::parse_file(&b).ok())
+        .map(|faces| faces.into_iter().filter_map(|f| f.postscript_name).collect())
+        .unwrap_or_default()
+}
+
+/// Replaces an imported purchase with a newer download of it. The new files are copied and
+/// checked first. Only then are the old fonts turned off (`turn_off` returns the files it turned
+/// off) and the files swapped; if the swap fails, `turn_back_on` gets those files back.
+pub fn replace(
+    data_dir: &Path,
+    old_dir: &Path,
+    source: &Path,
+    source_store: Option<&str>,
+    origin_url: Option<String>,
+    referrer: Option<String>,
+    turn_off: impl FnOnce(&Path) -> AppResult<Vec<String>>,
+    turn_back_on: impl FnOnce(&[String]),
+) -> AppResult<Replaced> {
+    if !is_import_dir(data_dir, old_dir) {
+        return Err(AppError::Invalid("That isn't a purchase Fontface imported".into()));
+    }
+    let old = read_record(old_dir).ok_or_else(|| AppError::NotFound("That purchase is no longer in the library".into()))?;
+    if source_store != Some(old.meta.store.as_str()) {
+        return Err(AppError::Invalid(format!("That download isn't from {}", old.meta.store_name)));
+    }
+    let prepared = prepare(data_dir, source, &old.meta.store, origin_url, referrer)?;
+    let Sidecar { families, faces, .. } = &prepared.sidecar;
+    if !families.iter().all(|f| old.meta.families.contains(f)) || !faces.iter().any(|k| old.meta.faces.contains(k)) {
+        return Err(AppError::Invalid(format!("That download isn't a version of {}", old.label)));
+    }
+    let mut old_faces: Vec<String> = old.meta.faces.iter().map(|k| key_postscript(k).to_string()).collect();
+    old_faces.sort();
+    old_faces.dedup();
+    let turned_off = turn_off(old_dir)?;
+    let mut was_active_faces: Vec<String> = turned_off.iter().flat_map(|p| postscript_names(Path::new(p))).collect();
+    was_active_faces.sort();
+    was_active_faces.dedup();
+    match swap(prepared, old_dir) {
+        Ok(r) => Ok(Replaced { dir: r.dir, store: old.meta.store, files: r.files, was_active_faces, old_faces }),
+        Err(e) => {
+            turn_back_on(&turned_off);
+            Err(e)
+        }
+    }
 }
 
 /// What's needed to import a recorded find. If the file changed since it was found, it's
@@ -1001,7 +1467,7 @@ pub struct FindSource {
     pub referrer: Option<String>,
 }
 
-pub fn find_source(conn: &Connection, id: i64) -> AppResult<FindSource> {
+pub fn find_source(conn: &Connection, data_dir: &Path, id: i64) -> AppResult<FindSource> {
     let (path, store, origin_url, referrer, size, mtime): (String, Option<String>, Option<String>, Option<String>, i64, i64) = conn
         .query_row(
             "SELECT path, store, origin_url, referrer, file_size, mtime FROM purchase_finds WHERE id = ?1",
@@ -1014,7 +1480,7 @@ pub fn find_source(conn: &Connection, id: i64) -> AppResult<FindSource> {
     match signature(&path) {
         None => Err(AppError::NotFound("The download is gone from its folder".into())),
         Some(stamp) if stamp != (size, mtime) => {
-            let _ = record(conn, &path);
+            let _ = record(conn, data_dir, &path);
             Err(AppError::Invalid("This download changed since it was found. Review it and add it again.".into()))
         }
         Some(_) => Ok(FindSource { path, store, origin_url, referrer }),
@@ -1043,47 +1509,101 @@ pub struct Imported {
     pub license_files: Vec<String>,
     pub subscription_bound: bool,
     pub may_be_trial: bool,
+    /// It may be a trial and was added at least 30 days ago: remind the user.
+    pub trial_reminder: bool,
+}
+
+/// An imported purchase folder and its sidecar.
+struct Record {
+    dir: PathBuf,
+    label: String,
+    meta: Sidecar,
+}
+
+fn read_record(dir: &Path) -> Option<Record> {
+    let mut meta: Sidecar = serde_json::from_slice(&std::fs::read(dir.join(SIDECAR)).ok()?).ok()?;
+    if meta.prints.is_empty() {
+        describe_into(dir, &mut meta); // imported before Fontface recorded this
+    }
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    Some(Record { label: file_name_of(&dir), dir, meta })
+}
+
+fn records(data_dir: &Path) -> Vec<Record> {
+    let Some(root) = service_dir(data_dir, "purchases") else { return Vec::new() };
+    let visible = |e: &std::fs::DirEntry| !e.file_name().to_string_lossy().starts_with('.');
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(visible)
+        .flat_map(|store_dir| std::fs::read_dir(store_dir.path()).into_iter().flatten().flatten())
+        .filter(visible)
+        .filter_map(|item| read_record(&item.path()))
+        .collect()
+}
+
+pub fn trial_reminder_due(imported_at: i64, may_be_trial: bool, now: i64) -> bool {
+    may_be_trial && now - imported_at >= TRIAL_REMINDER_SECS
 }
 
 /// Everything imported so far, read from each folder's sidecar.
 pub fn imported(data_dir: &Path) -> Vec<Imported> {
-    let mut out = Vec::new();
-    let Some(root) = service_dir(data_dir, "purchases") else { return out };
-    for store_dir in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        if store_dir.file_name().to_string_lossy().starts_with('.') {
-            continue;
-        }
-        for item in std::fs::read_dir(store_dir.path()).into_iter().flatten().flatten() {
-            if item.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let dir = item.path();
-            let Some(meta) = std::fs::read(dir.join(SIDECAR)).ok().and_then(|b| serde_json::from_slice::<Sidecar>(&b).ok()) else {
-                continue;
-            };
-            let font_files = std::fs::read_dir(&dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter(|e| scanner::is_font_file(&e.path()))
-                .count();
-            out.push(Imported {
-                dir: std::fs::canonicalize(&dir).unwrap_or(dir.clone()).to_string_lossy().into_owned(),
-                label: item.file_name().to_string_lossy().into_owned(),
-                store: meta.store,
-                store_name: meta.store_name,
-                origin_url: meta.origin_url,
-                source_name: meta.source_name,
-                imported_at: meta.imported_at,
-                font_files,
-                license_files: meta.license_files,
-                subscription_bound: meta.subscription_bound,
-                may_be_trial: meta.may_be_trial,
-            });
-        }
-    }
+    let now = now();
+    let mut out: Vec<Imported> = records(data_dir)
+        .into_iter()
+        .map(|r| Imported {
+            font_files: font_files_in(&r.dir).len(),
+            trial_reminder: trial_reminder_due(r.meta.imported_at, r.meta.may_be_trial, now),
+            dir: r.dir.to_string_lossy().into_owned(),
+            label: r.label,
+            store: r.meta.store,
+            store_name: r.meta.store_name,
+            origin_url: r.meta.origin_url,
+            source_name: r.meta.source_name,
+            imported_at: r.meta.imported_at,
+            license_files: r.meta.license_files,
+            subscription_bound: r.meta.subscription_bound,
+            may_be_trial: r.meta.may_be_trial,
+        })
+        .collect();
     out.sort_by(|a, b| a.store_name.cmp(&b.store_name).then(a.label.to_lowercase().cmp(&b.label.to_lowercase())));
     out
+}
+
+/// Points each new find that looks like a newer version of an imported purchase at it: the same
+/// store, families the purchase has, at least one of the same faces, and files that differ (the
+/// same files were never offered: see `already_handled`). The UI offers "Replace" for these.
+pub fn link_replacements(finds: &mut [Find], data_dir: &Path) {
+    let imports = records(data_dir);
+    for find in finds.iter_mut().filter(|f| f.status == "new") {
+        let Some(store) = find.store.as_deref() else { continue };
+        let c = &find.contents;
+        find.replaces = imports
+            .iter()
+            .filter(|r| {
+                r.meta.store == store
+                    && !c.families.is_empty()
+                    && c.families.iter().all(|f| r.meta.families.contains(f))
+                    && !c.prints.iter().all(|p| r.meta.prints.contains(p))
+            })
+            .map(|r| (r, c.faces.iter().filter(|k| r.meta.faces.contains(k)).count()))
+            .filter(|(_, shared)| *shared > 0)
+            .max_by_key(|(_, shared)| *shared)
+            .map(|(r, _)| r.dir.to_string_lossy().into_owned());
+    }
+}
+
+/// "I bought it": the purchase is no longer flagged as a trial, now or after a Replace.
+pub fn confirm_license(data_dir: &Path, dir: &Path) -> AppResult<()> {
+    if !is_import_dir(data_dir, dir) {
+        return Err(AppError::Invalid("That isn't a purchase Fontface imported".into()));
+    }
+    let _place = place_lock();
+    let mut meta = read_record(dir).ok_or_else(|| AppError::NotFound("That purchase is no longer in the library".into()))?.meta;
+    meta.may_be_trial = false;
+    meta.license_confirmed = true;
+    write_sidecar(dir, &meta)
 }
 
 /// True if `dir` is a purchase folder Fontface created (inside Purchases, two levels down).
@@ -1093,12 +1613,22 @@ pub fn is_import_dir(data_dir: &Path, dir: &Path) -> bool {
     real.parent().and_then(Path::parent) == Some(root.as_path()) && real.join(SIDECAR).exists()
 }
 
+/// Runs at startup: removes half-made imports, and finishes interrupted replacements (the old
+/// copy goes back if the new one never landed, and is deleted if it did).
 pub fn sweep_leftovers(data_dir: &Path) {
     let Some(root) = service_dir(data_dir, "purchases") else { return };
     for store_dir in std::fs::read_dir(root).into_iter().flatten().flatten() {
         for item in std::fs::read_dir(store_dir.path()).into_iter().flatten().flatten() {
-            if item.file_name().to_string_lossy().starts_with(".import-") {
+            let name = item.file_name().to_string_lossy().into_owned();
+            if name.starts_with(".import-") {
                 let _ = std::fs::remove_dir_all(item.path());
+            } else if let Some(label) = name.strip_prefix(".replaced-") {
+                let home = store_dir.path().join(label);
+                if home.exists() {
+                    let _ = std::fs::remove_dir_all(item.path());
+                } else {
+                    let _ = std::fs::rename(item.path(), home);
+                }
             }
         }
     }
@@ -1116,9 +1646,34 @@ pub fn delete_import_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::remove_dir_all(dir)
 }
 
-/// Marks finds whose imported folder no longer exists as dismissed, so they don't linger.
-pub fn forget_removed(conn: &Connection, dir: &str) -> AppResult<()> {
-    conn.execute("UPDATE purchase_finds SET status = 'dismissed', imported_dir = NULL WHERE imported_dir = ?1", [dir])?;
+/// Removes an imported purchase: `turn_off` turns its fonts off (returning the files it turned
+/// off), then the folder is deleted. If deleting fails, `turn_back_on` gets those files back.
+pub fn remove_import(
+    data_dir: &Path,
+    dir: &Path,
+    turn_off: impl FnOnce(&Path) -> AppResult<Vec<String>>,
+    turn_back_on: impl FnOnce(&[String]),
+) -> AppResult<()> {
+    if !is_import_dir(data_dir, dir) {
+        return Err(AppError::Invalid("That isn't a purchase Fontface imported".into()));
+    }
+    let turned_off = turn_off(dir)?;
+    let deleted = {
+        let _place = place_lock();
+        delete_import_dir(dir)
+    };
+    if let Err(e) = deleted {
+        turn_back_on(&turned_off);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// After an imported folder is removed, its finds get `status`: "dismissed" (removed) or
+/// "transferred" (the license went to someone else). Neither is offered again.
+pub fn forget_removed(conn: &Connection, dir: &str, status: &str) -> AppResult<()> {
+    let status = if status == "transferred" { "transferred" } else { "dismissed" };
+    conn.execute("UPDATE purchase_finds SET status = ?2, imported_dir = NULL WHERE imported_dir = ?1", params![dir, status])?;
     Ok(())
 }
 

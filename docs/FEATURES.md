@@ -42,9 +42,9 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Google Fonts: browse, download, update, remove | ✅ | ⬜ | Keyless: Fontsource catalog + google/fonts repo files; downloads go to a managed folder and are turned on |
 | Adobe Fonts: list fonts Creative Cloud turned on | ✅ | ⬜ | Read-only by design (Adobe's terms); links to Adobe; untested with CC installed |
 | Font Book: deactivated fonts, collections, Apple downloadable fonts | ⬜ | ⬜ | See INTEGRATIONS.md §2 |
-| Purchases watcher (MyFonts, Fontspring, …) | ✅ | ⬜ | Watches Downloads (or chosen folders); a file, zip or unzipped folder counts as one download; store from the download's origin; copies desktop fonts + licenses into a managed folder; Subscription badge and "subscription ended" removal; a trial badge; manual import of zips/folders |
-| Purchases: trial reminder after 30 days, "License transferred" status | ⬜ | ⬜ | |
-| Purchases: "newer version available" offer | ⬜ | ⬜ | Same PostScript name with a higher font revision |
+| Purchases watcher (MyFonts, Fontspring, …) | ✅ | ⬜ | Watches Downloads (or chosen folders); a file, zip or unzipped folder counts as one download; store from the download's origin; copies desktop fonts + licenses into a managed folder; Subscription badge and "subscription ended" removal; a trial badge; manual import of zips/folders; fonts recognised by content, so a download tidied into a subfolder isn't offered again; single files of one family share a folder |
+| Purchases: trial reminder after 30 days, "License transferred" status | ✅ | ⬜ | Reminder on the Purchases page with "Remove" and "I bought it" (clears the trial flag, also after a Replace); "License transferred…" turns the fonts off, removes the copy and never offers that download again |
+| Purchases: "newer version available" offer | ✅ | ⬜ | "Replace" instead of "Add to library" when a download has the same store, the purchase's families and some of its fonts (by PostScript name) in different files. Version numbers aren't compared |
 | Open fonts catalog (Fontsource, Noto, Nerd Fonts, open foundries) | ⬜ | ⬜ | INTEGRATIONS.md §3.4 |
 | "Managed by" badges for Monotype Fonts, Connect, Fontstand | ⬜ | ⬜ | INTEGRATIONS.md §3.5 |
 
