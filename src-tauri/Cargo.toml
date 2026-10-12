@@ -1,0 +1,29 @@
+[package]
+name = "fontface"
+version = "0.1.0"
+description = "A subscription-free font manager"
+edition = "2021"
+
+[lib]
+name = "fontface_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+walkdir = "2"
+ttf-parser = "0.25"
+thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
+ureq = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-text = "21"

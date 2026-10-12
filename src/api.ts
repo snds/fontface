@@ -1,0 +1,161 @@
+import { invoke } from "@tauri-apps/api/core";
+
+export interface Folder {
+  id: number;
+  path: string;
+  /** "system": a macOS font folder, always on. "service": a folder Fontface manages for a font
+   *  service (e.g. Google Fonts downloads). "user": added by the user. */
+  kind: "system" | "service" | "user";
+  label: string;
+  fontCount: number;
+  missing: boolean;
+}
+
+export interface FontSummary {
+  id: number;
+  folderId: number;
+  path: string;
+  faceIndex: number;
+  family: string;
+  subfamily: string;
+  fullName: string | null;
+  postscriptName: string | null;
+  weight: number;
+  width: number;
+  italic: boolean;
+  monospace: boolean;
+  variable: boolean;
+  format: string;
+  /** What Fontface was asked to do. */
+  activated: boolean;
+  /** In a macOS font folder: always on, can't be switched off here. */
+  installed: boolean;
+  /** Identify this exact version of the file (used to key preview caches). */
+  mtime: number;
+  fileSize: number;
+  /** What macOS reports right now. Drives the switches. */
+  osActive: boolean;
+}
+
+export interface Axis {
+  tag: string;
+  name: string | null;
+  min: number;
+  default: number;
+  max: number;
+  hidden: boolean;
+}
+
+export interface FontDetail extends FontSummary {
+  version: string | null;
+  designer: string | null;
+  manufacturer: string | null;
+  copyright: string | null;
+  license: string | null;
+  licenseUrl: string | null;
+  axes: Axis[];
+  glyphCount: number;
+}
+
+export interface ScanProgress {
+  folderId: number;
+  phase: "starting" | "discovering" | "reading";
+  /** Font files found so far (discovering) or in total (reading). */
+  found: number;
+  /** Files finished, including unchanged ones. */
+  done: number;
+  /** Files that must download from cloud storage before they can be read. */
+  cloud: number;
+  current: string;
+}
+
+export interface ScanReport {
+  folderId: number;
+  files: number;
+  added: number;
+  updated: number;
+  unchanged: number;
+  removed: number;
+  failed: { path: string; reason: string }[];
+  walkErrors: number;
+  cancelled: boolean;
+}
+
+export interface ActivationOutcome {
+  path: string;
+  ids: number[];
+  active: boolean;
+  error: string | null;
+}
+
+export type ServiceId = "google" | "adobe";
+
+export interface ServiceInfo {
+  id: ServiceId;
+  /** The managed library folder for a download service. */
+  folderId: number | null;
+}
+
+export interface GoogleFamily {
+  id: string;
+  family: string;
+  category: string;
+  variable: boolean;
+  weights: number[];
+  styles: string[];
+  subsets: string[];
+  license: string;
+  lastModified: string;
+  installed: { dir: string; lastModified: string } | null;
+  updateAvailable: boolean;
+  /** Why it can't be downloaded (e.g. icon fonts live elsewhere), if it can't. */
+  unavailable: string | null;
+}
+
+export interface GoogleCatalog {
+  families: GoogleFamily[];
+  fetchedAt: number;
+  stale: boolean;
+}
+
+export interface GoogleInstallResult {
+  dir: string;
+  files: string[];
+  /** An earlier copy was replaced. */
+  updated: boolean;
+  /** For an update: file names that were on before. */
+  wasActiveFiles: string[];
+  /** For an update: every font file name in the replaced copy. */
+  oldFiles: string[];
+}
+
+export interface AdobeFace {
+  postscriptName: string;
+  family: string;
+  style: string;
+}
+
+export interface AdobeStatus {
+  appInstalled: boolean;
+  fontStore: boolean;
+  faces: AdobeFace[];
+  supported: boolean;
+}
+
+export const api = {
+  listFolders: () => invoke<Folder[]>("list_folders"),
+  addFolder: (path: string) => invoke<Folder>("add_folder", { path }),
+  removeFolder: (folderId: number) => invoke<ActivationOutcome[]>("remove_folder", { folderId }),
+  scanFolder: (folderId: number) => invoke<ScanReport>("scan_folder", { folderId }),
+  cancelScan: (folderId: number) => invoke<void>("cancel_scan", { folderId }),
+  listFonts: () => invoke<FontSummary[]>("list_fonts"),
+  getFont: (fontId: number) => invoke<FontDetail>("get_font", { fontId }),
+  setActivation: (fontIds: number[], active: boolean) =>
+    invoke<ActivationOutcome[]>("set_activation", { fontIds, active }),
+  revealFont: (fontId: number) => invoke<void>("reveal_font", { fontId }),
+  listServices: () => invoke<ServiceInfo[]>("list_services"),
+  googleCatalog: (refresh = false) => invoke<GoogleCatalog>("google_catalog", { refresh }),
+  googleInstall: (id: string) => invoke<GoogleInstallResult>("google_install", { id }),
+  googleRemove: (id: string) => invoke<void>("google_remove", { id }),
+  adobeStatus: () => invoke<AdobeStatus>("adobe_status"),
+};
