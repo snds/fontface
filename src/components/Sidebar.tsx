@@ -1,10 +1,15 @@
 import type { Folder, ScanProgress, ServiceInfo } from "@/api";
-import { INSTALLED_LABEL, type LibraryView } from "@/library";
+import { INSTALLED_LABEL, type Family, type LibraryView } from "@/library";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { colorVar } from "@/tags/api";
+import { ADOBE_LOCATION, FONT_BOOK_LOCATION, useLocations } from "@/tags/locations";
+import { SubfolderToggle, SubfolderTree, useSubfolders } from "@/tags/LocationTree";
+import { LocationMenu } from "@/tags/menus";
+import { TagsSection } from "@/tags/TagsSection";
 
 interface Props {
   folders: Folder[];
@@ -12,6 +17,8 @@ interface Props {
   counts: { all: number; installed: number };
   /** The same, per folder. */
   folderCounts: Map<number, number>;
+  /** The whole library, for tag and subfolder counts. */
+  families: Family[];
   services: ServiceInfo[];
   /** Fonts Creative Cloud has turned on, once known. */
   adobeCount: number | null;
@@ -74,6 +81,8 @@ function FolderRow({
   count,
   selected,
   scan,
+  color,
+  leading,
   onView,
   onRemove,
   onRescan,
@@ -83,6 +92,10 @@ function FolderRow({
   count: number;
   selected: boolean;
   scan: ScanProgress | undefined;
+  /** The location color (CSS), tinting the folder icon. */
+  color?: string;
+  /** Shown before the icon (the subfolder toggle). */
+  leading?: React.ReactNode;
   onView: () => void;
   onRemove: () => void;
   onRescan: () => void;
@@ -91,7 +104,8 @@ function FolderRow({
   const system = folder.kind === "system";
   const icon = folder.missing ? "folder_off" : system ? "folder_special" : "folder";
   return (
-    <div className={itemClass(selected)}>
+    <div className={cn(itemClass(selected), leading && "pl-1")}>
+      {leading}
       <button
         className="flex min-w-0 flex-1 items-center gap-2"
         aria-current={selected ? "page" : undefined}
@@ -101,7 +115,13 @@ function FolderRow({
         {scan ? (
           <Icon name="progress_activity" size={18} className="animate-spin text-muted-foreground" />
         ) : (
-          <Icon name={icon} size={18} className={folder.missing ? "text-destructive" : "text-muted-foreground"} />
+          <Icon
+            name={icon}
+            size={18}
+            filled={!!color && !folder.missing}
+            className={folder.missing ? "text-destructive" : "text-muted-foreground"}
+            style={color && !folder.missing ? { color } : undefined}
+          />
         )}
         <span className="truncate">{folder.label}</span>
       </button>
@@ -121,7 +141,26 @@ function FolderRow({
   );
 }
 
-export function Sidebar({ folders, counts, folderCounts, services, adobeCount, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan }: Props) {
+/** A user folder with its subfolder tree. */
+function UserFolder({ folder, families, row, view, onView, locations }: {
+  folder: Folder;
+  families: Family[];
+  row: (folder: Folder, leading?: React.ReactNode) => React.ReactNode;
+  view: LibraryView;
+  onView: (v: LibraryView) => void;
+  locations: ReturnType<typeof useLocations>;
+}) {
+  const nodes = useSubfolders(folder, families);
+  return (
+    <>
+      {row(folder, <SubfolderToggle path={folder.path} label={folder.label} hasChildren={nodes.length > 0} />)}
+      <SubfolderTree nodes={nodes} root={folder.path} view={view} onView={onView} locations={locations} />
+    </>
+  );
+}
+
+export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan }: Props) {
+  const locations = useLocations(folders, services);
   const items: { label: string; icon: string; view: LibraryView; count: number; hint: string }[] = [
     { label: "All Fonts", icon: "font_download", view: { kind: "all" }, count: counts.all, hint: "Every font Fontface knows about" },
     {
@@ -136,18 +175,26 @@ export function Sidebar({ folders, counts, folderCounts, services, adobeCount, v
   const user = folders.filter((f) => f.kind === "user");
   const running = folders.filter((f) => scans.has(f.id));
 
-  const row = (folder: Folder) => (
-    <FolderRow
+  const row = (folder: Folder, leading?: React.ReactNode) => (
+    <LocationMenu
       key={folder.id}
-      folder={folder}
-      count={folderCounts.get(folder.id) ?? folder.fontCount}
-      selected={same(view, { kind: "folder", id: folder.id })}
-      scan={scans.get(folder.id)}
-      onView={() => onView({ kind: "folder", id: folder.id })}
-      onRemove={() => onRemoveFolder(folder)}
-      onRescan={() => onRescan(folder)}
-      onCancel={() => onCancelScan(folder)}
-    />
+      location={folder.path}
+      color={locations.colorOf(folder.path)}
+      defaultColor={locations.defaultOf(folder.path)}
+    >
+      <FolderRow
+        folder={folder}
+        count={folderCounts.get(folder.id) ?? folder.fontCount}
+        selected={same(view, { kind: "folder", id: folder.id })}
+        scan={scans.get(folder.id)}
+        color={colorVar(locations.colorOf(folder.path))}
+        leading={leading}
+        onView={() => onView({ kind: "folder", id: folder.id })}
+        onRemove={() => onRemoveFolder(folder)}
+        onRescan={() => onRescan(folder)}
+        onCancel={() => onCancelScan(folder)}
+      />
+    </LocationMenu>
   );
 
   return (
@@ -158,18 +205,32 @@ export function Sidebar({ folders, counts, folderCounts, services, adobeCount, v
             <SectionLabel>Library</SectionLabel>
             {items.map((item) => (
               <div key={item.label}>
+                {/* Font Book has a location color (its folders follow it); All Fonts doesn't. */}
+                <LocationMenu
+                  location={FONT_BOOK_LOCATION}
+                  color={locations.colorOf(FONT_BOOK_LOCATION)}
+                  defaultColor={locations.defaultOf(FONT_BOOK_LOCATION)}
+                  disabled={item.view.kind !== "installed"}
+                >
                 <button
                   className={itemClass(same(view, item.view))}
                   aria-current={same(view, item.view) ? "page" : undefined}
                   title={item.hint}
                   onClick={() => onView(item.view)}
                 >
-                  <Icon name={item.icon} size={18} className="text-muted-foreground" />
+                  <Icon
+                    name={item.icon}
+                    size={18}
+                    filled={item.view.kind === "installed"}
+                    className="text-muted-foreground"
+                    style={item.view.kind === "installed" ? { color: colorVar(locations.colorOf(FONT_BOOK_LOCATION)) } : undefined}
+                  />
                   <span className="flex-1 truncate">{item.label}</span>
                   <span className="font-mono text-xs text-muted-foreground tabular-nums">{n(item.count)}</span>
                 </button>
+                </LocationMenu>
                 {/* The OS font folders sit under the installed-fonts view. */}
-                {item.view.kind === "installed" && system.length > 0 && <div className="pl-4">{system.map(row)}</div>}
+                {item.view.kind === "installed" && system.length > 0 && <div className="pl-4">{system.map((f) => row(f))}</div>}
               </div>
             ))}
           </div>
@@ -196,9 +257,13 @@ export function Sidebar({ folders, counts, folderCounts, services, adobeCount, v
                   hint: "Fonts Creative Cloud has turned on (read-only)",
                 },
               ];
-              return rows.map((r) => (
+              return rows.map((r) => {
+                // Google Fonts' color is its download folder's; Adobe Fonts has no folder here.
+                const location = r.id === "google" ? folders.find((f) => f.id === google?.folderId)?.path : ADOBE_LOCATION;
+                const color = location ? locations.colorOf(location) : undefined;
+                return (
+                <LocationMenu key={r.id} location={location ?? ""} color={color ?? "gray"} defaultColor={location ? locations.defaultOf(location) : "gray"} disabled={!location}>
                 <button
-                  key={r.id}
                   aria-current={same(view, { kind: "service", id: r.id }) ? "page" : undefined}
                   className={itemClass(same(view, { kind: "service", id: r.id }))}
                   title={r.hint}
@@ -207,12 +272,16 @@ export function Sidebar({ folders, counts, folderCounts, services, adobeCount, v
                   <Icon
                     name={r.busy ? "progress_activity" : "cloud"}
                     size={18}
+                    filled={!r.busy && !!color}
                     className={cn("text-muted-foreground", r.busy && "animate-spin")}
+                    style={!r.busy && color ? { color: colorVar(color) } : undefined}
                   />
                   <span className="flex-1 truncate">{r.label}</span>
                   <span className="font-mono text-xs text-muted-foreground tabular-nums">{r.count}</span>
                 </button>
-              ));
+                </LocationMenu>
+                );
+              });
             })()}
           </div>
 
@@ -226,8 +295,12 @@ export function Sidebar({ folders, counts, folderCounts, services, adobeCount, v
                 Add a folder of fonts…
               </button>
             )}
-            {user.map(row)}
+            {user.map((folder) => (
+              <UserFolder key={folder.id} folder={folder} families={families} row={row} view={view} onView={onView} locations={locations} />
+            ))}
           </div>
+
+          <TagsSection families={families} view={view} onView={onView} />
         </nav>
       </ScrollArea>
 

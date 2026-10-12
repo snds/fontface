@@ -26,12 +26,37 @@ export interface Family {
 }
 
 /** Where the fonts come from: everything, the OS-installed fonts ("Font Book"), one folder, or a
- *  font service's own page. */
+ *  font service's own page. Or how they're organized: a tag (with the tags nested under it), or
+ *  a folder inside a library folder. */
 export type LibraryView =
   | { kind: "all" }
   | { kind: "installed" }
   | { kind: "folder"; id: number }
-  | { kind: "service"; id: "google" | "adobe" };
+  | { kind: "service"; id: "google" | "adobe" }
+  | { kind: "tag"; id: number }
+  | { kind: "location"; path: string };
+
+/** A string that's the same for the same view (for comparing views and keying UI state). */
+export function viewKey(v: LibraryView): string {
+  switch (v.kind) {
+    case "folder":
+    case "service":
+    case "tag":
+      return `${v.kind}:${v.id}`;
+    case "location":
+      return `location:${v.path}`;
+    default:
+      return v.kind;
+  }
+}
+
+/** What filtering needs to know about tags (see src/tags/model.ts). */
+export interface FilterContext {
+  /** Lowercased full names of a face's tags; search matches them too. */
+  tagNames?: (face: Face) => string[];
+  /** The face has this tag, or one nested under it. */
+  inTag?: (face: Face, tagId: number) => boolean;
+}
 
 /** Narrows any view by on/off state. */
 export type StatusFilter = "any" | "active" | "inactive";
@@ -62,6 +87,7 @@ function preferred(a: FontSummary, b: FontSummary): number {
  * Same PostScript name, same kind (variable or static) and same slant = the same font.
  * (Slant guards against unrelated files that reuse a name; weight is left out because true
  * duplicates sometimes disagree on it.)
+ * Tags are stored under this key, so it must match `face_key` in src-tauri/src/tags/mod.rs.
  */
 const faceKey = (f: FontSummary) =>
   f.postscriptName
@@ -133,14 +159,23 @@ const matches = (f: FontSummary, q: string) =>
  * Filters at the face level, keeping each Face whole (all copies), so a switch always reflects
  * and acts on every copy in the library, not only the copies visible in this view.
  */
-export function filterFamilies(families: Family[], view: LibraryView, status: StatusFilter, query: string): Family[] {
+export function filterFamilies(
+  families: Family[],
+  view: LibraryView,
+  status: StatusFilter,
+  query: string,
+  ctx: FilterContext = {},
+): Family[] {
   const q = query.trim().toLowerCase();
+  const inside = view.kind === "location" ? `${view.path}/` : "";
   const keep = (face: Face) => {
     if (view.kind === "installed" && !face.installed) return false;
     if (view.kind === "folder" && !face.copies.some((c) => c.folderId === view.id)) return false;
+    if (view.kind === "location" && !face.copies.some((c) => c.path.startsWith(inside))) return false;
+    if (view.kind === "tag" && !ctx.inTag?.(face, view.id)) return false;
     if (status === "active" && !face.active) return false;
     if (status === "inactive" && face.active) return false;
-    return !q || face.copies.some((c) => matches(c, q));
+    return !q || face.copies.some((c) => matches(c, q)) || (ctx.tagNames?.(face).some((n) => n.includes(q)) ?? false);
   };
   if (view.kind === "all" && status === "any" && !q) return families;
   const out: Family[] = [];

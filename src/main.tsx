@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import "./tags/colors.css";
 
 // shadcn themes key off a `.dark` class; mirror the macOS appearance setting onto it.
 const scheme = window.matchMedia("(prefers-color-scheme: dark)");

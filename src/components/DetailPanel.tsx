@@ -4,16 +4,22 @@ import { faceName, useFontFace } from "@/fontLoader";
 import { activationIds, WEIGHT_NAMES, type Face } from "@/library";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
+import { colorVar } from "@/tags/api";
+import type { Locations } from "@/tags/locations";
+import { leafOf, useTagIndex } from "@/tags/model";
+import { applyTags, TagPicker } from "@/tags/TagPicker";
 import { ActivationSwitch, InstalledBadge } from "./ActivationSwitch";
 
 interface Props {
   face: Face;
   previewText: string;
   busy: boolean;
+  locations: Locations;
   onClose: () => void;
   onActivate: (ids: number[], active: boolean) => void;
   onReveal: (id: number) => void;
@@ -29,7 +35,52 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h3 className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{children}</h3>;
 }
 
-export function DetailPanel({ face, previewText, busy, onClose, onActivate, onReveal }: Props) {
+/** The style's tags, each removable, and a button to add more. */
+function TagsSection({ face }: { face: Face }) {
+  const index = useTagIndex();
+  const tags = index.tagsOf(face).map((id) => index.byId.get(id)!).filter(Boolean);
+  return (
+    <section>
+      <SectionTitle>Tags</SectionTitle>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {tags.map((t) => (
+          <span
+            key={t.id}
+            className="inline-flex h-6 items-center gap-1 rounded-full pr-0.5 pl-2 text-xs"
+            style={{ background: `color-mix(in oklch, ${colorVar(t.color)} var(--tag-tint), transparent)` }}
+            title={t.name}
+          >
+            <span className="size-2 rounded-full" style={{ background: colorVar(t.color) }} aria-hidden />
+            <span>
+              {t.name.includes("/") && <span className="text-muted-foreground">{t.name.slice(0, t.name.lastIndexOf("/") + 1)}</span>}
+              {leafOf(t.name)}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="size-5 rounded-full"
+              aria-label={`Remove tag ${t.name}`}
+              onClick={() => applyTags([t.id], [face], false)}
+            >
+              <Icon name="close" size={14} />
+            </Button>
+          </span>
+        ))}
+        <Popover>
+          <PopoverTrigger render={<Button variant="outline" size="xs" className="rounded-full" />}>
+            <Icon name="add" size={14} />
+            {tags.length ? "Tag" : "Add a tag"}
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80">
+            <TagPicker faces={[face]} />
+          </PopoverContent>
+        </Popover>
+      </div>
+    </section>
+  );
+}
+
+export function DetailPanel({ face, previewText, busy, locations, onClose, onActivate, onReveal }: Props) {
   const font = face.primary;
   const [detail, setDetail] = useState<FontDetail | null>(null);
   const [axisValues, setAxisValues] = useState<Record<string, number>>({});
@@ -106,6 +157,9 @@ export function DetailPanel({ face, previewText, busy, onClose, onActivate, onRe
       )}
       {state === "too-large" && <p className="text-xs text-muted-foreground italic">This file is too large to preview.</p>}
 
+          <TagsSection face={face} />
+
+          <Separator />
           <section>
             <SectionTitle>Waterfall</SectionTitle>
             {WATERFALL.map((px) => (
@@ -173,24 +227,36 @@ export function DetailPanel({ face, previewText, busy, onClose, onActivate, onRe
               <div className="mt-3 flex flex-col gap-1.5">
                 <div className="text-xs font-medium">{face.copies.length} copies of this font</div>
                 {face.copies.map((c) => (
-                  <div key={c.id} className="flex items-start gap-1.5 font-mono text-[11px] text-muted-foreground">
-                    <Icon
-                      name={c.osActive ? "check_circle" : "radio_button_unchecked"}
-                      size={14}
-                      filled={c.osActive}
-                      className={c.osActive ? "text-active" : ""}
-                    />
-                    <span className="selectable break-all" title={c.osActive ? "On" : "Off"}>
-                      {c.path}
-                      {c.faceIndex > 0 ? ` (face ${c.faceIndex})` : ""}
-                    </span>
+                  <div key={c.id} className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1.5 text-[11px]">
+                      <span className="size-2 shrink-0 rounded-full" style={{ background: colorVar(locations.colorOfCopy(c)) }} aria-hidden />
+                      <span className="truncate">{locations.describeCopy(c)}</span>
+                    </div>
+                    <div className="flex items-start gap-1.5 font-mono text-[11px] text-muted-foreground">
+                      <Icon
+                        name={c.osActive ? "check_circle" : "radio_button_unchecked"}
+                        size={14}
+                        filled={c.osActive}
+                        className={c.osActive ? "text-active" : ""}
+                      />
+                      <span className="selectable break-all" title={c.osActive ? "On" : "Off"}>
+                        {c.path}
+                        {c.faceIndex > 0 ? ` (face ${c.faceIndex})` : ""}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="selectable mt-3 font-mono text-[11px] break-all text-muted-foreground" title={font.path}>
-                {font.path}
-                {font.faceIndex > 0 ? ` (face ${font.faceIndex})` : ""}
+              <div className="mt-3 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="size-2 shrink-0 rounded-full" style={{ background: colorVar(locations.colorOfCopy(font)) }} aria-hidden />
+                  <span className="truncate">{locations.describeCopy(font)}</span>
+                </div>
+                <div className="selectable font-mono text-[11px] break-all text-muted-foreground" title={font.path}>
+                  {font.path}
+                  {font.faceIndex > 0 ? ` (face ${font.faceIndex})` : ""}
+                </div>
               </div>
             )}
             <Button variant="outline" size="sm" className="mt-3" onClick={() => onReveal(font.id)}>

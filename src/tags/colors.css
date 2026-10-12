@@ -1,0 +1,40 @@
+/*
+ * Tag and location colors. Names match src-tauri/src/tags/colors.rs.
+ *
+ * They're drawn as icons, dots and chip markers next to text, never as the text itself, so
+ * they need 3:1 contrast against the backgrounds they sit on (WCAG 1.4.11). Checked against
+ * background, sidebar and accent in each mode:
+ *   light: lowest 3.7:1 (amber)   dark: lowest 5.4:1 (indigo)
+ * Chip text stays in the foreground color on a light tint of the tag color (17:1 light, 6:1 dark).
+ */
+:root {
+  --tag-gray: oklch(0.56 0.015 260);
+  --tag-red: oklch(0.58 0.2 27);
+  --tag-orange: oklch(0.6 0.16 48);
+  --tag-amber: oklch(0.6 0.12 75);
+  --tag-green: oklch(0.57 0.14 150);
+  --tag-teal: oklch(0.57 0.1 185);
+  --tag-sky: oklch(0.58 0.12 235);
+  --tag-blue: oklch(0.54 0.19 262);
+  --tag-indigo: oklch(0.52 0.19 282);
+  --tag-purple: oklch(0.55 0.2 310);
+  --tag-pink: oklch(0.58 0.2 355);
+  --tag-brown: oklch(0.53 0.07 55);
+  --tag-tint: 16%;
+}
+
+.dark {
+  --tag-gray: oklch(0.72 0.015 260);
+  --tag-red: oklch(0.72 0.17 25);
+  --tag-orange: oklch(0.76 0.14 52);
+  --tag-amber: oklch(0.8 0.13 80);
+  --tag-green: oklch(0.76 0.15 150);
+  --tag-teal: oklch(0.77 0.11 185);
+  --tag-sky: oklch(0.76 0.12 235);
+  --tag-blue: oklch(0.72 0.14 262);
+  --tag-indigo: oklch(0.7 0.15 282);
+  --tag-purple: oklch(0.72 0.16 310);
+  --tag-pink: oklch(0.74 0.16 355);
+  --tag-brown: oklch(0.7 0.07 55);
+  --tag-tint: 22%;
+}

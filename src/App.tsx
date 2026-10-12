@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { api, type Folder, type FontSummary, type GoogleFamily, type ScanProgress, type ServiceInfo } from "@/api";
-import { filterFamilies, groupFamilies, type Face, type LibraryView, type StatusFilter } from "@/library";
+import { filterFamilies, groupFamilies, viewKey, type Face, type LibraryView, type StatusFilter } from "@/library";
 import { faceName } from "@/fontLoader";
 import {
   AlertDialog,
@@ -27,6 +27,8 @@ import { FontList } from "@/components/FontList";
 import { DetailPanel } from "@/components/DetailPanel";
 import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
+import { useLocations } from "@/tags/locations";
+import { useFilterContext } from "@/tags/model";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
@@ -406,7 +408,13 @@ export default function App() {
         for (const id of new Set(face.copies.map((c) => c.folderId))) map.set(id, (map.get(id) ?? 0) + 1);
     return map;
   }, [allFamilies]);
-  const families = useMemo(() => filterFamilies(allFamilies, view, status, query), [allFamilies, view, status, query]);
+  // Tags narrow tag views and are searched too; location colors show on rows.
+  const filterContext = useFilterContext();
+  const locations = useLocations(folders, services);
+  const families = useMemo(
+    () => filterFamilies(allFamilies, view, status, query, filterContext),
+    [allFamilies, view, status, query, filterContext],
+  );
   const faceById = useMemo(() => {
     const map = new Map<number, Face>();
     for (const family of allFamilies) for (const face of family.faces) for (const c of face.copies) map.set(c.id, face);
@@ -426,7 +434,7 @@ export default function App() {
     return { all, installed };
   }, [allFamilies]);
   const viewScan = view.kind === "folder" ? scans.get(view.id) : [...scans.values()][0];
-  const resetKey = `${view.kind}:${view.kind === "folder" ? view.id : ""}:${status}:${query}`;
+  const resetKey = `${viewKey(view)}:${status}:${query}`;
 
   const toggleExpanded = (name: string) =>
     setExpanded((s) => {
@@ -443,6 +451,7 @@ export default function App() {
           folders={folders}
           counts={counts}
           folderCounts={folderCounts}
+          families={allFamilies}
           services={services}
           adobeCount={adobeCount}
           view={view}
@@ -493,6 +502,8 @@ export default function App() {
               selectedId={selectedId}
               busy={busy}
               resetKey={resetKey}
+              allFamilies={allFamilies}
+              locations={locations}
               onSelect={setSelectedId}
               onActivate={setActivation}
             />
@@ -507,6 +518,13 @@ export default function App() {
                   Fonts appear here as they're ready.
                 </p>
               )}
+            </div>
+          ) : view.kind === "tag" || view.kind === "location" ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
+              {view.kind === "tag"
+                ? "No fonts have this tag yet. Select fonts in another view, then tag them from the tag button or by right-clicking."
+                : "No fonts in this folder."}
+              {(query || status !== "any") && <span>Your search or the Active/Inactive filter may be hiding some.</span>}
             </div>
           ) : query || status !== "any" ? (
             <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
@@ -536,6 +554,7 @@ export default function App() {
             face={selected}
             previewText={previewText}
             busy={selected.copies.some((c) => busy.has(c.path))}
+            locations={locations}
             onClose={() => setSelectedId(undefined)}
             onActivate={setActivation}
             onReveal={(id) => api.revealFont(id).catch((e) => toast.error(String(e)))}

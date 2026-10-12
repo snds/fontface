@@ -1,0 +1,150 @@
+import { toast } from "sonner";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Icon } from "@/components/ui/icon";
+import { COLOR_NAMES, PALETTE, colorVar, type Tag, type TagColor } from "./api";
+import { openTagDialog } from "./dialogs";
+import { recolorTag, setLocationColor } from "./store";
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/** The same menu items work in a right-click menu and in a "…" menu. */
+interface Kit {
+  Item: React.ComponentType<any>;
+  Separator: React.ComponentType<any>;
+  Sub: React.ComponentType<any>;
+  SubTrigger: React.ComponentType<any>;
+  SubContent: React.ComponentType<any>;
+  RadioGroup: React.ComponentType<any>;
+  RadioItem: React.ComponentType<any>;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export const DROPDOWN: Kit = {
+  Item: DropdownMenuItem,
+  Separator: DropdownMenuSeparator,
+  Sub: DropdownMenuSub,
+  SubTrigger: DropdownMenuSubTrigger,
+  SubContent: DropdownMenuSubContent,
+  RadioGroup: DropdownMenuRadioGroup,
+  RadioItem: DropdownMenuRadioItem,
+};
+
+export const CONTEXT: Kit = {
+  Item: ContextMenuItem,
+  Separator: ContextMenuSeparator,
+  Sub: ContextMenuSub,
+  SubTrigger: ContextMenuSubTrigger,
+  SubContent: ContextMenuSubContent,
+  RadioGroup: ContextMenuRadioGroup,
+  RadioItem: ContextMenuRadioItem,
+};
+
+/** A "Color" submenu with the palette as radio items. */
+function ColorSub({ kit, value, defaultColor, onPick }: { kit: Kit; value: TagColor; defaultColor?: TagColor; onPick: (c: TagColor) => void }) {
+  const { Sub, SubTrigger, SubContent, RadioGroup, RadioItem } = kit;
+  return (
+    <Sub>
+      <SubTrigger>
+        <span className="size-3 rounded-full" style={{ background: colorVar(value) }} aria-hidden />
+        Color
+      </SubTrigger>
+      <SubContent className="min-w-40">
+        <RadioGroup value={value} onValueChange={(c: TagColor) => onPick(c)}>
+          {PALETTE.map((c) => (
+            <RadioItem key={c} value={c}>
+              <span className="size-3 rounded-full" style={{ background: colorVar(c) }} aria-hidden />
+              {COLOR_NAMES[c]}
+              {c === defaultColor && <span className="text-muted-foreground">(default)</span>}
+            </RadioItem>
+          ))}
+        </RadioGroup>
+      </SubContent>
+    </Sub>
+  );
+}
+
+const failed = (what: string) => (e: unknown) => toast.error(`Couldn't ${what}`, { description: String(e) });
+
+export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
+  const { Item, Separator } = kit;
+  return (
+    <>
+      <Item onClick={() => openTagDialog({ kind: "rename", tag })}>
+        <Icon name="edit" size={16} />
+        Rename…
+      </Item>
+      <ColorSub kit={kit} value={tag.color} onPick={(c) => recolorTag(tag.id, c).catch(failed("change the color"))} />
+      <Item onClick={() => openTagDialog({ kind: "create", parent: tag })}>
+        <Icon name="new_label" size={16} />
+        New tag inside…
+      </Item>
+      <Item onClick={() => openTagDialog({ kind: "export", tag })}>
+        <Icon name="ios_share" size={16} />
+        Export…
+      </Item>
+      <Separator />
+      <Item variant="destructive" onClick={() => openTagDialog({ kind: "delete", tag })}>
+        <Icon name="delete" size={16} />
+        Delete…
+      </Item>
+    </>
+  );
+}
+
+/**
+ * Right-click a location (a folder, Font Book, a service) to pick its color. Wraps the row in
+ * a plain block, so the row's own layout is untouched.
+ */
+export function LocationMenu({
+  location,
+  color,
+  defaultColor,
+  disabled,
+  children,
+}: {
+  location: string;
+  color: TagColor;
+  defaultColor: TagColor;
+  /** No color for this row: just show it. */
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  const { Item, Separator } = CONTEXT;
+  if (disabled) return <>{children}</>;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger className="block">{children}</ContextMenuTrigger>
+      <ContextMenuContent className="min-w-44">
+        <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={(c) => setLocationColor(location, c).catch(failed("change the color"))} />
+        {color !== defaultColor && (
+          <>
+            <Separator />
+            <Item onClick={() => setLocationColor(location, null).catch(failed("reset the color"))}>
+              <Icon name="restart_alt" size={16} />
+              Use default color ({COLOR_NAMES[defaultColor]})
+            </Item>
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}

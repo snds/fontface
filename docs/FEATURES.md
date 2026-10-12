@@ -63,9 +63,17 @@ files. These are currently skipped. Tested on macOS 27.0.1 (2026-10-12) with rea
 
 ## Phase 2: Organizing
 
+Tags, colors, import and export are described in [TAGS.md](TAGS.md).
+
 | Feature | macOS | Windows |
 |---|---|---|
-| Tags (add, rename, color, bulk-apply) | ⬜ | ⬜ |
+| Tags (add, rename, color, delete, nest with "/") | ✅ | ⬜ |
+| Tag a style, a whole family, or many selected rows at once | ✅ | ⬜ |
+| Tags survive rescans and duplicates (kept by PostScript name, not by file) | ✅ | ⬜ |
+| Tag views in the sidebar, with counts; combine with All / Active / Inactive | ✅ | ⬜ |
+| Search matches tag names | ✅ | ⬜ |
+| Location colors (Font Book, services, folders, subfolders), with defaults by source | ✅ | ⬜ |
+| Subfolder tree under each folder, each subfolder a view | ✅ | ⬜ |
 | Collections (manual) | ⬜ | ⬜ |
 | Smart collections (rule-based) | ⬜ | ⬜ |
 | Activate / deactivate a whole collection | ⬜ | ⬜ |
@@ -92,8 +100,12 @@ files. These are currently skipped. Tested on macOS 27.0.1 (2026-10-12) with rea
 
 | Feature | macOS | Windows |
 |---|---|---|
-| Import tags/collections from an existing Typeface library | ⬜ | ⬜ |
-| Export / import library (JSON) | ⬜ | ⬜ |
+| Import tags from a Typeface backup (preview first, safe to re-run) | ✅ | ⬜ |
+| Import Finder tags and Font Book collections | ✅ | n/a |
+| Export / import tags (Fontface JSON) | ✅ | ⬜ |
+| Export tags as CSV or a Typeface backup | ✅ | ⬜ |
+| Export tags as Finder tags or Font Book collections | ✅ | n/a |
+| Export / import the rest of the library (folders, on/off choices) | ⬜ | ⬜ |
 | Menu bar quick toggle | ⬜ | ⬜ |
 | Launch at login | ⬜ | ⬜ |
 | Auto-activate fonts a design file needs | ⬜ | ⬜ |

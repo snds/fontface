@@ -534,4 +534,34 @@ fn real_typeface_backup() {
     for n in &p.notes {
         println!("  note: {n}");
     }
+
+    // With FONTFACE_DUMP_DIR set, also apply the ticked tags to the throwaway copy and write
+    // JSON in the shapes the UI receives, for trying the interface with real data.
+    if let Ok(dir) = std::env::var("FONTFACE_DUMP_DIR") {
+        let dir = PathBuf::from(dir);
+        let mut conn = conn;
+        let write = |name: &str, value: &dyn erased::Json| std::fs::write(dir.join(name), value.json()).unwrap();
+        let mut folders = db::list_folders(&conn).unwrap();
+        db::check_folders(&mut folders);
+        write("folders.json", &folders);
+        write("fonts.json", &db::list_fonts(&conn).unwrap());
+        write("preview.json", &p);
+        let chosen: Vec<String> = p.tags.iter().filter(|t| t.suggested).map(|t| t.name.clone()).collect();
+        let result = import::apply(&mut conn, &source, &chosen, true).unwrap();
+        write("apply.json", &result);
+        write("organize.json", &organize(&conn).unwrap());
+        println!("  wrote JSON to {}", dir.display());
+    }
+}
+
+/// Lets the dump above write any serializable value through one closure.
+mod erased {
+    pub trait Json {
+        fn json(&self) -> String;
+    }
+    impl<T: serde::Serialize> Json for T {
+        fn json(&self) -> String {
+            serde_json::to_string(self).unwrap()
+        }
+    }
 }

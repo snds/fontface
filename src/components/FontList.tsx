@@ -1,13 +1,30 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FontSummary } from "@/api";
 import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { colorVar } from "@/tags/api";
+import { openTagDialog } from "@/tags/dialogs";
+import type { Locations } from "@/tags/locations";
+import { tagCoverage, uniqueFaces, useTagIndex, type TagIndex } from "@/tags/model";
+import { LocationDots, TagChips } from "@/tags/TagChips";
+import { applyTags, TagPicker } from "@/tags/TagPicker";
 import { ActivationSwitch, InstalledBadge } from "./ActivationSwitch";
 
 type Row = { kind: "family"; family: Family } | { kind: "face"; face: Face };
@@ -23,13 +40,28 @@ interface Props {
   busy: Set<string>;
   /** Changes when the view or search changes; the list then scrolls back to the top. */
   resetKey: string;
+  /** The whole library, so tagging a family row covers all its styles, not only those shown. */
+  allFamilies: Family[];
+  locations: Locations;
   onSelect: (id: number) => void;
   onActivate: (ids: number[], active: boolean) => void;
 }
 
+const rowKey = (row: Row) => (row.kind === "family" ? `f:${row.family.name}` : `s:${row.face.key}`);
+
+/** What a row-level action works on: the selected rows if this row is one of them, else this row. */
+interface RowActions {
+  index: TagIndex;
+  selection: Set<string>;
+  facesOf: (keys: Iterable<string>) => Face[];
+  targetsFor: (key: string) => Face[];
+  onRowClick: (e: React.MouseEvent, i: number, id: number) => void;
+}
+
 export function FontList(props: Props) {
-  const { families, expanded, size } = props;
+  const { families, expanded, size, allFamilies } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const index = useTagIndex();
 
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
@@ -39,6 +71,59 @@ export function FontList(props: Props) {
     }
     return out;
   }, [families, expanded]);
+
+  // ---------------------------------------------------------------- selection
+  // Click selects one row; Cmd/Ctrl-click adds or removes a row; Shift-click selects a range.
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const anchor = useRef<number | null>(null);
+  const [menuRow, setMenuRow] = useState<string | null>(null);
+
+  const fullFamily = useMemo(() => new Map(allFamilies.map((f) => [f.name, f])), [allFamilies]);
+  const rowByKey = useMemo(() => new Map(rows.map((r) => [rowKey(r), r])), [rows]);
+  // Rows that left the list (a new filter, a collapsed family) drop out of the selection.
+  const live = useMemo(() => new Set([...selection].filter((k) => rowByKey.has(k))), [selection, rowByKey]);
+  const facesOf = (keys: Iterable<string>): Face[] => {
+    const out: Face[] = [];
+    for (const key of keys) {
+      const row = rowByKey.get(key);
+      if (!row) continue;
+      if (row.kind === "face") out.push(row.face);
+      else out.push(...(fullFamily.get(row.family.name) ?? row.family).faces);
+    }
+    return uniqueFaces(out);
+  };
+  const targetsFor = (key: string) => facesOf(live.has(key) && live.size > 1 ? live : [key]);
+
+  const onRowClick = (e: React.MouseEvent, i: number, id: number) => {
+    const key = rowKey(rows[i]);
+    if (e.metaKey || e.ctrlKey) {
+      setSelection((s) => {
+        const next = new Set(s);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+      anchor.current = i;
+      return;
+    }
+    if (e.shiftKey && anchor.current !== null && anchor.current < rows.length) {
+      const [from, to] = [Math.min(anchor.current, i), Math.max(anchor.current, i)];
+      setSelection(new Set(rows.slice(from, to + 1).map(rowKey)));
+      return;
+    }
+    setSelection(new Set([key]));
+    anchor.current = i;
+    props.onSelect(id);
+  };
+
+  // A new view or search starts with nothing selected.
+  useLayoutEffect(() => {
+    setSelection(new Set());
+    anchor.current = null;
+  }, [props.resetKey]);
+  const selectedFaces = useMemo(() => (live.size > 1 ? facesOf(live) : []), [live, rowByKey, fullFamily]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const actions: RowActions = { index, selection: live, facesOf, targetsFor, onRowClick };
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -61,25 +146,170 @@ export function FontList(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.resetKey]);
 
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Escape" && live.size) {
+      e.preventDefault();
+      setSelection(new Set());
+    } else if (e.key === "a" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      setSelection(new Set(rows.map(rowKey)));
+    }
+  };
+
+  // One right-click menu for the whole list; the row under the pointer decides what it covers.
+  const menuFaces = menuRow ? targetsFor(menuRow) : [];
+
   return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto" role="list">
-      <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map((item) => {
-          const row = rows[item.index];
-          return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {live.size > 1 && <BulkBar faces={selectedFaces} rows={live.size} onClear={() => setSelection(new Set())} />}
+      <ContextMenu
+        onOpenChange={(open) => {
+          if (!open) setMenuRow(null);
+        }}
+      >
+        <ContextMenuTrigger
+          render={
             <div
-              key={item.key}
-              data-index={item.index}
-              ref={virtualizer.measureElement}
-              className="absolute top-0 left-0 w-full"
-              style={{ transform: `translateY(${item.start}px)` }}
+              ref={scrollRef}
+              className="min-h-0 flex-1 overflow-y-auto outline-none"
+              role="list"
+              aria-label="Fonts"
+              tabIndex={0}
+              onKeyDown={onKeyDown}
+              onContextMenuCapture={(e) => {
+                const el = (e.target as HTMLElement).closest<HTMLElement>("[data-row-key]");
+                const key = el?.dataset.rowKey ?? null;
+                setMenuRow(key);
+                // Right-clicking outside the selection selects that row, like Finder.
+                if (key && !live.has(key)) {
+                  setSelection(new Set([key]));
+                  const i = rows.findIndex((r) => rowKey(r) === key);
+                  if (i >= 0) {
+                    anchor.current = i;
+                    const row = rows[i];
+                    props.onSelect(row.kind === "family" ? row.family.representative.primary.id : row.face.primary.id);
+                  }
+                }
+              }}
+            />
+          }
+        >
+          <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+            {virtualizer.getVirtualItems().map((item) => {
+              const row = rows[item.index];
+              return (
+                <div
+                  key={item.key}
+                  data-index={item.index}
+                  data-row-key={rowKey(row)}
+                  ref={virtualizer.measureElement}
+                  className="absolute top-0 left-0 w-full"
+                  style={{ transform: `translateY(${item.start}px)` }}
+                >
+                  {row.kind === "family" ? (
+                    <FamilyRow {...props} actions={actions} rowIndex={item.index} family={row.family} />
+                  ) : (
+                    <FaceRow {...props} actions={actions} rowIndex={item.index} face={row.face} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="max-h-[min(28rem,var(--available-height))] min-w-56">
+          {menuFaces.length ? <TagMenu faces={menuFaces} index={index} /> : <ContextMenuItem disabled>Right-click a font to tag it</ContextMenuItem>}
+        </ContextMenuContent>
+      </ContextMenu>
+    </div>
+  );
+}
+
+/** Tags as ticks in the right-click menu. A tag only some of the fonts have says so. */
+function TagMenu({ faces, index }: { faces: Face[]; index: TagIndex }) {
+  const coverage = tagCoverage(faces, index);
+  const what = faces.length === 1 ? "this style" : `${faces.length.toLocaleString()} styles`;
+  return (
+    <>
+      <ContextMenuGroup>
+        <ContextMenuLabel>Tags for {what}</ContextMenuLabel>
+        {index.ordered.map((node) => {
+          const n = coverage.get(node.tag.id) ?? 0;
+          return (
+            <ContextMenuCheckboxItem
+              key={node.tag.id}
+              checked={n === faces.length}
+              closeOnClick={false}
+              onCheckedChange={() => applyTags([node.tag.id], faces, n < faces.length)}
+              style={{ paddingLeft: 6 + node.depth * 14 }}
+              title={node.tag.name}
             >
-              {row.kind === "family" ? <FamilyRow {...props} family={row.family} /> : <FaceRow {...props} face={row.face} />}
-            </div>
+              <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
+              <span className="truncate">{node.label}</span>
+              {n > 0 && n < faces.length && (
+                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                  {n}/{faces.length}
+                </span>
+              )}
+            </ContextMenuCheckboxItem>
           );
         })}
-      </div>
+      </ContextMenuGroup>
+      {index.ordered.length > 0 && <ContextMenuSeparator />}
+      <ContextMenuItem onClick={() => openTagDialog({ kind: "create", faces })}>
+        <Icon name="new_label" size={16} />
+        New tag…
+      </ContextMenuItem>
+    </>
+  );
+}
+
+/** Shown while several rows are selected: tag them all at once. */
+function BulkBar({ faces, rows, onClear }: { faces: Face[]; rows: number; onClear: () => void }) {
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-4 py-1.5 text-sm" role="region" aria-label="Selection">
+      <span className="flex-1" aria-live="polite">
+        {rows.toLocaleString()} rows selected · {faces.length.toLocaleString()} {faces.length === 1 ? "style" : "styles"}
+      </span>
+      <Popover>
+        <PopoverTrigger render={<Button variant="outline" size="sm" />}>
+          <Icon name="sell" size={16} />
+          Tags…
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-80">
+          <TagPicker faces={faces} />
+        </PopoverContent>
+      </Popover>
+      <Button variant="ghost" size="sm" onClick={onClear}>
+        Clear
+      </Button>
     </div>
+  );
+}
+
+/** The tag button on a row (shown on hover or focus): tags the row, or the selection it's in. */
+function RowTagButton({ rowKey: key, actions, label }: { rowKey: string; actions: RowActions; label: string }) {
+  const [open, setOpen] = useState(false);
+  const faces = open ? actions.targetsFor(key) : [];
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Tags for ${label}`}
+            onClick={(e) => e.stopPropagation()}
+            className={cn("opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100", open && "opacity-100")}
+          />
+        }
+      >
+        <Icon name="sell" size={16} />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80" onClick={(e) => e.stopPropagation()}>
+        {open && <TagPicker faces={faces} />}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -111,7 +341,7 @@ function Preview({ font, text, size }: { font: FontSummary; text: string; size: 
 }
 
 const rowClass = (selected: boolean) =>
-  cn("cursor-default border-b px-4 pt-2.5 pb-3", selected ? "bg-accent" : "hover:bg-muted/50");
+  cn("group/row cursor-default border-b px-4 pt-2.5 pb-3", selected ? "bg-accent" : "hover:bg-muted/50");
 
 /** "×3" badge for a face that exists as several files; hover lists where. */
 function CopiesBadge({ face }: { face: Face }) {
@@ -131,15 +361,22 @@ function CopiesBadge({ face }: { face: Face }) {
   );
 }
 
-function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, selectedId, busy, onSelect, onActivate }: Props & { family: Family }) {
+type RowProps = Props & { actions: RowActions; rowIndex: number };
+
+/** Selected rows: the multi-selection when there is one, otherwise the row being shown in detail. */
+function isSelected(key: string, actions: RowActions, fallback: boolean) {
+  return actions.selection.size > 1 ? actions.selection.has(key) : fallback;
+}
+
+function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, selectedId, busy, locations, onActivate, actions, rowIndex }: RowProps & { family: Family }) {
   const isOpen = expanded.has(family.name);
   const duplicates = family.faces.some((f) => f.copies.length > 1);
+  const key = `f:${family.name}`;
+  const selected = isSelected(key, actions, family.faces.some((face) => face.copies.some((c) => c.id === selectedId)));
+  const copies = useMemo(() => family.faces.flatMap((f) => f.copies), [family]);
   return (
-    <div
-      role="listitem"
-      className={rowClass(family.faces.some((face) => face.copies.some((c) => c.id === selectedId)))}
-      onClick={() => onSelect(family.representative.primary.id)}
-    >
+    <div role="listitem" className={rowClass(selected)} onClick={(e) => actions.onRowClick(e, rowIndex, family.representative.primary.id)}>
+      {selected && actions.selection.size > 1 && <span className="sr-only">Selected.</span>}
       <div className="mb-1 flex items-center gap-2">
         <Button
           variant="ghost"
@@ -154,12 +391,17 @@ function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, sele
           <Icon name="chevron_right" size={18} className={cn("transition-transform", isOpen && "rotate-90")} />
         </Button>
         <span className="truncate text-sm font-semibold">{family.name}</span>
-        <span className="flex flex-1 items-center gap-1.5 text-xs text-muted-foreground">
-          {family.faces.length} {family.faces.length === 1 ? "style" : "styles"}
+        <LocationDots copies={copies} locations={locations} />
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">
+          <span className="shrink-0">
+            {family.faces.length} {family.faces.length === 1 ? "style" : "styles"}
+          </span>
           {family.faces.some((f) => f.primary.variable) && <Badge variant="outline">Variable</Badge>}
           {family.faces.some((f) => f.primary.monospace) && <Badge variant="outline">Mono</Badge>}
           {duplicates && <Badge variant="outline">Duplicates</Badge>}
+          <TagChips faces={family.faces} index={actions.index} />
         </span>
+        <RowTagButton rowKey={key} actions={actions} label={family.name} />
         {family.switchable.length === 0 ? (
           <InstalledBadge />
         ) : (
@@ -179,24 +421,30 @@ function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, sele
   );
 }
 
-function FaceRow({ face, previewText, size, selectedId, busy, onSelect, onActivate }: Props & { face: Face }) {
+function FaceRow({ face, previewText, size, selectedId, busy, locations, onActivate, actions, rowIndex }: RowProps & { face: Face }) {
   const font = face.primary;
+  const key = `s:${face.key}`;
+  const selected = isSelected(key, actions, face.copies.some((c) => c.id === selectedId));
   return (
-    <div
-      role="listitem"
-      className={cn(rowClass(face.copies.some((c) => c.id === selectedId)), "pl-12")}
-      onClick={() => onSelect(font.id)}
-    >
+    <div role="listitem" className={cn(rowClass(selected), "pl-12")} onClick={(e) => actions.onRowClick(e, rowIndex, font.id)}>
+      {selected && actions.selection.size > 1 && <span className="sr-only">Selected.</span>}
       <div className="mb-1 flex items-center gap-2">
         <span className="truncate text-sm font-medium">
           {font.subfamily}
           {font.variable && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(Variable)</span>}
         </span>
-        <span className="flex flex-1 items-center gap-1.5 font-mono text-xs text-muted-foreground">
-          {font.weight}
-          {font.italic ? " · italic" : ""}
+        <LocationDots copies={face.copies} locations={locations} />
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden font-mono text-xs text-muted-foreground">
+          <span className="shrink-0">
+            {font.weight}
+            {font.italic ? " · italic" : ""}
+          </span>
           <CopiesBadge face={face} />
+          <span className="font-sans">
+            <TagChips faces={[face]} index={actions.index} />
+          </span>
         </span>
+        <RowTagButton rowKey={key} actions={actions} label={`${font.family} ${font.subfamily}`} />
         {face.installed ? (
           <InstalledBadge />
         ) : (
