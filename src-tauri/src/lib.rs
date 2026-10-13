@@ -12,6 +12,7 @@ mod scanner;
 mod services;
 mod settings;
 mod sfnt;
+mod sync;
 mod tags;
 mod window;
 
@@ -93,7 +94,9 @@ impl AppState {
     pub fn write<T>(&self, f: impl FnOnce(&mut Connection) -> AppResult<T>) -> AppResult<T> {
         let mut conn = self.conn()?;
         let _gate = db::UiWriteGate::raise();
-        f(&mut conn)
+        let out = f(&mut conn);
+        sync::note_local_write();
+        out
     }
 }
 
@@ -115,6 +118,7 @@ pub fn run() {
             tags::ensure_schema(&conn)?;
             settings::ensure_schema(&conn)?;
             activation::ensure_schema(&conn)?;
+            sync::ensure_schema(&conn)?;
             // The macOS font folders and the service folders are always in the library; the UI
             // scans them at launch.
             db::ensure_system_folders(&mut conn)?;
@@ -143,6 +147,7 @@ pub fn run() {
                 launch_checked: tokio::sync::watch::channel(false).0,
             });
             commands::restart_purchase_watcher(app.handle());
+            sync::start(app.handle());
             let handle = app.handle().clone();
             std::thread::spawn(move || restore_at_launch(&handle, app_settings.restore_on_launch));
             if app_settings.tag_backups {
@@ -211,6 +216,14 @@ pub fn run() {
             tags::commands::tags_export,
             tags::commands::tags_export_finder,
             tags::commands::tags_export_font_book,
+            sync::commands::sync_status,
+            sync::commands::sync_set_folder,
+            sync::commands::sync_turn_off,
+            sync::commands::sync_set_device,
+            sync::commands::sync_now,
+            sync::commands::sync_poke,
+            sync::commands::sync_exceptions,
+            sync::commands::sync_set_exception,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Fontface");
