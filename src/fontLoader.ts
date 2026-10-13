@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { FontSummary } from "./api";
+import { darkPaletteCss, darkPaletteOverride } from "./colorPalette";
 
 // Previews load on demand. Each face becomes a page-only FontFace, so previews never depend
 // on whether the font is turned on system-wide.
@@ -13,6 +14,9 @@ import type { FontSummary } from "./api";
 //   request first. A queued request whose row has scrolled away is dropped.
 // - The app answers 503 for an online-only cloud file (it never downloads one for a preview)
 //   and 413 for a very large file. Those show as their own states instead of an error.
+// - A color font whose palette is all dark (Material Icons Two Tone) gets a light palette for
+//   the dark theme, used by elements marked `data-face` (see colorPalette.ts). Only for files
+//   fetched from the app; installed fonts loaded by name aren't read here.
 
 export type FaceState = "loading" | "ready" | "error" | "cloud" | "too-large";
 type Outcome = Exclude<FaceState, "loading"> | "dropped";
@@ -59,13 +63,23 @@ function enqueue(name: string, task: () => Promise<Outcome>): Promise<Outcome> {
   });
 }
 
+/** Holds the dark-theme palettes of faces that need one. */
+let paletteSheet: HTMLStyleElement | null = null;
+
 async function fromApp(font: FontSummary, name: string): Promise<Outcome> {
   const res = await fetch(`${convertFileSrc(String(font.id), "ff")}?v=${version(font)}`);
   if (res.status === 503) return "cloud";
   if (res.status === 413) return "too-large";
   if (!res.ok) return "error";
-  const face = await new FontFace(name, await res.arrayBuffer()).load();
+  const data = await res.arrayBuffer();
+  // Read before the FontFace takes the bytes.
+  const darkPalette = darkPaletteOverride(data);
+  const face = await new FontFace(name, data).load();
   document.fonts.add(face);
+  if (darkPalette) {
+    paletteSheet ??= document.head.appendChild(document.createElement("style"));
+    paletteSheet.append(darkPaletteCss(name, darkPalette));
+  }
   loaded.add(name);
   return "ready";
 }

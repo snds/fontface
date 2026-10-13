@@ -101,6 +101,9 @@ interface Props {
   state: CharactersState;
   /** CSS font-family of the loaded face. */
   fontFamily: string;
+  /** The page-only face name (fontLoader's `faceName`): marks the grid, so a color font with an
+   *  all-dark palette draws light in the dark theme (colorPalette.ts). */
+  face?: string;
   fontVariationSettings?: string;
   /** Whether the face has loaded: cells stay hidden (and out of the Tab order) while it loads,
    *  and aren't shown at all if it can't load. */
@@ -109,7 +112,7 @@ interface Props {
 
 /** Memoized: the detail panel re-renders on every keystroke in the preview field, and a block
  *  can hold tens of thousands of cells. */
-export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, fontVariationSettings, fontState }: Props) {
+export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, face, fontVariationSettings, fontState }: Props) {
   if (state.status === "loading") return <p className="text-xs text-muted-foreground">Reading characters…</p>;
   if (state.status === "error") return <p className="text-xs text-muted-foreground italic">{state.message}</p>;
   if (fontState !== "loading" && fontState !== "ready") {
@@ -121,17 +124,20 @@ export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, fo
       </div>
     );
   }
-  return <Grid data={state.data} fontFamily={fontFamily} fontVariationSettings={fontVariationSettings} ready={fontState === "ready"} />;
+  return (
+    <Grid data={state.data} fontFamily={fontFamily} face={face} fontVariationSettings={fontVariationSettings} ready={fontState === "ready"} />
+  );
 });
 
 interface GridProps {
   data: FontCharacters;
   fontFamily: string;
+  face?: string;
   fontVariationSettings?: string;
   ready: boolean;
 }
 
-function Grid({ data, fontFamily, fontVariationSettings, ready }: GridProps) {
+function Grid({ data, fontFamily, face, fontVariationSettings, ready }: GridProps) {
   const dominant = useMemo(() => [...data.blocks].sort((a, b) => count(b) - count(a))[0]?.name ?? "", [data]);
   const [blockName, setBlockName] = useState(dominant);
   const [showAll, setShowAll] = useState(false);
@@ -212,6 +218,7 @@ function Grid({ data, fontFamily, fontVariationSettings, ready }: GridProps) {
       <div
         ref={gridRef}
         role="group"
+        data-face={face}
         aria-label={`Characters in ${block.name}. Arrow keys move; Enter copies.`}
         // Hidden while the face loads: out of the Tab order too, so focus can't land on it.
         inert={!ready}

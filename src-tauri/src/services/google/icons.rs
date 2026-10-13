@@ -13,8 +13,12 @@
 //!   Symbols Outlined, whose variable font covers all of those weights. Google publishes no
 //!   desktop files for it on their own, so showing it would only offer a second copy of
 //!   Outlined under another name. Each icon font shows once, as the file you get.
-//! - **Updates:** like other Google families, by Fontsource's `lastModified`. Each file's ETag
-//!   is recorded too, so an update downloads only files that changed (see `google::prepare`).
+//! - **Updates:** by the files themselves, not Fontsource's `lastModified`. This repository is
+//!   pushed on its own schedule (Material Symbols weekly, often a day or more after Fontsource's
+//!   date moves; Material Icons' files no longer change, though its date still does). Each file's
+//!   ETag is recorded at install, and each catalog refresh asks whether it changed with a HEAD
+//!   request (see `google::check_icon_files`). Until that's known, the date decides. An update
+//!   downloads only files that changed (see `google::prepare`).
 //!
 //! Fontsource's own copies are web subsets, so they're never used.
 

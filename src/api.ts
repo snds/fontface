@@ -199,6 +199,11 @@ export interface GoogleInstallResult {
   files: string[];
   /** An earlier copy was replaced. */
   updated: boolean;
+  /**
+   * An update in which no font file had changed upstream: the fonts were left in place, still on
+   * as they were, and only the install details were refreshed. Nothing needs turning back on.
+   */
+  unchanged: boolean;
   /** For an update: file names that were on before. */
   wasActiveFiles: string[];
   /** For an update: every font file name in the replaced copy. */

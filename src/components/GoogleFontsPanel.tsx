@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
-import { api, type FontSummary, type GoogleCatalog, type GoogleFamily } from "@/api";
+import { api, type FontSummary, type GoogleCatalog, type GoogleFamily, type GoogleInstallResult } from "@/api";
 import { faceName, useFontFace } from "@/fontLoader";
 import { isSampleKind, usePreviewProfile, useProfileWait } from "@/previewProfiles";
 import { PreviewText } from "./PreviewText";
@@ -23,7 +23,8 @@ interface Props {
   version: number;
   /** "Update all" is running (owned by the app). */
   updatingAll: boolean;
-  onInstall: (id: string) => Promise<void>;
+  /** Downloads or updates a family. `unchanged` in the result: an update found nothing new. */
+  onInstall: (id: string) => Promise<GoogleInstallResult>;
   onRemove: (id: string) => Promise<void>;
   onUpdateAll: (families: GoogleFamily[]) => Promise<void>;
 }
@@ -141,10 +142,10 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, category, show]);
 
-  const run = async (fam: GoogleFamily, action: (id: string) => Promise<void>, done: string) => {
+  /** Runs an action on a family and shows the message it resolves with, or its error. */
+  const run = async (fam: GoogleFamily, action: () => Promise<string>) => {
     try {
-      await action(fam.id);
-      toast.success(`${fam.family} ${done}`);
+      toast.success(await action());
     } catch (e) {
       toast.error(fam.family, { description: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -268,7 +269,15 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
                       Not downloadable here<span className="sr-only">. {fam.unavailable}</span>
                     </span>
                   ) : fam.updateAvailable ? (
-                    <Button size="sm" aria-label={`Update ${fam.family}`} onClick={() => run(fam, onInstall, "updated")}>
+                    <Button
+                      size="sm"
+                      aria-label={`Update ${fam.family}`}
+                      onClick={() =>
+                        run(fam, async () =>
+                          (await onInstall(fam.id)).unchanged ? `${fam.family} is already up to date` : `${fam.family} updated`,
+                        )
+                      }
+                    >
                       <Icon name="update" size={16} />
                       Update
                     </Button>
@@ -283,7 +292,7 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
                         variant="ghost"
                         aria-label={`Remove ${fam.family}`}
                         title="Remove (turns it off and deletes the downloaded files)"
-                        onClick={() => run(fam, onRemove, "removed")}
+                        onClick={() => run(fam, () => onRemove(fam.id).then(() => `${fam.family} removed`))}
                       >
                         <Icon name="delete" size={16} />
                       </Button>
@@ -293,7 +302,7 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
                       size="sm"
                       variant="outline"
                       aria-label={`Get ${fam.family}`}
-                      onClick={() => run(fam, onInstall, "downloaded and turned on")}
+                      onClick={() => run(fam, () => onInstall(fam.id).then(() => `${fam.family} downloaded and turned on`))}
                     >
                       <Icon name="download" size={16} />
                       Get

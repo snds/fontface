@@ -678,8 +678,8 @@ fn google_live_install() {
 /// Live: downloads Google's Material Icons from google/material-design-icons into a temp data
 /// folder (no catalog call), with its license. Checks the font parses under its own family name,
 /// that its library preview draws icons (the scanner works previews out the same way), and that
-/// it has the icons the Google Fonts page previews icon families with. Then reinstalls it: the
-/// file hasn't changed upstream, so the downloaded copy is reused.
+/// it has the icons the Google Fonts page previews icon families with. Then updates it: the
+/// file hasn't changed upstream, so the downloaded copy is reused and left in place.
 ///   cargo test google_icons_live -- --ignored --nocapture
 /// With FONTFACE_LIVE_ALL_ICONS=1 it does every family in the icon table (about 40 MB).
 #[test]
@@ -745,7 +745,8 @@ fn google_icons_live_install() {
         }
         let again = google::prepare(&data, &family).unwrap();
         assert_eq!(again.reused, files, "{}: unchanged upstream, so reused", icon.id);
-        google::commit(again).unwrap();
+        assert!(again.unchanged(), "{}", icon.id);
+        assert_eq!(google::refresh(again).unwrap(), dir, "{}: left in place", icon.id);
     }
     let root = std::fs::read_dir(data.join("Services/Google Fonts")).unwrap();
     let leftovers: Vec<_> = root.flatten().filter(|e| e.file_name().to_string_lossy().starts_with('.')).collect();

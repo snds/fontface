@@ -246,7 +246,7 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
           <Separator />
           <section>
             <SectionTitle>Characters</SectionTitle>
-            <CharacterGrid state={characters} fontFamily={fontFamily} fontVariationSettings={variation || undefined} fontState={state} />
+            <CharacterGrid state={characters} fontFamily={fontFamily} face={pageFace} fontVariationSettings={variation || undefined} fontState={state} />
           </section>
 
           <Separator />

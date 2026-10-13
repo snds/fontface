@@ -505,12 +505,12 @@ export default function App() {
   const googleFolder = folders.find((f) => f.id === services.find((s) => s.id === "google")?.folderId);
 
   /** Runs a Google Fonts operation with its busy state, then has the page reload. */
-  const googleOp = async (id: string, op: () => Promise<void>) => {
+  const googleOp = async <T,>(id: string, op: () => Promise<T>): Promise<T> => {
     if (googleBusyRef.current.has(id)) throw new Error("Already working on that family");
     googleBusyRef.current.add(id);
     setGoogleBusy(new Set(googleBusyRef.current));
     try {
-      await op();
+      return await op();
     } finally {
       googleBusyRef.current.delete(id);
       setGoogleBusy(new Set(googleBusyRef.current));
@@ -698,12 +698,15 @@ export default function App() {
    * Downloads a Google Fonts family, adds it to the library, and turns it on. An update turns
    * back on exactly what was on before (nothing, if the family had been turned off), counting a
    * renamed file (e.g. statics rebuilt as a variable font) as the file it replaced, and the same
-   * way as before: until logout, or to stay. A first download uses the activation mode. Throws
-   * with a plain explanation if the family didn't fully reach the library or didn't turn on.
+   * way as before: until logout, or to stay. A first download uses the activation mode. An update
+   * in which nothing changed upstream left the fonts in place and on (`unchanged`): there's
+   * nothing to add or turn on. Throws with a plain explanation if the family didn't fully reach
+   * the library or didn't turn on.
    */
   const installGoogle = (id: string) =>
     googleOp(id, async () => {
       const result = await api.googleInstall(id);
+      if (result.unchanged) return result;
       // An update turns back on exactly what was on before; a renamed file (e.g. statics rebuilt
       // as a variable font) counts as the file it replaced.
       const wasOn = new Set(result.wasActiveFiles);
@@ -717,26 +720,33 @@ export default function App() {
         (name) => !result.updated || wasOn.has(name) || (renamedAway && !old.has(name)),
         (name) => (!result.updated ? null : temporary.has(name) ? "temporary" : "persistent"),
       );
+      return result;
     });
 
   /** Updates families one at a time, skipping any already being worked on. */
   const updateAllGoogle = async (families: GoogleFamily[]) => {
     if (googleUpdatingAll) return;
     setGoogleUpdatingAll(true);
-    let done = 0;
+    let updated = 0;
+    // Families in which nothing had changed upstream (left as they were).
+    const current: string[] = [];
     try {
       for (const fam of families) {
         if (googleBusyRef.current.has(fam.id)) continue;
         try {
-          await installGoogle(fam.id);
-          done++;
+          if ((await installGoogle(fam.id)).unchanged) current.push(fam.family);
+          else updated++;
         } catch (e) {
           toast.error(fam.family, { description: e instanceof Error ? e.message : String(e) });
         }
       }
     } finally {
       setGoogleUpdatingAll(false);
-      if (done) toast.success(`Updated ${done} ${done === 1 ? "family" : "families"}`);
+      const n = current.length;
+      const were = n === 1 ? "was" : "were";
+      if (updated) toast.success(`Updated ${updated} ${updated === 1 ? "family" : "families"}${n ? `; ${n} ${were} already up to date` : ""}`);
+      else if (n === 1) toast.success(`${current[0]} is already up to date`);
+      else if (n) toast.success(`${n} families were already up to date`);
     }
   };
 

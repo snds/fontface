@@ -12,11 +12,17 @@
 //! - **Installed state:** each family folder holds a hidden `.fontface.json` with the catalog id,
 //!   where the files came from, the `lastModified` it was installed at (for update detection),
 //!   and each font file's ETag and size (so an update downloads only files that changed).
+//! - **Updates:** a family has one when Fontsource's `lastModified` is newer than the one it was
+//!   installed at. Icon families are the exception: their files come from another repository on
+//!   its own schedule, so each catalog refresh asks whether the files themselves changed (see
+//!   `check_icon_files`).
 //!
 //! Installs happen in two steps. `prepare` downloads and checks everything into a hidden
 //! temporary folder; `commit` swaps it into place, keeping the old copy until the new one is in
-//! place and restoring it if anything fails. Every font here is open-licensed (OFL, Apache 2.0 or
-//! the Ubuntu Font Licence), which allows downloading and installing them.
+//! place and restoring it if anything fails. An update in which no font file changed upstream
+//! skips the swap: `refresh` only rewrites the license and install details, so the fonts stay on.
+//! Every font here is open-licensed (OFL, Apache 2.0 or the Ubuntu Font Licence), which allows
+//! downloading and installing them.
 
 pub mod icons;
 
@@ -51,6 +57,8 @@ const LICENSE_FILES: [&str; 3] = ["OFL.txt", "LICENSE.txt", "UFL.txt"];
 
 /// One catalog fetch at a time.
 static CATALOG_FETCH: Mutex<()> = Mutex::new(());
+/// One change to the latest-ETag file at a time (see `record_latest`).
+static LATEST_WRITE: Mutex<()> = Mutex::new(());
 /// When the last fetch failed (seconds since the epoch).
 static LAST_FAILURE: AtomicU64 = AtomicU64::new(0);
 
@@ -108,6 +116,9 @@ fn read_sidecar(dir: &Path) -> Option<Sidecar> {
 pub struct Installed {
     pub dir: String,
     pub last_modified: String,
+    /// Per font file, the ETag it was downloaded with (from `.fontface.json`).
+    #[serde(skip)]
+    upstream: BTreeMap<String, Upstream>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,6 +148,85 @@ fn now() -> u64 {
 
 fn cache_path(data_dir: &Path) -> PathBuf {
     super::services_root(data_dir).join(".cache").join("google-catalog.json")
+}
+
+fn latest_path(data_dir: &Path) -> PathBuf {
+    super::services_root(data_dir).join(".cache").join("google-latest-etags.json")
+}
+
+/// The newest ETag the server gave for each icon font file, by URL: from the check on each
+/// catalog refresh (`check_icon_files`) and from downloads (`prepare`). Compared with the ETag an
+/// install recorded, it says whether that file changed upstream since.
+fn read_latest(data_dir: &Path) -> BTreeMap<String, String> {
+    let path = latest_path(data_dir);
+    if std::fs::metadata(&path).map_or(true, |m| m.len() > MAX_SMALL_BYTES) {
+        return BTreeMap::new();
+    }
+    std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Saves what the server just said about files: `Some(tag)` is a file's current ETag; `None`
+/// means it isn't known (the server sent none, or the file is gone), so the entry goes. Best
+/// effort: if it can't be saved, the catalog's date decides about updates instead.
+fn record_latest(data_dir: &Path, answers: Vec<(String, Option<String>)>) {
+    if answers.is_empty() {
+        return;
+    }
+    let _guard = LATEST_WRITE.lock().unwrap_or_else(|p| p.into_inner());
+    let mut latest = read_latest(data_dir);
+    for (url, tag) in answers {
+        match tag {
+            Some(tag) => latest.insert(url, tag),
+            None => latest.remove(&url),
+        };
+    }
+    let path = latest_path(data_dir);
+    let tmp = path.with_extension("tmp");
+    let saved = std::fs::create_dir_all(path.parent().expect("cache file has a parent"))
+        .and_then(|_| std::fs::write(&tmp, serde_json::to_vec(&latest).unwrap_or_default()))
+        .and_then(|_| std::fs::rename(&tmp, &path));
+    if saved.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Asks whether each installed icon family's font files changed upstream, and records the
+/// answers (`record_latest`). Icon fonts come from google/material-design-icons, not from the
+/// repository Fontsource's `lastModified` follows: Material Symbols is pushed there weekly, often
+/// a day or more after Fontsource's date moves, and Material Icons' files no longer change though
+/// its date still does. So the files decide. Each file is asked about with a HEAD request
+/// carrying the ETag it was downloaded with; nothing is downloaded, and the answer is usually a
+/// small "not modified". At most one request per icon family (8). Stops at the first failure.
+fn check_icon_files(data_dir: &Path) {
+    let (by_id, _) = installed_index(data_dir);
+    let mut answers = Vec::new();
+    'families: for icon in icons::FAMILIES {
+        let Some(installed) = by_id.get(icon.id) else { continue };
+        for (name, url) in icons::source(icon).fonts {
+            let Some(recorded) = installed.upstream.get(&name) else { continue };
+            match super::current_etag(&url, &recorded.etag) {
+                Ok(tag) => answers.push((url, tag)),
+                Err(Fetch::NotFound) => answers.push((url, None)),
+                Err(Fetch::Failed(_)) => break 'families,
+            }
+        }
+    }
+    record_latest(data_dir, answers);
+}
+
+/// Whether an installed icon family's files changed upstream: the ETag each was downloaded with,
+/// against the newest one the server gave (`read_latest`). None when that isn't known for every
+/// file (no ETag recorded, or not asked yet); the catalog's date decides then.
+fn icon_changed(icon: &icons::IconFamily, recorded: &BTreeMap<String, Upstream>, latest: &BTreeMap<String, String>) -> Option<bool> {
+    let mut known = true;
+    for (name, url) in icons::source(icon).fonts {
+        match (recorded.get(&name), latest.get(&url)) {
+            (Some(mine), Some(now)) if mine.etag != *now => return Some(true),
+            (Some(_), Some(_)) => {}
+            _ => known = false,
+        }
+    }
+    known.then_some(false)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -197,7 +287,8 @@ fn installed_index(data_dir: &Path) -> (HashMap<String, Installed>, HashMap<Stri
         }
         let dir = entry.path();
         if let Some(meta) = read_sidecar(&dir) {
-            let item = Installed { dir: dir.to_string_lossy().into_owned(), last_modified: meta.last_modified };
+            let item =
+                Installed { dir: dir.to_string_lossy().into_owned(), last_modified: meta.last_modified, upstream: meta.upstream };
             if let Some(repo) = meta.source.strip_prefix("google/fonts:").and_then(|s| s.rsplit('/').next()) {
                 by_repo.insert(repo.to_string(), item.clone());
             }
@@ -208,8 +299,9 @@ fn installed_index(data_dir: &Path) -> (HashMap<String, Installed>, HashMap<Stri
 }
 
 /// The catalog with install state. Refreshed from the network at most once a day unless
-/// `refresh` is set. If the network fails, the saved copy is used (marked stale), and automatic
-/// refreshes pause for a while.
+/// `refresh` is set; each refresh also asks whether installed icon families' files changed
+/// (`check_icon_files`). If the network fails, the saved copy is used (marked stale), and
+/// automatic refreshes pause for a while.
 pub fn catalog(data_dir: &Path, refresh: bool) -> AppResult<Catalog> {
     let usable = |c: &CachedCatalog| {
         let fresh = now().saturating_sub(c.fetched_at) < CATALOG_MAX_AGE_SECS;
@@ -236,7 +328,10 @@ pub fn catalog(data_dir: &Path, refresh: bool) -> AppResult<Catalog> {
                 _ => CATALOG_FETCH.lock().unwrap_or_else(|p| p.into_inner()),
             };
             match fetch_catalog(data_dir) {
-                Ok(c) => (c, false),
+                Ok(c) => {
+                    check_icon_files(data_dir);
+                    (c, false)
+                }
                 Err(e) => {
                     LAST_FAILURE.store(now(), Ordering::Relaxed);
                     match cached {
@@ -272,11 +367,17 @@ fn build(data_dir: &Path, data: CachedCatalog, stale: bool) -> Catalog {
     }
 
     let (by_id, by_repo) = installed_index(data_dir);
+    let latest = read_latest(data_dir);
     let mut families: Vec<CatalogEntry> = by_slug
         .into_iter()
         .map(|(key, family)| {
             let installed = by_id.get(&family.id).or_else(|| by_repo.get(&key)).cloned();
-            let update_available = installed.as_ref().is_some_and(|i| i.last_modified < family.last_modified);
+            // Icon families: whether their files changed, when that's known (see `check_icon_files`).
+            let update_available = installed.as_ref().is_some_and(|i| {
+                icons::lookup(&family.id)
+                    .and_then(|icon| icon_changed(icon, &i.upstream, &latest))
+                    .unwrap_or(i.last_modified < family.last_modified)
+            });
             let unavailable = unavailable_reason(&family);
             CatalogEntry { family, installed, update_available, unavailable }
         })
@@ -399,6 +500,17 @@ pub struct Prepared {
     pub reused: Vec<String>,
 }
 
+impl Prepared {
+    /// An update in which nothing changed upstream: every font file was reused from the copy
+    /// being replaced, and that copy has no other font files. `refresh` then keeps it in place.
+    pub fn unchanged(&self) -> bool {
+        self.replaces.is_some()
+            && !self.files.is_empty()
+            && self.files.iter().all(|f| self.reused.contains(f))
+            && self.old_files.iter().all(|f| self.files.contains(f))
+    }
+}
+
 impl Drop for Prepared {
     fn drop(&mut self) {
         // Committed: tmp is empty (nothing to do). Abandoned or failed: clean it up.
@@ -460,6 +572,11 @@ pub fn prepare(data_dir: &Path, family: &CatalogFamily) -> AppResult<Prepared> {
         if let Some(tag) = got.upstream {
             upstream.insert(name.clone(), tag);
         }
+    }
+    // What the server just said about each icon file also answers "has it changed?" for the
+    // catalog (see `check_icon_files`), even if this install goes no further.
+    if icons::lookup(&family.id).is_some() {
+        record_latest(data_dir, source.fonts.iter().map(|(name, url)| (url.clone(), upstream.get(name).map(|u| u.etag.clone()))).collect());
     }
 
     // The license travels with the fonts. It's required: an install without it is refused.
@@ -555,6 +672,33 @@ pub fn commit(mut prepared: Prepared) -> AppResult<String> {
     if had_old {
         let _ = std::fs::remove_dir_all(&backup);
     }
+    let real = std::fs::canonicalize(&dest).unwrap_or(dest);
+    Ok(real.to_string_lossy().into_owned())
+}
+
+/// Step 2 for an update in which nothing changed upstream (`Prepared::unchanged`): the family's
+/// folder stays where it is, so its fonts stay on and apps using them aren't disturbed. Only its
+/// license and install details (with the catalog's new date) are replaced. The details go last:
+/// if this stops partway, the old ones remain and the update is offered again. Returns the
+/// family's folder (real path), like `commit`.
+pub fn refresh(prepared: Prepared) -> AppResult<String> {
+    let dest = match &prepared.replaces {
+        Some(dir) if prepared.unchanged() => dir.clone(),
+        _ => return Err(AppError::Other(format!("{} changed, so it has to be swapped in", prepared.family.family))),
+    };
+    let put = |name: &str| {
+        std::fs::rename(prepared.tmp.join(name), dest.join(name)).map_err(|e| AppError::Other(format!("Couldn't update {name}: {e}")))
+    };
+    let (new, gone): (Vec<&str>, Vec<&str>) = LICENSE_FILES.into_iter().partition(|l| prepared.tmp.join(l).is_file());
+    for license in new {
+        put(license)?;
+    }
+    // A license now saved under another name (say OFL.txt became LICENSE.txt): the old one goes.
+    for license in gone {
+        let _ = std::fs::remove_file(dest.join(license));
+    }
+    put(SIDECAR)?;
+    // The reused font files left in the temporary folder go with it (Drop).
     let real = std::fs::canonicalize(&dest).unwrap_or(dest);
     Ok(real.to_string_lossy().into_owned())
 }
@@ -784,7 +928,7 @@ mod tests {
         // First download: the font and the license, saved as LICENSE.txt, with its ETag.
         let prepared = prepare(&data, &family).unwrap();
         assert_eq!(prepared.files, vec![name]);
-        assert!(prepared.replaces.is_none() && prepared.reused.is_empty());
+        assert!(prepared.replaces.is_none() && prepared.reused.is_empty() && !prepared.unchanged());
         let dir = commit(prepared).unwrap();
         assert!(dir.ends_with("/Material Icons"), "{dir}");
         assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v1);
@@ -794,33 +938,51 @@ mod tests {
         assert_eq!((saved.id.as_str(), saved.source.as_str(), saved.last_modified.as_str()), ("material-icons", "google/material-design-icons", "2025-09-17"));
         assert_eq!(saved.upstream[name], Upstream { etag: "\"v1\"".into(), bytes: v1.len() as u64 });
 
-        // The catalog sees it as installed, and offers an update when Fontsource's date moves on.
+        // The catalog sees it as installed. The download told it the file's current ETag, so the
+        // file decides about updates: Fontsource's date moving on offers nothing.
         let listing = |last_modified: &str| {
             let families = vec![listed("material-icons", "icons", last_modified)];
             build(&data, CachedCatalog { fetched_at: now(), families }, false).families.remove(0)
         };
         let entry = listing("2025-09-17");
         assert!(entry.installed.is_some() && !entry.update_available);
-        let entry = listing("2026-01-01");
-        assert!(entry.update_available);
+        assert!(!listing("2026-01-01").update_available, "the file hasn't changed");
+        // Without that answer (say the cache was cleared), the date decides, as for text families.
+        std::fs::remove_file(latest_path(&data)).unwrap();
+        assert!(listing("2026-01-01").update_available);
 
         // Update, file unchanged upstream: asked with its ETag, answered "not modified", reused.
+        // Nothing changed, so the folder stays in place (its fonts stay on); only the license and
+        // install details are rewritten, with the new date.
+        std::fs::write(Path::new(&dir).join("kept.txt"), b"").unwrap();
         let newer = icons::corrected(listed("material-icons", "icons", "2026-01-01"));
         let prepared = prepare(&data, &newer).unwrap();
         assert_eq!(prepared.reused, vec![name]);
+        assert!(prepared.unchanged());
         assert_eq!(prepared.replaces.as_ref().map(|d| std::fs::canonicalize(d).unwrap()), Some(PathBuf::from(&dir)));
         assert_eq!(fake_net::take_requests()[0], (url.clone(), Some("\"v1\"".to_string())));
-        let dir = commit(prepared).unwrap();
+        assert_eq!(refresh(prepared).unwrap(), dir);
+        assert!(Path::new(&dir).join("kept.txt").exists(), "left in place, not swapped");
         assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v1);
+        assert_eq!(std::fs::read(Path::new(&dir).join("LICENSE.txt")).unwrap(), APACHE);
         assert_eq!(sidecar_in(&dir).last_modified, "2026-01-01");
+        assert_eq!(sidecar_in(&dir).upstream[name].etag, "\"v1\"");
         assert!(!listing("2026-01-01").update_available);
         assert!(leftovers(&data).is_empty(), "{:?}", leftovers(&data));
+
+        // Another font file in the copy being replaced: the swap would remove it, so that's a change.
+        std::fs::write(Path::new(&dir).join("Extra.ttf"), font("Extra", "x")).unwrap();
+        let prepared = prepare(&data, &newer).unwrap();
+        assert_eq!(prepared.reused, vec![name]);
+        assert!(!prepared.unchanged());
+        let dir = commit(prepared).unwrap();
+        assert!(!Path::new(&dir).join("Extra.ttf").exists() && !Path::new(&dir).join("kept.txt").exists());
 
         // Update, file changed upstream: the new file is downloaded and its ETag recorded.
         let v2 = font("Material Icons", "abcdef");
         fake_net::set(&url, v2.clone(), Some("\"v2\""));
         let prepared = prepare(&data, &newer).unwrap();
-        assert!(prepared.reused.is_empty());
+        assert!(prepared.reused.is_empty() && !prepared.unchanged());
         let dir = commit(prepared).unwrap();
         assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v2);
         assert_eq!(sidecar_in(&dir).upstream[name].etag, "\"v2\"");
@@ -911,6 +1073,126 @@ mod tests {
         assert_eq!(prepared.reused, vec![name]);
         drop(prepared);
         assert!(leftovers(&data).is_empty(), "an abandoned download is cleaned up");
+        // Text families aren't asked about between updates: their date decides.
+        assert!(read_latest(&data).is_empty());
+
+        // Fontsource's date moved on but the font didn't: an update that changes nothing keeps
+        // the folder (and its fonts) in place and records the new date, so it isn't offered again.
+        // A license saved under another name before goes.
+        std::fs::write(Path::new(&dir).join("UFL.txt"), b"old license").unwrap();
+        let newer = CatalogFamily { last_modified: "2026-02-01".into(), ..family.clone() };
+        let prepared = prepare(&data, &newer).unwrap();
+        assert!(prepared.unchanged());
+        assert_eq!(refresh(prepared).unwrap(), dir);
+        assert_eq!(sidecar_in(&dir).last_modified, "2026-02-01");
+        assert!(Path::new(&dir).join("OFL.txt").exists() && !Path::new(&dir).join("UFL.txt").exists());
+        let listing = |f: &CatalogFamily| build(&data, CachedCatalog { fetched_at: now(), families: vec![f.clone()] }, false).families.remove(0);
+        assert!(!listing(&newer).update_available);
+        assert!(listing(&CatalogFamily { last_modified: "2026-03-01".into(), ..family.clone() }).update_available);
+        assert!(leftovers(&data).is_empty(), "{:?}", leftovers(&data));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// Material Symbols is pushed to google/material-design-icons weekly, often a day or more after
+    /// Fontsource's date for it moves. An update made in that gap keeps last week's file but takes
+    /// the new date, so the date alone would then say "up to date" until it moved again. The file
+    /// decides instead: each catalog refresh asks about it with a HEAD request.
+    #[test]
+    fn icon_updates_follow_the_files_not_fontsources_date() {
+        let data = data_dir("icons-update-check");
+        let name = "MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf";
+        let url = icon_url("variablefont", name);
+        let v1 = font("Material Symbols Rounded", "ab");
+        let _net = fake_net::serve(vec![(url.clone(), v1.clone(), Some("\"w1\"")), (license_url(), APACHE.to_vec(), None)]);
+        let at = |date: &str| icons::corrected(listed("material-symbols-rounded", "icons", date));
+        let listing = |date: &str| build(&data, CachedCatalog { fetched_at: now(), families: vec![at(date)] }, false).families.remove(0);
+        let dir = commit(prepare(&data, &at("2026-10-01")).unwrap()).unwrap();
+        assert!(!listing("2026-10-01").update_available);
+
+        // Fontsource's date moves to 10-08 before Google pushes the new file: nothing is offered.
+        fake_net::take_requests();
+        check_icon_files(&data);
+        assert_eq!(fake_net::take_requests(), vec![(format!("HEAD {url}"), Some("\"w1\"".to_string()))], "asked, nothing downloaded");
+        assert!(!listing("2026-10-08").update_available, "the file hasn't changed yet");
+
+        // Updated in that gap anyway (say, before any check had run): nothing changed, so it
+        // takes the new date and keeps last week's file.
+        let prepared = prepare(&data, &at("2026-10-08")).unwrap();
+        assert!(prepared.unchanged());
+        refresh(prepared).unwrap();
+        assert_eq!(sidecar_in(&dir).last_modified, "2026-10-08");
+
+        // Google pushes the new file. The next catalog refresh asks about it and offers the
+        // update, though Fontsource's date hasn't moved again.
+        let v2 = font("Material Symbols Rounded", "abc");
+        fake_net::set(&url, v2.clone(), Some("\"w2\""));
+        fake_net::set(CATALOG_URL, serde_json::to_vec(&vec![listed("material-symbols-rounded", "icons", "2026-10-08")]).unwrap(), None);
+        let catalog = catalog(&data, true).unwrap();
+        let entry = catalog.families.iter().find(|e| e.family.id == "material-symbols-rounded").unwrap();
+        assert!(entry.installed.is_some() && entry.update_available, "the file changed");
+        assert!(fake_net::take_requests().contains(&(format!("HEAD {url}"), Some("\"w1\"".to_string()))));
+
+        // Updating downloads it, and then it's up to date.
+        let prepared = prepare(&data, &at("2026-10-08")).unwrap();
+        assert!(!prepared.unchanged());
+        let dir = commit(prepared).unwrap();
+        assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v2);
+        assert!(!listing("2026-10-08").update_available);
+        check_icon_files(&data);
+        assert!(!listing("2026-10-08").update_available);
+
+        // The server stops sending an ETag, or the file is gone (it moved): not known any more,
+        // so the date decides.
+        for gone in [false, true] {
+            commit(prepare(&data, &at("2026-10-08")).unwrap()).unwrap();
+            if gone {
+                fake_net::remove(&url);
+            } else {
+                fake_net::set(&url, v2.clone(), None);
+            }
+            check_icon_files(&data);
+            assert!(!read_latest(&data).contains_key(&url), "gone: {gone}");
+            assert!(!listing("2026-10-08").update_available);
+            assert!(listing("2026-10-15").update_available);
+            fake_net::set(&url, v2.clone(), Some("\"w2\""));
+        }
+        assert!(leftovers(&data).is_empty(), "{:?}", leftovers(&data));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// Live: installs Material Icons, then asks about its file the way each catalog refresh does.
+    ///   cargo test icon_update_check_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn icon_update_check_live() {
+        let data = data_dir("icons-check-live");
+        let name = "MaterialIcons-Regular.ttf";
+        let url = icon_url("font", name);
+        let dir = commit(prepare(&data, &icons::corrected(listed("material-icons", "icons", "live"))).unwrap()).unwrap();
+        let etag = sidecar_in(&dir).upstream[name].etag.clone();
+        println!("{url}: {etag}");
+        assert_eq!(read_latest(&data).get(&url), Some(&etag), "the download recorded it");
+        std::fs::remove_file(latest_path(&data)).unwrap();
+        check_icon_files(&data);
+        assert_eq!(read_latest(&data).get(&url), Some(&etag), "asked: not modified");
+        // Asked with an old ETag, the server gives the current one, and nothing is downloaded.
+        assert!(matches!(super::super::current_etag(&url, "\"stale\""), Ok(Some(t)) if t == etag));
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn only_installed_icon_families_with_recorded_etags_are_asked_about() {
+        let data = data_dir("icons-check-scope");
+        let rounded = "MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf";
+        let _net = fake_net::serve(vec![
+            // No ETag from the server: nothing to ask with later.
+            (icon_url("variablefont", rounded), font("Material Symbols Rounded", "ab"), None),
+            (license_url(), APACHE.to_vec(), None),
+        ]);
+        commit(prepare(&data, &icons::corrected(listed("material-symbols-rounded", "icons", "2026-10-08"))).unwrap()).unwrap();
+        fake_net::take_requests();
+        check_icon_files(&data);
+        assert!(fake_net::take_requests().is_empty(), "no recorded ETag, and nothing else installed");
         let _ = std::fs::remove_dir_all(&data);
     }
 }

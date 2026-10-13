@@ -606,6 +606,9 @@ pub struct GoogleInstallResult {
     files: Vec<String>,
     /// An earlier copy was replaced (an update).
     updated: bool,
+    /// An update in which no font file had changed upstream: the fonts were left in place, on
+    /// as they were, and only the install details were refreshed. Nothing to turn back on.
+    unchanged: bool,
     /// For an update: file names that were on before, so the UI turns exactly those back on.
     was_active_files: Vec<String>,
     /// For an update: every font file name in the copy that was replaced. A new file name that
@@ -621,7 +624,8 @@ pub struct GoogleInstallResult {
 /// downloaded and checked first. Only then are the old fonts turned off and swapped out; if the
 /// swap fails, they're turned back on as they were. The UI then rescans the folder and turns
 /// fonts on: an update's in the scope they had (`temporary_files`), a first download's in the
-/// activation mode.
+/// activation mode. An update in which no font file changed upstream turns nothing off: the
+/// family stays in place and only its install details are refreshed (`unchanged`).
 #[tauri::command]
 pub async fn google_install(app: AppHandle, id: String) -> AppResult<GoogleInstallResult> {
     blocking(move || {
@@ -631,6 +635,18 @@ pub async fn google_install(app: AppHandle, id: String) -> AppResult<GoogleInsta
         let prepared = services::google::prepare(&state.data_dir, &family)?;
         let files = prepared.files.clone();
         let old_files = prepared.old_files.clone();
+        if prepared.unchanged() {
+            let dir = services::google::refresh(prepared)?;
+            return Ok(GoogleInstallResult {
+                dir,
+                files,
+                updated: true,
+                unchanged: true,
+                was_active_files: Vec::new(),
+                old_files,
+                temporary_files: Vec::new(),
+            });
+        }
         let (updated, turned_off) = match prepared.replaces.clone() {
             Some(dir) => (true, turn_off_under(&state, &dir)?),
             None => (false, Vec::new()),
@@ -649,7 +665,7 @@ pub async fn google_install(app: AppHandle, id: String) -> AppResult<GoogleInsta
         let old: HashSet<String> = old_files.iter().cloned().collect();
         let temporary_files = activation::temporary_after_swap(&was_on, &old, &files);
         let was_active_files = was_on.into_iter().map(|(name, _)| name).collect();
-        Ok(GoogleInstallResult { dir, files, updated, was_active_files, old_files, temporary_files })
+        Ok(GoogleInstallResult { dir, files, updated, unchanged: false, was_active_files, old_files, temporary_files })
     })
     .await
 }

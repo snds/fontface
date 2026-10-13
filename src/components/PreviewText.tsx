@@ -10,7 +10,9 @@ interface Props {
   fontFamily: string;
   /** The page-only face name (fontLoader's `faceName`) when the font is one the app loads. The
    *  text is measured only once that face has loaded, so a measurement of the fallback font is
-   *  never taken (or cached) for it. Leave it out for fonts the system draws by name. */
+   *  never taken (or cached) for it. It also marks the element (`data-face`), so a color font
+   *  with an all-dark palette draws light in the dark theme (colorPalette.ts). Leave it out for
+   *  fonts the system draws by name. */
   face?: string;
   text: string;
   /** Font size in px. */
@@ -56,12 +58,13 @@ function useFit({ fontFamily, face, text, size, ready, profile, ownText, mode = 
  * up with everything else.
  */
 export function PreviewText(props: Props) {
-  const { fontFamily, text, size, ready, sample, className, style, mode = "row" } = props;
+  const { fontFamily, face, text, size, ready, sample, className, style, mode = "row" } = props;
   const fit = useFit(props);
   const sized = fit ? fitStyle(fit, size) : { fontSize: size, lineHeight: mode === "row" ? 1.3 : 1.5 };
   return (
     <div
       dir="ltr"
+      data-face={face}
       aria-hidden={sample || undefined}
       className={cn("truncate transition-opacity", !ready && "preview-loading", className)}
       style={{ ...style, fontFamily, ...sized }}

@@ -159,20 +159,25 @@ pub fn fetch(url: &str, max: u64, deadline: Deadline, if_none_match: Option<&str
     fetch_from_network(url, max, deadline, if_none_match)
 }
 
-fn fetch_from_network(url: &str, max: u64, deadline: Deadline, if_none_match: Option<&str>) -> Result<Fetched, Fetch> {
-    use std::io::Read;
-    let mut request = agent(url, deadline).get(url);
-    if let Some(tag) = if_none_match {
-        request = request.set("If-None-Match", tag);
-    }
-    let response = request.call().map_err(|e| match e {
+/// A failed request, in plain words. A 404 is told apart (see `Fetch`).
+fn request_error(url: &str, e: ureq::Error) -> Fetch {
+    match e {
         ureq::Error::Status(404, _) => Fetch::NotFound,
         ureq::Error::Status(429, _) => {
             Fetch::Failed(AppError::Other(format!("{} is limiting requests right now. Try again in a few minutes.", host_of(url))))
         }
         ureq::Error::Status(code, _) => Fetch::Failed(AppError::Other(format!("{} answered {code}", host_of(url)))),
         other => Fetch::Failed(AppError::Other(format!("Couldn't reach {}: {other}", host_of(url)))),
-    })?;
+    }
+}
+
+fn fetch_from_network(url: &str, max: u64, deadline: Deadline, if_none_match: Option<&str>) -> Result<Fetched, Fetch> {
+    use std::io::Read;
+    let mut request = agent(url, deadline).get(url);
+    if let Some(tag) = if_none_match {
+        request = request.set("If-None-Match", tag);
+    }
+    let response = request.call().map_err(|e| request_error(url, e))?;
     if response.status() == 304 {
         return if if_none_match.is_some() { Ok(Fetched::NotModified) } else { Err(not_modified_unasked(url)) };
     }
@@ -187,6 +192,25 @@ fn fetch_from_network(url: &str, max: u64, deadline: Deadline, if_none_match: Op
         return Err(too_large(url));
     }
     Ok(Fetched::Body { bytes: body, etag })
+}
+
+/// Asks whether a file changed, without downloading it: a HEAD request carrying the ETag of the
+/// copy the caller has. Returns the file's current ETag: that same one when the server answers
+/// 304 (not modified), else the one the server sends (None if it sends none).
+pub fn current_etag(url: &str, if_none_match: &str) -> Result<Option<String>, Fetch> {
+    #[cfg(test)]
+    if let Some(answer) = fake_net::answer_head(url, if_none_match) {
+        return answer;
+    }
+    let response = agent(url, Deadline::Small)
+        .head(url)
+        .set("If-None-Match", if_none_match)
+        .call()
+        .map_err(|e| request_error(url, e))?;
+    if response.status() == 304 {
+        return Ok(Some(if_none_match.to_string()));
+    }
+    Ok(response.header("etag").and_then(usable_etag))
 }
 
 /// An ETag worth keeping: short, printable ASCII (so it can be sent back as a header as is).
@@ -213,7 +237,8 @@ pub mod fake_net {
     thread_local! {
         /// URL → (body, ETag), while a test serves this thread.
         static ROUTES: RefCell<Option<HashMap<String, (Vec<u8>, Option<String>)>>> = const { RefCell::new(None) };
-        /// Every request made: URL and the If-None-Match it carried.
+        /// Every request made: URL (after "HEAD " for a HEAD request) and the If-None-Match it
+        /// carried.
         static LOG: RefCell<Vec<(String, Option<String>)>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -235,6 +260,15 @@ pub mod fake_net {
         });
     }
 
+    /// Takes one URL's answer away: it answers 404 from now on (say, a file moved upstream).
+    pub fn remove(url: &str) {
+        ROUTES.with(|r| {
+            if let Some(table) = r.borrow_mut().as_mut() {
+                table.remove(url);
+            }
+        });
+    }
+
     /// The requests made since `serve` (or the last `take_requests`), oldest first.
     pub fn take_requests() -> Vec<(String, Option<String>)> {
         LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
@@ -247,6 +281,17 @@ pub mod fake_net {
             ROUTES.with(|r| *r.borrow_mut() = None);
             LOG.with(|l| l.borrow_mut().clear());
         }
+    }
+
+    /// A HEAD request: the listed ETag (None if the route has none), or 404 if the URL isn't
+    /// listed. Logged as "HEAD <url>".
+    pub(super) fn answer_head(url: &str, if_none_match: &str) -> Option<Result<Option<String>, Fetch>> {
+        ROUTES.with(|r| {
+            let routes = r.borrow();
+            let table = routes.as_ref()?;
+            LOG.with(|l| l.borrow_mut().push((format!("HEAD {url}"), Some(if_none_match.to_string()))));
+            Some(table.get(url).map(|(_, etag)| etag.clone()).ok_or(Fetch::NotFound))
+        })
     }
 
     pub(super) fn answer(url: &str, if_none_match: Option<&str>) -> Option<Result<Fetched, Fetch>> {
@@ -304,5 +349,13 @@ mod tests {
         ));
         assert!(matches!(fetch_bytes("https://example.test/missing", 10, Deadline::Small), Err(Fetch::NotFound)));
         assert_eq!(fake_net::take_requests().len(), 4);
+        // A HEAD request reports the current ETag and downloads nothing.
+        assert!(matches!(current_etag("https://example.test/f", "\"t\""), Ok(Some(t)) if t == "\"t\""));
+        assert!(matches!(current_etag("https://example.test/f", "\"old\""), Ok(Some(t)) if t == "\"t\""));
+        assert!(matches!(current_etag("https://example.test/missing", "\"t\""), Err(Fetch::NotFound)));
+        assert_eq!(
+            fake_net::take_requests()[0],
+            ("HEAD https://example.test/f".to_string(), Some("\"t\"".to_string()))
+        );
     }
 }
