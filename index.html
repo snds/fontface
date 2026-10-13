@@ -4,6 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fontface</title>
+    <!--
+      Light or dark before the first paint, from the last Appearance used (kept in localStorage
+      by src/settings/theme.ts, which takes over once the app loads). A plain inline script runs
+      before the body is drawn; the app's module script only runs after. Tauri adds this
+      script's hash to the Content Security Policy when it builds the app.
+    -->
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("fontface.theme");
+          if (theme === "dark" || (theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+            document.documentElement.classList.add("dark");
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

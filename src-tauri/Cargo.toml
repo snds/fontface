@@ -28,10 +28,13 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+# statfs, to tell a disk image (read-only) from a writable drive for "Open at login".
+libc = "0.2"
 core-text = "21"
 plist = "1"
 xattr = "1"
 # Finder tags (NSURL) and Font Book collections (NSFontCollection), for tag import and export.
+# NSNotification: knowing when the window has left full screen (window.rs).
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSObjCRuntime", "NSObject", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSNotification", "NSObjCRuntime", "NSObject", "NSString", "NSURL"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSFontCollection", "NSFontDescriptor"] }

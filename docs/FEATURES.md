@@ -15,7 +15,7 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Scan progress, per-folder spinner, Cancel | ✅ | ⬜ | Progress during discovery and reading; fonts appear while scanning |
 | Online-only cloud files (Google Drive, iCloud) | ✅ | ⬜ | Detected; read 8 at a time so downloads overlap; count shown |
 | Unreachable folder never wipes the library | ✅ | ⬜ | Removal only after a complete walk |
-| Rescan all folders at launch | ✅ | ⬜ | Quiet unless something changed |
+| Rescan all folders at launch | ✅ | ⬜ | Quiet unless something changed; can be turned off in Settings |
 | Switches show the real OS state | ✅ | ⬜ | Reflects fonts turned on/off by other apps (e.g. Typeface); refreshed when the window regains focus |
 | On/off results confirmed with macOS | ✅ | ⬜ | Explains when another app or Font Book keeps a font on/off |
 | Duplicate copies shown as one style | ✅ | ⬜ | "×N" badge; turning on registers one preferred copy, turning off covers all copies |
@@ -24,7 +24,7 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Custom preview text + size | ✅ | ⬜ | |
 | Lazy preview loading (large libraries) | ✅ | ⬜ | Virtualized list; faces load only when on screen |
 | Collection faces preview individually | ✅ | ⬜ | Face is extracted from the .ttc in Rust |
-| Activate / deactivate a style or family | ✅ | ⬜ | Persistent: stays on after quit and restart |
+| Activate / deactivate a style or family | ✅ | ⬜ | Persistent by default: stays on after quit and restart. Temporary mode in Settings |
 | Activation survives app not running | ✅ | ⬜ | CoreText persistent user scope |
 | Re-apply activations at launch and after scans | ✅ | ⬜ | Keeps intent if a file is only temporarily unreachable |
 | Detail panel: waterfall, characters, metadata | ✅ | ⬜ | |
@@ -39,6 +39,9 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | All Fonts view | ✅ | ⬜ | Everything Fontface knows about |
 | Font Book view (Windows: "Windows Fonts") | ✅ | ⬜ | OS-installed fonts; the three macOS font folders nested under it |
 | Active / Inactive filter on any view | ✅ | ⬜ | Toolbar segments |
+| Variable filter on any view | ✅ | ⬜ | Toolbar toggle: lists only variable styles, and only the families that have one; combines with All / Active / Inactive and search, and the counts follow it |
+| Seamless top bar | 🟡 | n/a | No separate title bar: the window buttons sit in the sidebar's top strip, and the 52px top row (toolbar, page headers, detail header) moves the window, also while a dialog is open. Double-click does what macOS's "Double-click a window's title bar" setting says (zoom, minimize or nothing). Full screen drops the strip. Windows keeps its native frame. Not yet checked in the running app |
+| Toolbar fits narrow windows | 🟡 | ⬜ | As the toolbar narrows (say a font is selected at the default window size), the count goes first, then Variable shows only its icon and the size slider shortens, then the preview text box and the slider go. Search always keeps room to type |
 | Google Fonts: browse, download, update, remove | ✅ | ⬜ | Keyless: Fontsource catalog + google/fonts repo files; downloads go to a managed folder and are turned on |
 | Adobe Fonts: list fonts Creative Cloud turned on | ✅ | ⬜ | Read-only by design (Adobe's terms); links to Adobe; untested with CC installed |
 | Font Book: deactivated fonts, collections, Apple downloadable fonts | ⬜ | ⬜ | See INTEGRATIONS.md §2 |
@@ -47,6 +50,31 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Purchases: "newer version available" offer | ✅ | ⬜ | "Replace" instead of "Add to library" when a download has the same store, the purchase's families and some of its fonts (by PostScript name) in different files. Version numbers aren't compared |
 | Open fonts catalog (Fontsource, Noto, Nerd Fonts, open foundries) | ⬜ | ⬜ | INTEGRATIONS.md §3.4 |
 | "Managed by" badges for Monotype Fonts, Connect, Fontstand | ⬜ | ⬜ | INTEGRATIONS.md §3.5 |
+
+## Settings (2026-10-12)
+
+Settings open inside the main window, over the library (Fontface › Settings… in the menu bar,
+Cmd+, or the gear at the bottom of the sidebar; Esc goes back). Cmd+, does nothing while a dialog
+or menu is open. The sidebar lists the sections, the main column shows one section or
+search results from all of them, and every change saves at once. Not yet checked in the running app.
+
+| Feature | macOS | Windows | Notes |
+|---|---|---|---|
+| Settings screen: sections, search, keyboard | 🟡 | ⬜ | General, Library, Sidebar, Activation, Purchases, Backups, About. Search matches labels, descriptions and extra words (including choice and button words, e.g. "log out" or "Finder"). The library stays as it was underneath. The last section opened is remembered while Fontface runs. In a text box, Esc first leaves the box (which saves it) |
+| Appearance: System / Light / Dark | 🟡 | ⬜ | Applies at once, to the window's own buttons too; System follows the OS live. The last choice is applied before the first paint (a small script in index.html), so launch doesn't flash |
+| Default preview text and size | 🟡 | ⬜ | Used at launch; changing them also changes the current preview |
+| Open where you left off | 🟡 | ⬜ | The view plus All / Active / Inactive and Variable; a folder, subfolder or hidden section that's gone opens All Fonts |
+| Open at login | 🟡 | n/a | A LaunchAgent; hidden on Windows for now |
+| Keep running when the window is closed | 🟡 | n/a | Click the Dock icon to bring the window back |
+| Check folders for changes when Fontface opens | 🟡 | ⬜ | When off, only folders with no fonts yet are scanned |
+| Show installed fonts in All Fonts | 🟡 | ⬜ | When off, All Fonts leaves out fonts that are only in the OS font folders (including ones the user installed); a font with a copy in one of their folders stays. Font Book still lists them; the All Fonts count follows |
+| Show or hide sidebar sections | 🟡 | ⬜ | Font Book (with its folders), Google Fonts, Adobe Fonts, Purchases, Tags. All Fonts and folders always show. A view whose section is hidden goes to All Fonts |
+| Turn fonts on until logout or restart (temporary) | 🟡 | ⬜ | Applies to fonts turned on afterwards; optional "turn them off when Fontface quits". Updating a Google family or replacing a purchase keeps each font on the way it was |
+| Fonts turned off while Fontface was closed: turn back on / ask / leave off | 🟡 | ⬜ | "Ask me" shows a toast at launch with "Turn back on" and "Keep off". Swiping it away asks again next launch |
+| Turn off all fonts Fontface turned on | 🟡 | ⬜ | Asks first, with the number of font files on now, and how many more are set to come back on (e.g. on a drive that isn't connected) |
+| Watch for font purchases (mirrors the Purchases page) | 🟡 | ⬜ | Shows the watched folders and any problem with each; "Open Purchases" goes to the page, which shows the change |
+| Daily tag backups, number to keep, Back up now, Restore | 🟡 | ⬜ | Restore names the backup and opens its preview. "Add to my tags" brings its tags back next to yours; "Replace my tags" puts tags and location colors back as they were in the backup (tags made since are deleted). Font files aren't included |
+| About: version, app data folder, reset all settings | 🟡 | ⬜ | Reset asks first. It leaves watching for purchases as it is |
 
 ## Phase 1.5: More formats
 
@@ -80,7 +108,7 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Smart collections (rule-based) | ⬜ | ⬜ |
 | Activate / deactivate a whole collection | ⬜ | ⬜ |
 | Favorites | ⬜ | ⬜ |
-| Filters: classification, weight, width, mono, variable | ⬜ | ⬜ |
+| Filters: classification, weight, width, mono (variable: see Views) | ⬜ | ⬜ |
 | Sort options | ⬜ | ⬜ |
 | Live folder watching (no manual rescan) | ⬜ | ⬜ |
 | Grid view (tiles) alongside list view | ⬜ | ⬜ |
@@ -109,7 +137,7 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Export tags as Finder tags or Font Book collections | ✅ | n/a |
 | Export / import the rest of the library (folders, on/off choices) | ⬜ | ⬜ |
 | Menu bar quick toggle | ⬜ | ⬜ |
-| Launch at login | ⬜ | ⬜ |
+| Launch at login | 🟡 | ⬜ |
 | Auto-activate fonts a design file needs | ⬜ | ⬜ |
 | Sync library between machines | ⬜ | ⬜ |
 

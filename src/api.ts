@@ -127,6 +127,11 @@ export interface GoogleInstallResult {
   wasActiveFiles: string[];
   /** For an update: every font file name in the replaced copy. */
   oldFiles: string[];
+  /**
+   * For an update: file names to turn back on for this login only (scope "temporary"), because
+   * what they replace was on that way. Turn an update's other files back on with "persistent".
+   */
+  temporaryFiles: string[];
 }
 
 export interface AdobeFace {
@@ -235,6 +240,80 @@ export interface ReplaceResult {
   wasActiveFaces: string[];
   /** PostScript names of every face the old copy had. */
   oldFaces: string[];
+  /** PostScript names to turn back on for this login only (scope "temporary"); the rest with "persistent". */
+  temporaryFaces: string[];
+}
+
+// ------------------------------------------------------------------------------- settings
+// Must match AppSettings in src-tauri/src/settings.rs. Events: "settings-changed" (payload:
+// AppSettings, after every update or reset), "restore-pending" (payload: PendingRestore, at
+// launch when restoreOnLaunch is "ask" and there's something to ask about) and "open-settings"
+// (no payload: the macOS app menu's Settings… item, ⌘,).
+
+export type ThemeSetting = "system" | "light" | "dark";
+/** "persistent": fonts stay on after quitting and restarting. "temporary": on until logout or restart. */
+export type ActivationMode = "persistent" | "temporary";
+/** What launch does with fonts that were on last time but aren't on now. */
+export type RestorePolicy = "always" | "ask" | "never";
+
+export interface SidebarSections {
+  fontBook: boolean;
+  google: boolean;
+  adobe: boolean;
+  purchases: boolean;
+  tags: boolean;
+}
+
+export interface AppSettings {
+  theme: ThemeSetting;
+  /** Empty: each family previews its own name. */
+  previewText: string;
+  /** 10–128 (clamped). */
+  previewSize: number;
+  restoreLastView: boolean;
+  /** Read from the LaunchAgent itself (macOS). Turning it on elsewhere fails with a plain message. */
+  launchAtLogin: boolean;
+  /** macOS: closing the window hides it; clicking the Dock icon brings it back. */
+  keepRunningInBackground: boolean;
+  scanAtLaunch: boolean;
+  showInstalledInAll: boolean;
+  sidebar: SidebarSections;
+  activationMode: ActivationMode;
+  clearTemporaryOnQuit: boolean;
+  restoreOnLaunch: RestorePolicy;
+  tagBackups: boolean;
+  /** 1–50 (clamped). */
+  tagBackupKeep: number;
+}
+
+/** Only the keys given change; `sidebar` may be partial too. */
+export type AppSettingsPatch = Partial<Omit<AppSettings, "sidebar">> & { sidebar?: Partial<SidebarSections> };
+
+export interface PendingRestore {
+  /** Font files that were on last time and aren't on now. 0: nothing to ask. */
+  count: number;
+  /** Their family names, sorted. */
+  families: string[];
+}
+
+export interface RestoreReport {
+  restored: number;
+  failed: number;
+}
+
+export interface TurnOffAllReport {
+  /** Font files turned off. */
+  turnedOff: number;
+  /** [file, why] for each one that couldn't be turned off. */
+  failed: [string, string][];
+}
+
+export interface TagBackup {
+  path: string;
+  /** Unix time in milliseconds. */
+  createdAt: number;
+  tags: number;
+  bytes: number;
 }
 
 export const api = {
@@ -245,8 +324,9 @@ export const api = {
   cancelScan: (folderId: number) => invoke<void>("cancel_scan", { folderId }),
   listFonts: () => invoke<FontSummary[]>("list_fonts"),
   getFont: (fontId: number) => invoke<FontDetail>("get_font", { fontId }),
-  setActivation: (fontIds: number[], active: boolean) =>
-    invoke<ActivationOutcome[]>("set_activation", { fontIds, active }),
+  /** `scope` turns fonts on that way instead of the saved activation mode (null: the saved mode). */
+  setActivation: (fontIds: number[], active: boolean, scope: ActivationMode | null = null) =>
+    invoke<ActivationOutcome[]>("set_activation", { fontIds, active, scope }),
   revealFont: (fontId: number) => invoke<void>("reveal_font", { fontId }),
   listServices: () => invoke<ServiceInfo[]>("list_services"),
   googleCatalog: (refresh = false) => invoke<GoogleCatalog>("google_catalog", { refresh }),
@@ -269,4 +349,18 @@ export const api = {
   purchasesTransferred: (dir: string) => invoke<void>("purchases_transferred", { dir }),
   purchasesSubscriptionEnded: (store: string) => invoke<RemovalReport>("purchases_subscription_ended", { store }),
   purchasesReveal: (dir: string) => invoke<void>("purchases_reveal", { dir }),
+  // ----------------------------------------------------------------------------- settings
+  settingsGet: () => invoke<AppSettings>("settings_get"),
+  settingsUpdate: (patch: AppSettingsPatch) => invoke<AppSettings>("settings_update", { patch }),
+  settingsReset: () => invoke<AppSettings>("settings_reset"),
+  /** Waits until launch has worked out what to ask about, so it's safe to call once at startup. */
+  activationPendingRestore: () => invoke<PendingRestore>("activation_pending_restore"),
+  activationRestoreDecide: (restore: boolean) => invoke<RestoreReport>("activation_restore_decide", { restore }),
+  activationTurnOffAll: () => invoke<TurnOffAllReport>("activation_turn_off_all"),
+  backupsList: () => invoke<TagBackup[]>("backups_list"),
+  backupsCreate: () => invoke<TagBackup>("backups_create"),
+  backupsReveal: () => invoke<void>("backups_reveal"),
+  appDataReveal: () => invoke<void>("app_data_reveal"),
+  /** A double-click on the title bar: zooms, minimizes or does nothing, as the macOS setting says. */
+  titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
 };

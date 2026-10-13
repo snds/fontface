@@ -66,6 +66,8 @@ export interface ImportResult {
   /** Different fonts not in the library whose tags were kept for later. */
   kept: number;
   locationColors: number;
+  /** Tags deleted first, when the import replaced the tags (restoring a backup). */
+  tagsRemoved: number;
 }
 
 export type FileExportFormat = "json" | "csv" | "typeface";
@@ -104,8 +106,10 @@ export const tagsApi = {
   assign: (tagIds: number[], keys: string[], on: boolean) => invoke<number>("tags_assign", { tagIds, keys, on }),
   setLocationColor: (location: string, color: TagColor | null) => invoke<void>("location_color_set", { location, color }),
   importPreview: (source: ImportSource) => invoke<ImportPreview>("tags_import_preview", { source }),
-  importApply: (source: ImportSource, tags: string[], keepUnmatched: boolean) =>
-    invoke<ImportResult>("tags_import_apply", { source, tags, keepUnmatched }),
+  /** `replace`: delete every tag and location color first, so they end up as in the file (a
+   *  Fontface tags file only, e.g. a backup). Otherwise the tags are added to the ones there. */
+  importApply: (source: ImportSource, tags: string[], keepUnmatched: boolean, replace = false) =>
+    invoke<ImportResult>("tags_import_apply", { source, tags, keepUnmatched, replace }),
   exportFile: (format: FileExportFormat, path: string, tagIds: number[] | null) =>
     invoke<ExportSummary>("tags_export", { format, path, tagIds }),
   exportFinder: (tagIds: number[] | null) => invoke<FinderExport>("tags_export_finder", { tagIds }),

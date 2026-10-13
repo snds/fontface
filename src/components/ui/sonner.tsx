@@ -1,7 +1,7 @@
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { Icon } from "@/components/ui/icon"
 
-// Follows the OS appearance; the app has no in-app theme switch.
+// Light or dark comes from the app (the Appearance setting), passed as `theme`.
 const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner

@@ -1,13 +1,15 @@
 import { useSyncExternalStore } from "react";
 import type { Face } from "@/library";
-import type { Tag } from "./api";
+import type { ImportSource, Tag } from "./api";
 
-/** Which tag dialog is open. One host (in the sidebar) shows it, so any menu can ask for one. */
+/** Which tag dialog is open. One host (in App) shows it, so any menu can ask for one. An import
+ *  can start from a given file instead of asking for one. A tag backup (from settings) also
+ *  gives when it was made (Unix ms): the dialog then restores, and can replace the tags. */
 export type TagDialog =
   | { kind: "create"; parent?: Tag; faces?: Face[] }
   | { kind: "rename"; tag: Tag }
   | { kind: "delete"; tag: Tag }
-  | { kind: "import" }
+  | { kind: "import"; source?: ImportSource; backupMadeAt?: number }
   | { kind: "export"; tag?: Tag };
 
 let current: TagDialog | null = null;

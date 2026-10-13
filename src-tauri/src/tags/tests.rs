@@ -507,6 +507,50 @@ fn json_export_round_trips() {
 }
 
 #[test]
+fn restoring_a_backup_adds_or_replaces() {
+    let mut lib = typeface_library("restore");
+    let okuda = face_key(Some("Okuda"), false, false, "", 0);
+    let mono = face_key(Some("Mono-Regular"), false, false, "", 0);
+    // The backup: "Sci-Fi" (indigo) on Okuda and a font not in the library, and a location color.
+    let scifi = super::create_tag(&mut lib.conn, "Sci-Fi", Some("indigo")).unwrap();
+    super::assign(&mut lib.conn, &[scifi.id], &[okuda.clone(), loose_key("Not-Here")], true).unwrap();
+    super::set_location_color(&lib.conn, "/fonts", Some("green")).unwrap();
+    let json = export::to_json(&lib.conn, export::collect(&lib.conn, None).unwrap(), 1_760_000_000).unwrap();
+    let backup = export::parse_json(json.as_bytes()).unwrap();
+
+    // Since then: renamed and recolored, moved to another font, a new tag, another color.
+    super::rename_tag(&mut lib.conn, scifi.id, "Space").unwrap();
+    super::set_tag_color(&lib.conn, scifi.id, "red").unwrap();
+    super::assign(&mut lib.conn, &[scifi.id], &[okuda.clone()], false).unwrap();
+    super::assign(&mut lib.conn, &[scifi.id], &[mono.clone()], true).unwrap();
+    super::create_tag(&mut lib.conn, "Made Later", None).unwrap();
+    super::set_location_color(&lib.conn, "/fonts", Some("teal")).unwrap();
+    let chosen = names(&["Sci-Fi"]);
+
+    // Adding brings the old name back next to the new one and leaves the rest alone.
+    let result = import::apply(&mut lib.conn, &backup, &chosen, true).unwrap();
+    assert_eq!(result.tags_removed, 0);
+    assert_eq!(lib.tag_names(), names(&["Made Later", "Sci-Fi", "Space"]));
+    assert_eq!(super::location_colors(&lib.conn).unwrap().get("/fonts").map(String::as_str), Some("teal"));
+
+    // Replacing puts the tags exactly as they were: names, colors, fonts, kept fonts, location colors.
+    let result = import::replace(&mut lib.conn, &backup, &chosen, true).unwrap();
+    assert_eq!(result.tags_removed, 3);
+    assert_eq!(lib.tag_names(), names(&["Sci-Fi"]));
+    let tags = super::list_tags(&lib.conn).unwrap();
+    assert_eq!(tags[0].color, "indigo");
+    assert_eq!(lib.keys_of("Sci-Fi"), vec![loose_key("Not-Here"), okuda]);
+    assert!(lib.keys_of("Space").is_empty());
+    let colors = super::location_colors(&lib.conn).unwrap();
+    assert_eq!((colors.len(), colors.get("/fonts").map(String::as_str)), (1, Some("green")));
+
+    // Ticking nothing that matches still clears everything; it's the caller's job to ask first.
+    let none = import::replace(&mut lib.conn, &backup, &[], true).unwrap();
+    assert_eq!(none.tags_removed, 1);
+    assert!(lib.tag_names().is_empty());
+}
+
+#[test]
 fn csv_quotes_and_defuses_formulas() {
     let tags = vec![export::ExportTag {
         name: "Display, \"big\"".into(),

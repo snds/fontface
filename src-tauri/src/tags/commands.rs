@@ -113,7 +113,9 @@ pub fn tags_import_preview(app: AppHandle, state: State<'_, AppState>, source: I
     import::preview(&*state.conn()?, &source)
 }
 
-/// Applies the tags the user ticked in the preview (by name).
+/// Applies the tags the user ticked in the preview (by name). With `replace` (restoring a
+/// backup), they take the place of every tag and location color there now; only a Fontface tags
+/// file can do that.
 #[tauri::command(async)]
 pub fn tags_import_apply(
     app: AppHandle,
@@ -121,9 +123,17 @@ pub fn tags_import_apply(
     source: ImportRequest,
     tags: Vec<String>,
     keep_unmatched: bool,
+    replace: bool,
 ) -> AppResult<ImportResult> {
+    if replace && !matches!(source, ImportRequest::Fontface { .. }) {
+        return Err(AppError::Invalid("Only a Fontface tags file can replace your tags".into()));
+    }
     let source = load_source(&app, &state, &source)?;
-    state.write(|conn| import::apply(conn, &source, &tags, keep_unmatched))
+    if replace {
+        state.write(|conn| import::replace(conn, &source, &tags, keep_unmatched))
+    } else {
+        state.write(|conn| import::apply(conn, &source, &tags, keep_unmatched))
+    }
 }
 
 // ---------------------------------------------------------------------------------- export

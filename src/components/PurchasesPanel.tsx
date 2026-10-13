@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { PageHeader } from "./TitleBar";
 
 interface Props {
   /** Changes when the watcher finds something or an import/removal finishes; the page reloads. */
@@ -178,34 +179,41 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
 
   if (!status) {
     return (
-      <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-        {error ? (
-          <span>Couldn't load purchases. {error}</span>
-        ) : (
-          <>
-            <Icon name="progress_activity" size={18} className="animate-spin" />
-            Loading…
-          </>
-        )}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <PageHeader icon="shopping_bag" title="Purchases" />
+        <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+          {error ? (
+            <span>Couldn't load purchases. {error}</span>
+          ) : (
+            <>
+              <Icon name="progress_activity" size={18} className="animate-spin" />
+              Loading…
+            </>
+          )}
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex flex-col gap-3 border-b px-4 py-3">
-        <div className="flex items-start gap-3">
-          <Icon name="shopping_bag" size={22} className="mt-0.5 text-muted-foreground" />
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold">Purchases</h2>
-            <p className="max-w-2xl text-xs text-muted-foreground">
-              Fontface notices fonts you download from stores like MyFonts or Fontspring, works out where they came
-              from, and adds them to your library when you say so. It copies the desktop font files and any license
-              files it can find into a folder it manages, and leaves out web and app font files. Your downloads stay
-              where they are, and nothing is uploaded anywhere.
-            </p>
-          </div>
-        </div>
+      <PageHeader icon="shopping_bag" title="Purchases">
+        <Button size="sm" variant="outline" onClick={() => pickImport(false)}>
+          <Icon name="upload_file" size={16} />
+          Import zip or fonts…
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => pickImport(true)}>
+          <Icon name="drive_folder_upload" size={16} />
+          Import folder…
+        </Button>
+      </PageHeader>
+      <div className="flex flex-col gap-3 border-b px-4 py-3">
+        <p className="max-w-2xl text-xs text-muted-foreground">
+          Fontface notices fonts you download from stores like MyFonts or Fontspring, works out where they came from, and
+          adds them to your library when you say so. It copies the desktop font files and any license files it can find
+          into a folder it manages, and leaves out web and app font files. Your downloads stay where they are, and nothing
+          is uploaded anywhere.
+        </p>
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm">
             <Switch
@@ -231,14 +239,6 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
           >
             <Icon name="refresh" size={16} className={cn(checking && "animate-spin")} />
             Check now
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => pickImport(false)}>
-            <Icon name="upload_file" size={16} />
-            Import zip or fonts…
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => pickImport(true)}>
-            <Icon name="drive_folder_upload" size={16} />
-            Import folder…
           </Button>
         </div>
         <div className="flex flex-col gap-1.5 text-xs text-muted-foreground">
@@ -279,7 +279,7 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
               </p>
             ))}
         </div>
-      </header>
+      </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <section aria-labelledby="new-downloads" className="border-b px-4 py-3">

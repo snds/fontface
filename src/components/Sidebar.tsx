@@ -1,4 +1,4 @@
-import type { Folder, ScanProgress, ServiceInfo } from "@/api";
+import type { Folder, ScanProgress, ServiceInfo, SidebarSections } from "@/api";
 import { INSTALLED_LABEL, type Family, type LibraryView } from "@/library";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
@@ -10,6 +10,7 @@ import { ADOBE_LOCATION, FONT_BOOK_LOCATION, useLocations } from "@/tags/locatio
 import { SubfolderToggle, SubfolderTree, useSubfolders } from "@/tags/LocationTree";
 import { LocationMenu } from "@/tags/menus";
 import { TagsSection } from "@/tags/TagsSection";
+import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
 
 interface Props {
   folders: Folder[];
@@ -26,11 +27,14 @@ interface Props {
   newPurchases: number;
   view: LibraryView;
   scans: Map<number, ScanProgress>;
+  /** What the sidebar shows (a setting). All Fonts and the user's folders are always there. */
+  show: SidebarSections;
   onView: (v: LibraryView) => void;
   onAddFolder: () => void;
   onRemoveFolder: (f: Folder) => void;
   onRescan: (f: Folder) => void;
   onCancelScan: (f: Folder) => void;
+  onOpenSettings: () => void;
 }
 
 const same = (a: LibraryView, b: LibraryView) =>
@@ -161,9 +165,13 @@ function UserFolder({ folder, families, row, view, onView, locations }: {
   );
 }
 
-export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan }: Props) {
+/** The id of the Settings button, so focus can come back to it when settings close. */
+export const SETTINGS_BUTTON_ID = "open-settings";
+
+export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, show, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan, onOpenSettings }: Props) {
   const locations = useLocations(folders, services);
-  const items: { label: string; icon: string; view: LibraryView; count: number; hint: string }[] = [
+  const titleBar = useTitleBar();
+  const library: { label: string; icon: string; view: LibraryView; count: number; hint: string }[] = [
     { label: "All Fonts", icon: "font_download", view: { kind: "all" }, count: counts.all, hint: "Every font Fontface knows about" },
     {
       label: INSTALLED_LABEL,
@@ -173,6 +181,7 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
       hint: "Fonts installed in the operating system's own font folders",
     },
   ];
+  const items = library.filter((item) => item.view.kind !== "installed" || show.fontBook);
   const system = folders.filter((f) => f.kind === "system");
   const user = folders.filter((f) => f.kind === "user");
   const running = folders.filter((f) => scans.has(f.id));
@@ -201,8 +210,11 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
 
   return (
     <aside className="flex min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+      {/* macOS: the window buttons sit here, in the sidebar's color, and the strip moves the window
+          like the rest of the top row. Full screen hides the buttons, so the strip goes too. */}
+      {titleBar && <div className="h-13 shrink-0 select-none" {...dragRegion(true)} />}
       <ScrollArea className="min-h-0 flex-1">
-        <nav className="flex flex-col gap-4 p-2 pt-3">
+        <nav className={cn("flex flex-col gap-4 p-2", !titleBar && "pt-3")}>
           <div>
             <SectionLabel>Library</SectionLabel>
             {items.map((item) => (
@@ -237,6 +249,7 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
             ))}
           </div>
 
+          {(show.google || show.adobe || show.purchases) && (
           <div>
             <SectionLabel>Services</SectionLabel>
             {(() => {
@@ -270,7 +283,7 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
                   highlight: newPurchases > 0,
                 },
               ];
-              return rows.map((r) => {
+              return rows.filter((r) => show[r.id]).map((r) => {
                 // Google Fonts and Purchases take their managed folder's color; Adobe Fonts has no folder here.
                 const managed = r.id === "google" ? google : r.id === "purchases" ? purchases : undefined;
                 const location = r.id === "adobe" ? ADOBE_LOCATION : folders.find((f) => f.id === managed?.folderId)?.path;
@@ -305,6 +318,7 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
               });
             })()}
           </div>
+          )}
 
           <div>
             <div className="flex items-center justify-between pr-1">
@@ -321,7 +335,7 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
             ))}
           </div>
 
-          <TagsSection families={families} view={view} onView={onView} />
+          {show.tags && <TagsSection families={families} view={view} onView={onView} />}
         </nav>
       </ScrollArea>
 
@@ -360,6 +374,26 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
           })}
         </div>
       )}
+
+      <div className="flex shrink-0 items-center border-t px-2 py-1.5">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                id={SETTINGS_BUTTON_ID}
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Settings"
+                aria-keyshortcuts={IS_MAC ? "Meta+," : "Control+,"}
+                onClick={onOpenSettings}
+              />
+            }
+          >
+            <Icon name="settings" size={18} />
+          </TooltipTrigger>
+          <TooltipContent side="top">Settings ({IS_MAC ? "⌘," : "Ctrl+,"})</TooltipContent>
+        </Tooltip>
+      </div>
     </aside>
   );
 }

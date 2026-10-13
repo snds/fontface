@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { PageHeader } from "./TitleBar";
 
 const LINKS = {
   browse: "https://fonts.adobe.com/fonts",
@@ -67,31 +68,29 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex items-start gap-3 border-b px-4 py-3">
-        <Icon name="cloud" size={22} className="mt-0.5 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <h2 className="text-base font-semibold">Adobe Fonts</h2>
-          <p className="max-w-2xl text-xs text-muted-foreground">
-            Adobe Fonts come with Creative Cloud, and Adobe only allows using them through Creative Cloud. So Fontface
-            shows the ones Creative Cloud has turned on, and sends you to Adobe to turn fonts on or off. It never opens or
-            copies Adobe's font files.
-          </p>
-        </div>
+      <PageHeader icon="cloud" title="Adobe Fonts">
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>
           <Icon name="refresh" size={16} className={cn(loading && "animate-spin")} />
           Refresh
         </Button>
-      </header>
+      </PageHeader>
 
-      <div className="flex flex-wrap gap-2 border-b px-4 py-2">
-        <Button size="sm" variant="outline" onClick={() => open(LINKS.browse)}>
-          <Icon name="open_in_new" size={16} />
-          Browse Adobe Fonts
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => open(LINKS.mine)}>
-          <Icon name="open_in_new" size={16} />
-          My Adobe Fonts
-        </Button>
+      <div className="flex flex-col gap-3 border-b px-4 py-3">
+        <p className="max-w-2xl text-xs text-muted-foreground">
+          Adobe Fonts come with Creative Cloud, and Adobe only allows using them through Creative Cloud. So Fontface shows
+          the ones Creative Cloud has turned on, and sends you to Adobe to turn fonts on or off. It never opens or copies
+          Adobe's font files.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={() => open(LINKS.browse)}>
+            <Icon name="open_in_new" size={16} />
+            Browse Adobe Fonts
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => open(LINKS.mine)}>
+            <Icon name="open_in_new" size={16} />
+            My Adobe Fonts
+          </Button>
+        </div>
       </div>
 
       {!status ? (

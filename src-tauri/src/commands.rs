@@ -15,10 +15,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::watch;
 
 use crate::{
-    activation, db, services,
+    activation::{self, Scope, TurnOn},
+    backups, db, services,
     error::{AppError, AppResult},
     model::{ActivationOutcome, Folder, FontDetail, FontSummary, ScanReport},
-    scanner, AppState, RunningScan,
+    scanner,
+    settings::{self, ActivationMode, AppSettings},
+    AppState, RunningScan,
 };
 
 #[tauri::command(async)]
@@ -51,7 +54,7 @@ pub fn remove_folder(state: State<'_, AppState>, folder_id: i64) -> AppResult<Ve
     // Take the activation lock before reading which fonts are on, and hold it through the
     // delete, so no other change (a click, a reconcile) can slip in between.
     let _guard = activation::lock();
-    let (paths, active): (Vec<String>, Vec<String>) = {
+    let (paths, active, temporary): (Vec<String>, Vec<String>, HashSet<String>) = {
         let conn = state.conn()?;
         match db::get_folder(&conn, folder_id)?.kind.as_str() {
             "system" => return Err(AppError::Invalid("macOS font folders are always part of the library".into())),
@@ -68,15 +71,23 @@ pub fn remove_folder(state: State<'_, AppState>, folder_id: i64) -> AppResult<Ve
             .prepare("SELECT DISTINCT path FROM fonts WHERE folder_id = ?1 AND activated = 1")?
             .query_map([folder_id], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
-        (all, on)
+        (all, on, activation::temporary_paths(&conn)?)
     };
     let mut failures = Vec::new();
     for path in active {
-        if let Err(e) = activation::deactivate(Path::new(&path)) {
+        if let Err(e) = turn_off_file(&path, temporary.contains(&path)) {
             failures.push(ActivationOutcome { path, ids: vec![], active: true, error: Some(e.to_string()) });
         }
     }
-    state.write(|conn| Ok(conn.execute("DELETE FROM folders WHERE id = ?1", [folder_id])?))?;
+    state.write(|conn| {
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM folders WHERE id = ?1", [folder_id])?;
+        for path in paths.iter().filter(|p| temporary.contains(*p)) {
+            activation::forget_temporary(&tx, path)?;
+        }
+        tx.commit()?;
+        Ok(())
+    })?;
     let paths: HashSet<String> = paths.into_iter().collect();
     state.deferred().retain(|p| !paths.contains(p));
     state.seen_loaded().retain(|p| !paths.contains(p));
@@ -168,7 +179,7 @@ fn retry_deferred(app: &AppHandle, db_path: &Path, folder_id: i64) {
         return;
     }
     state.deferred().retain(|p| !subset.contains(p));
-    if let Err(e) = activation::reconcile(db_path, Some(&subset), |path| {
+    if let Err(e) = activation::reconcile(db_path, &subset, |path| {
         state.deferred().insert(path);
     }) {
         eprintln!("fontface: retrying activations failed: {e}");
@@ -226,9 +237,22 @@ fn notice_turned_off_elsewhere(state: &AppState, fonts: &mut [FontSummary]) {
     if dropped.is_empty() {
         return;
     }
+    // A temporary font recorded as off stops being temporary, like any font turned off. Fontface's
+    // own session registration of it may still be there (another app can switch a font off without
+    // removing it). The font isn't loaded, so removing that turns nothing off; it means the quit
+    // cleanup can't later take away a copy another app turned on. If it can't be removed, the
+    // font stays listed, so the quit cleanup or the next launch still deals with it.
+    let temporary = state.conn().and_then(|c| activation::temporary_paths(&c)).unwrap_or_default();
+    let forget: HashSet<&String> = dropped
+        .iter()
+        .filter(|p| temporary.contains(*p) && activation::deactivate_in(Path::new(p), Scope::Session).is_ok())
+        .collect();
     let written = state.write(|conn| {
         for path in &dropped {
             conn.execute("UPDATE fonts SET activated = 0 WHERE path = ?1", [path])?;
+            if forget.contains(path) {
+                activation::forget_temporary(conn, path)?;
+            }
         }
         Ok(())
     });
@@ -251,8 +275,24 @@ pub fn get_font(state: State<'_, AppState>, font_id: i64) -> AppResult<FontDetai
 
 /// Turns fonts on or off, then checks with the OS that it worked. Work is grouped by file,
 /// because the OS acts on whole files. Fonts in macOS font folders are always on.
+///
+/// `scope` ("persistent" or "temporary") turns fonts on that way instead of the saved
+/// activation mode: after an update or replacement, each font comes back the way it was (see
+/// `GoogleInstallResult::temporary_files` and `Replaced::temporary_faces`). None: the saved mode.
 #[tauri::command(async)]
-pub fn set_activation(state: State<'_, AppState>, font_ids: Vec<i64>, active: bool) -> AppResult<Vec<ActivationOutcome>> {
+pub fn set_activation(
+    state: State<'_, AppState>,
+    font_ids: Vec<i64>,
+    active: bool,
+    scope: Option<ActivationMode>,
+) -> AppResult<Vec<ActivationOutcome>> {
+    switch(&state, &font_ids, active, scope)
+}
+
+/// The work behind `set_activation` (and Turn Off All). Turning on uses the scope of `mode`, or
+/// of the saved activation mode, except that a file that's already on keeps the scope it has
+/// (`activation::turn_on_plan`). Turning off removes both of Fontface's registrations.
+fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Option<ActivationMode>) -> AppResult<Vec<ActivationOutcome>> {
     // (path, installed, every face id in that file)
     let files: Vec<(String, bool, Vec<i64>)> = {
         let conn = state.conn()?;
@@ -261,7 +301,7 @@ pub fn set_activation(state: State<'_, AppState>, font_ids: Vec<i64>, active: bo
             "SELECT fonts.path, folders.kind = 'system' FROM fonts
              JOIN folders ON folders.id = fonts.folder_id WHERE fonts.id = ?1",
         )?;
-        for id in &font_ids {
+        for id in font_ids {
             if let Some(row) = stmt.query_row([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))).optional()? {
                 paths.insert(row);
             }
@@ -274,11 +314,15 @@ pub fn set_activation(state: State<'_, AppState>, font_ids: Vec<i64>, active: bo
         }
         files
     };
+    // Read before taking the activation lock: the settings lock is never taken inside another.
+    let mode = mode.unwrap_or_else(|| state.settings().activation_mode);
 
     // One activation lock for the whole request, through verification, so two requests (or a
     // folder removal) never interleave. The DB mutex is not held during CoreText calls, which
     // can take a while (e.g. if a file must download first).
     let _guard = activation::lock();
+    let temporary = activation::temporary_paths(&*state.conn()?)?;
+    let loaded = if active { activation::available_paths().unwrap_or_default() } else { HashSet::new() };
     let mut outcomes = Vec::with_capacity(files.len());
     let mut to_verify = Vec::new();
     for (path, installed, ids) in files {
@@ -288,21 +332,35 @@ pub fn set_activation(state: State<'_, AppState>, font_ids: Vec<i64>, active: bo
             continue;
         }
         // Its folder may have been removed while this request waited for the lock.
-        let still_listed: bool = state
-            .conn()?
-            .query_row("SELECT EXISTS(SELECT 1 FROM fonts WHERE path = ?1)", [&path], |r| r.get(0))?;
+        let (still_listed, recorded_on): (bool, bool) = state.conn()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM fonts WHERE path = ?1), COALESCE((SELECT MAX(activated) FROM fonts WHERE path = ?1), 0)",
+            [&path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
         if !still_listed {
             outcomes.push(ActivationOutcome { path, ids, active: false, error: Some("Its folder was removed from the library".into()) });
             continue;
         }
+        let is_temporary = temporary.contains(&path);
+        // Ok(Some(scope)): registered in that scope. Ok(None): nothing new to record.
         let result = if active {
-            activation::activate(Path::new(&path))
+            match activation::turn_on_plan(mode, recorded_on, is_temporary, loaded.contains(&path)) {
+                TurnOn::Register(scope) => activation::activate_in(Path::new(&path), scope).map(|_| Some(scope)),
+                TurnOn::AlreadyOn => Ok(None),
+            }
         } else {
-            activation::deactivate(Path::new(&path))
+            turn_off_file(&path, is_temporary).map(|_| None)
         };
         match result {
-            Ok(()) => {
-                state.write(|conn| Ok(conn.execute("UPDATE fonts SET activated = ?1 WHERE path = ?2", params![active, path])?))?;
+            Ok(scope) => {
+                state.write(|conn| {
+                    conn.execute("UPDATE fonts SET activated = ?1 WHERE path = ?2", params![active, path])?;
+                    match scope {
+                        Some(scope) => activation::record_scope(conn, &path, scope),
+                        None if !active => activation::forget_temporary(conn, &path),
+                        None => Ok(()),
+                    }
+                })?;
                 to_verify.push(outcomes.len());
                 outcomes.push(ActivationOutcome { path, ids, active, error: None });
             }
@@ -322,6 +380,17 @@ pub fn set_activation(state: State<'_, AppState>, font_ids: Vec<i64>, active: bo
         }
     }
     Ok(outcomes)
+}
+
+/// Turns a file off. One that's on for this login only is also removed from session scope.
+/// Runs under the caller's activation lock.
+fn turn_off_file(path: &str, temporary: bool) -> AppResult<()> {
+    let p = Path::new(path);
+    activation::deactivate(p)?;
+    if temporary {
+        activation::deactivate_in(p, Scope::Session)?;
+    }
+    Ok(())
 }
 
 /// "Already registered" and "not registered" count as success, but don't prove the OS state
@@ -462,11 +531,17 @@ pub struct GoogleInstallResult {
     /// For an update: every font file name in the copy that was replaced. A new file name that
     /// isn't here replaces a renamed one (e.g. statics rebuilt as a variable font).
     old_files: Vec<String>,
+    /// For an update: file names to turn back on for this login only (scope "temporary"),
+    /// because what they replace was on that way. The update's other files come back to stay
+    /// (scope "persistent"). See `activation::temporary_after_swap`.
+    temporary_files: Vec<String>,
 }
 
 /// Downloads (or updates) a Google Fonts family into the managed folder. The new files are
 /// downloaded and checked first. Only then are the old fonts turned off and swapped out; if the
-/// swap fails, they're turned back on. The UI then rescans the folder and turns fonts on.
+/// swap fails, they're turned back on as they were. The UI then rescans the folder and turns
+/// fonts on: an update's in the scope they had (`temporary_files`), a first download's in the
+/// activation mode.
 #[tauri::command]
 pub async fn google_install(app: AppHandle, id: String) -> AppResult<GoogleInstallResult> {
     blocking(move || {
@@ -487,11 +562,14 @@ pub async fn google_install(app: AppHandle, id: String) -> AppResult<GoogleInsta
                 return Err(e);
             }
         };
-        let was_active_files = turned_off
+        let was_on: Vec<(String, Scope)> = turned_off
             .iter()
-            .filter_map(|p| Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()))
+            .filter_map(|(p, scope)| Some((Path::new(p).file_name()?.to_string_lossy().into_owned(), *scope)))
             .collect();
-        Ok(GoogleInstallResult { dir, files, updated, was_active_files, old_files })
+        let old: HashSet<String> = old_files.iter().cloned().collect();
+        let temporary_files = activation::temporary_after_swap(&was_on, &old, &files);
+        let was_active_files = was_on.into_iter().map(|(name, _)| name).collect();
+        Ok(GoogleInstallResult { dir, files, updated, was_active_files, old_files, temporary_files })
     })
     .await
 }
@@ -516,40 +594,50 @@ pub async fn google_remove(app: AppHandle, id: String) -> AppResult<()> {
 }
 
 /// Turns off every active font file under `dir` and records them as off. Returns the paths it
-/// turned off. If one fails, the ones already turned off are turned back on and the error returned.
-fn turn_off_under(state: &AppState, dir: &Path) -> AppResult<Vec<String>> {
+/// turned off, each with the scope it was on in. If one fails, the ones already turned off are
+/// turned back on and the error returned.
+fn turn_off_under(state: &AppState, dir: &Path) -> AppResult<Vec<activation::TurnedOff>> {
     let _guard = activation::lock();
     let real = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     let prefix = format!("{}/", real.to_string_lossy().trim_end_matches('/'));
-    let paths: Vec<String> = state
-        .conn()?
-        .prepare("SELECT DISTINCT path FROM fonts WHERE activated = 1 AND substr(path, 1, length(?1)) = ?1")?
-        .query_map([&prefix], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    let mut done = Vec::new();
-    for path in &paths {
-        if let Err(e) = activation::deactivate(Path::new(path)) {
-            for p in &done {
-                let _ = activation::activate(Path::new(p));
+    let (paths, temporary): (Vec<String>, HashSet<String>) = {
+        let conn = state.conn()?;
+        let paths = conn
+            .prepare("SELECT DISTINCT path FROM fonts WHERE activated = 1 AND substr(path, 1, length(?1)) = ?1")?
+            .query_map([&prefix], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        (paths, activation::temporary_paths(&conn)?)
+    };
+    let mut done: Vec<activation::TurnedOff> = Vec::new();
+    for path in paths {
+        let scope = if temporary.contains(&path) { Scope::Session } else { Scope::Persistent };
+        if let Err(e) = turn_off_file(&path, scope == Scope::Session) {
+            for (p, scope) in &done {
+                let _ = activation::activate_in(Path::new(p), *scope);
             }
             return Err(e);
         }
-        done.push(path.clone());
+        done.push((path, scope));
     }
     state.write(|conn| {
         conn.execute("UPDATE fonts SET activated = 0 WHERE substr(path, 1, length(?1)) = ?1", [&prefix])?;
+        conn.execute("DELETE FROM temporary_activations WHERE substr(path, 1, length(?1)) = ?1", [&prefix])?;
         Ok(())
     })?;
     state.seen_loaded().retain(|p| !p.starts_with(&prefix));
     Ok(done)
 }
 
-/// Turns fonts back on after a failed swap, and records them as on again.
-fn restore(state: &AppState, paths: &[String]) {
+/// Turns fonts back on after a failed swap, and records them as on again. Each comes back in
+/// the scope it had, whatever the activation mode is now: the failed swap changes nothing.
+fn restore(state: &AppState, turned_off: &[activation::TurnedOff]) {
     let _guard = activation::lock();
-    for path in paths {
-        if activation::activate(Path::new(path)).is_ok() {
-            let _ = state.write(|conn| Ok(conn.execute("UPDATE fonts SET activated = 1 WHERE path = ?1", [path])?));
+    for (path, scope) in turned_off {
+        if activation::activate_in(Path::new(path), *scope).is_ok() {
+            let _ = state.write(|conn| {
+                conn.execute("UPDATE fonts SET activated = 1 WHERE path = ?1", [path])?;
+                activation::record_scope(conn, path, *scope)
+            });
         }
     }
 }
@@ -761,8 +849,8 @@ pub async fn purchases_dismiss(app: AppHandle, id: i64) -> AppResult<()> {
 
 /// Replaces an imported purchase with a newer download of it (same store, same families). The
 /// new files are copied and checked first. Only then are the old fonts turned off and swapped
-/// out; if the swap fails, they're turned back on. The UI then rescans the folder and turns the
-/// same faces back on.
+/// out; if the swap fails, they're turned back on as they were. The UI then rescans the folder
+/// and turns the same faces back on, in the scope they had (`temporary_faces`).
 #[tauri::command]
 pub async fn purchases_replace(app: AppHandle, id: i64, dir: String) -> AppResult<purchases::Replaced> {
     blocking(move || {
@@ -850,4 +938,197 @@ pub async fn purchases_subscription_ended(app: AppHandle, store: String) -> AppR
         Ok(report)
     })
     .await
+}
+
+// ---------------------------------------------------------------------------------- settings
+
+/// The settings, with "Open at login" read from the LaunchAgent itself.
+fn current_settings(state: &AppState) -> AppSettings {
+    let mut current = state.settings().clone();
+    current.launch_at_login = settings::launch_at_login_enabled();
+    current
+}
+
+#[tauri::command(async)]
+pub fn settings_get(state: State<'_, AppState>) -> AppResult<AppSettings> {
+    Ok(current_settings(&state))
+}
+
+/// Changes some settings: a partial object, where `sidebar` may be partial too. Unknown keys are
+/// ignored, numbers are pulled into range, and a wrong value changes nothing. Applies what has
+/// to happen now (the login item, the window's color), saves, and sends "settings-changed"
+/// with the new settings.
+#[tauri::command(async)]
+pub fn settings_update(app: AppHandle, state: State<'_, AppState>, patch: serde_json::Value) -> AppResult<AppSettings> {
+    // Held through the save, so two quick changes can't undo each other.
+    let mut held = state.settings();
+    let mut before = held.clone();
+    before.launch_at_login = settings::launch_at_login_enabled();
+    let next = settings::apply_patch(&before, &patch)?;
+    if next.launch_at_login != before.launch_at_login {
+        settings::set_launch_at_login(next.launch_at_login)?;
+    }
+    state.write(|conn| settings::save(conn, &next))?;
+    *held = next.clone();
+    drop(held);
+    settings_changed(&app, &before, &next);
+    Ok(next)
+}
+
+/// Puts every setting back to its default, and removes the login item.
+#[tauri::command(async)]
+pub fn settings_reset(app: AppHandle, state: State<'_, AppState>) -> AppResult<AppSettings> {
+    let mut held = state.settings();
+    settings::set_launch_at_login(false)?;
+    let next = AppSettings::default();
+    state.write(|conn| settings::save(conn, &next))?;
+    let before = std::mem::replace(&mut *held, next.clone());
+    drop(held);
+    settings_changed(&app, &before, &next);
+    Ok(next)
+}
+
+/// After a change is saved: the window's color follows the Appearance setting, and the page hears.
+fn settings_changed(app: &AppHandle, before: &AppSettings, next: &AppSettings) {
+    if next.theme != before.theme {
+        crate::window::paint_background(app, next.theme);
+    }
+    let _ = app.emit("settings-changed", next);
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingRestore {
+    /// Font files that were on last time and aren't on now.
+    count: usize,
+    /// Their family names, sorted.
+    families: Vec<String>,
+}
+
+/// What launch is waiting to ask about ("ask" policy). Empty when there's nothing to ask.
+pub fn pending_restore(state: &AppState) -> AppResult<PendingRestore> {
+    let paths = state.pending_restore().clone();
+    let mut families: Vec<String> = Vec::new();
+    {
+        let conn = state.conn()?;
+        let mut stmt = conn.prepare_cached("SELECT DISTINCT family FROM fonts WHERE path = ?1")?;
+        for path in &paths {
+            for family in stmt.query_map([path], |r| r.get::<_, String>(0))? {
+                families.push(family?);
+            }
+        }
+    }
+    families.sort_by_key(|f| f.to_lowercase());
+    families.dedup();
+    Ok(PendingRestore { count: paths.len(), families })
+}
+
+/// The fonts launch wants to ask about. Waits until launch has worked that out, so the UI can
+/// ask once at startup without racing the "restore-pending" event.
+#[tauri::command]
+pub async fn activation_pending_restore(app: AppHandle) -> AppResult<PendingRestore> {
+    let mut checked = app.state::<AppState>().launch_checked.subscribe();
+    // An error means the sender is gone, which only happens as the app shuts down.
+    let _ = checked.wait_for(|done| *done).await;
+    blocking(move || pending_restore(&app.state::<AppState>())).await
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreReport {
+    restored: usize,
+    failed: usize,
+}
+
+/// The user's answer to "Turn these fonts back on?". Yes turns them on the same way launch does
+/// with "always". No records them as off. Either way the question is cleared.
+#[tauri::command(async)]
+pub fn activation_restore_decide(state: State<'_, AppState>, restore: bool) -> AppResult<RestoreReport> {
+    let paths = std::mem::take(&mut *state.pending_restore());
+    if paths.is_empty() {
+        return Ok(RestoreReport::default());
+    }
+    let result = if restore {
+        let wanted: HashSet<String> = paths.iter().cloned().collect();
+        activation::reconcile(&state.db_path, &wanted, |path| {
+            state.deferred().insert(path);
+        })
+        .map(|done| RestoreReport { restored: done.restored, failed: done.failed })
+    } else {
+        activation::record_off_unless_loaded(&state, &paths).map(|_| RestoreReport::default())
+    };
+    if result.is_err() {
+        // Nothing was decided: keep the question for another try.
+        *state.pending_restore() = paths;
+    }
+    result
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnOffAllReport {
+    /// Font files turned off.
+    turned_off: usize,
+    /// (file, why) for each one that couldn't be turned off.
+    failed: Vec<(String, String)>,
+}
+
+/// Turns off every font Fontface turned on (outside the macOS font folders), exactly as if each
+/// were switched off: same locks, same checks with the OS, and each is recorded as off.
+#[tauri::command(async)]
+pub fn activation_turn_off_all(state: State<'_, AppState>) -> AppResult<TurnOffAllReport> {
+    let ids: Vec<i64> = state
+        .conn()?
+        .prepare(
+            "SELECT fonts.id FROM fonts JOIN folders ON folders.id = fonts.folder_id
+             WHERE fonts.activated = 1 AND folders.kind != 'system'",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut report = TurnOffAllReport { turned_off: 0, failed: Vec::new() };
+    for outcome in switch(&state, &ids, false, None)? {
+        match outcome.error {
+            None => report.turned_off += 1,
+            Some(why) => report.failed.push((outcome.path, why)),
+        }
+    }
+    Ok(report)
+}
+
+/// Tag backups, newest first.
+#[tauri::command(async)]
+pub fn backups_list(state: State<'_, AppState>) -> AppResult<Vec<backups::Backup>> {
+    Ok(backups::list(&backups::dir(&state.data_dir)))
+}
+
+/// Writes a tag backup now (even if there's one from today), then deletes the oldest beyond
+/// the number to keep.
+#[tauri::command(async)]
+pub fn backups_create(state: State<'_, AppState>) -> AppResult<backups::Backup> {
+    let keep = state.settings().tag_backup_keep as usize;
+    let now = backups::now();
+    // Its own connection: reading the whole library mustn't hold up the UI's.
+    let (contents, tags) = backups::snapshot(&db::open(&state.db_path)?, now)?;
+    backups::write(&backups::dir(&state.data_dir), now, &contents, tags, keep)
+}
+
+/// Opens the Backups folder in Finder / Explorer.
+#[tauri::command(async)]
+pub fn backups_reveal(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    let dir = backups::dir(&state.data_dir);
+    std::fs::create_dir_all(&dir)?;
+    open_folder(&app, &dir)
+}
+
+/// Opens Fontface's data folder (library database, downloads, backups) in Finder / Explorer.
+#[tauri::command(async)]
+pub fn app_data_reveal(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    open_folder(&app, &state.data_dir)
+}
+
+fn open_folder(app: &AppHandle, dir: &Path) -> AppResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| AppError::Other(format!("Couldn't open the folder: {e}")))
 }

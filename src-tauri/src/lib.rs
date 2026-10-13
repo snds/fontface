@@ -1,14 +1,19 @@
 mod activation;
+mod backups;
 mod cloud;
 mod commands;
 mod db;
 mod error;
+#[cfg(target_os = "macos")]
+mod login_item;
 mod model;
 mod protocol;
 mod scanner;
 mod services;
+mod settings;
 mod sfnt;
 mod tags;
+mod window;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -17,7 +22,7 @@ use std::{
 };
 
 use rusqlite::Connection;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use error::{AppError, AppResult};
 
@@ -42,6 +47,13 @@ pub struct AppState {
     purchase_watcher: Mutex<Option<notify::RecommendedWatcher>>,
     /// Watched folders the watcher couldn't watch, with the reason (retried on window focus).
     purchase_watch_failed: Mutex<HashMap<String, String>>,
+    /// The app settings, mirrored from the database so window and quit handlers never wait on
+    /// it. Take this lock first or alone, never while holding the activation lock or the DB mutex.
+    settings: Mutex<settings::AppSettings>,
+    /// "Ask" policy: font files that were on last time and aren't now, waiting for the user's answer.
+    pending_restore: Mutex<Vec<String>>,
+    /// Becomes true once launch has worked out what to ask about.
+    launch_checked: tokio::sync::watch::Sender<bool>,
 }
 
 pub struct RunningScan {
@@ -68,6 +80,14 @@ impl AppState {
         self.seen_loaded.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    pub fn settings(&self) -> MutexGuard<'_, settings::AppSettings> {
+        self.settings.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn pending_restore(&self) -> MutexGuard<'_, Vec<String>> {
+        self.pending_restore.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// A UI-initiated write: takes the DB mutex first, then asks running scans to yield
     /// SQLite's write lock for exactly as long as this write needs it.
     pub fn write<T>(&self, f: impl FnOnce(&mut Connection) -> AppResult<T>) -> AppResult<T> {
@@ -79,7 +99,11 @@ impl AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // macOS: the menu bar adds Settings… to the app menu. Other systems keep Tauri's default.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(window::app_menu).on_menu_event(window::on_menu_event);
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("ff", |ctx, req, resp| protocol::handle(ctx, req, resp))
@@ -89,11 +113,21 @@ pub fn run() {
             let db_path = dir.join("library.sqlite3");
             let mut conn = db::open(&db_path)?;
             tags::ensure_schema(&conn)?;
+            settings::ensure_schema(&conn)?;
+            activation::ensure_schema(&conn)?;
             // The macOS font folders and the service folders are always in the library; the UI
             // scans them at launch.
             db::ensure_system_folders(&mut conn)?;
             db::purge_adobe_rows(&mut conn)?;
             services::ensure_service_folders(&mut conn, &dir)?;
+            settings::refresh_launch_at_login();
+            let mut app_settings = settings::load(&conn)?;
+            app_settings.launch_at_login = settings::launch_at_login_enabled();
+            window::paint_background(app.handle(), app_settings.theme);
+            #[cfg(target_os = "macos")]
+            if let Some(main) = app.get_webview_window("main") {
+                window::full_screen::watch(&main);
+            }
             app.manage(AppState {
                 db: Mutex::new(conn),
                 db_path: db_path.clone(),
@@ -104,19 +138,22 @@ pub fn run() {
                 service_ops: Mutex::default(),
                 purchase_watcher: Mutex::default(),
                 purchase_watch_failed: Mutex::default(),
+                settings: Mutex::new(app_settings.clone()),
+                pending_restore: Mutex::default(),
+                launch_checked: tokio::sync::watch::channel(false).0,
             });
             commands::restart_purchase_watcher(app.handle());
             let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                // Each missing path is recorded the moment it's found, so a scan that finishes
-                // while this is still running can already retry it.
-                let state = handle.state::<AppState>();
-                if let Err(e) = activation::reconcile(&db_path, None, |path| {
-                    state.deferred().insert(path);
-                }) {
-                    eprintln!("fontface: reconcile failed: {e}");
-                }
-            });
+            std::thread::spawn(move || restore_at_launch(&handle, app_settings.restore_on_launch));
+            if app_settings.tag_backups {
+                let keep = app_settings.tag_backup_keep as usize;
+                std::thread::spawn(move || {
+                    let made = db::open(&db_path).and_then(|conn| backups::at_launch(&conn, &backups::dir(&dir), backups::now(), keep));
+                    if let Err(e) = made {
+                        eprintln!("fontface: tag backup failed: {e}");
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -150,6 +187,17 @@ pub fn run() {
             commands::purchases_reveal,
             commands::purchases_detect_store,
             commands::purchases_retry_watch,
+            commands::settings_get,
+            commands::settings_update,
+            commands::settings_reset,
+            commands::activation_pending_restore,
+            commands::activation_restore_decide,
+            commands::activation_turn_off_all,
+            commands::backups_list,
+            commands::backups_create,
+            commands::backups_reveal,
+            commands::app_data_reveal,
+            window::title_bar_double_click,
             tags::commands::tags_list,
             tags::commands::tags_create,
             tags::commands::tags_rename,
@@ -163,9 +211,92 @@ pub fn run() {
             tags::commands::tags_export_finder,
             tags::commands::tags_export_font_book,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Fontface");
+        .build(tauri::generate_context!())
+        .expect("error while building Fontface");
+
+    app.run(|app, event| match event {
+        // "Keep running when the window is closed" (macOS): hide instead of closing. Cmd+Q
+        // still quits, because quitting doesn't go through the window's close request.
+        tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } if label == "main" => {
+            #[cfg(target_os = "macos")]
+            if app.try_state::<AppState>().is_some_and(|s| s.settings().keep_running_in_background) {
+                api.prevent_close();
+                if let Some(main) = app.get_webview_window("main") {
+                    window::hide(&main);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = api;
+        }
+        // With Appearance set to System, keep the window colour in step when macOS switches
+        // between light and dark (the page follows by itself).
+        tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::ThemeChanged(_), .. } if label == "main" => {
+            if let Some(state) = app.try_state::<AppState>() {
+                let theme = state.settings().theme;
+                if theme == settings::Theme::System {
+                    window::paint_background(app, theme);
+                }
+            }
+        }
+        // Clicking the Dock icon brings the hidden window back.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            if let Some(main) = app.get_webview_window("main") {
+                window::show(&main);
+            }
+        }
+        tauri::RunEvent::Exit => {
+            let Some(state) = app.try_state::<AppState>() else { return };
+            let clear = state.settings().clear_temporary_on_quit;
+            if clear {
+                if let Err(e) = activation::clear_temporary(&state) {
+                    eprintln!("fontface: couldn't turn off temporary fonts at quit: {e}");
+                }
+            }
+        }
+        _ => {}
+    });
 }
 
+/// At launch, on its own thread: temporary activations whose login ended are recorded as off,
+/// then fonts that were on last time but aren't now are handled by the restore policy. For
+/// "ask", the list is kept and "restore-pending" is sent, so the UI can ask.
+fn restore_at_launch(handle: &tauri::AppHandle, policy: settings::RestorePolicy) {
+    let state = handle.state::<AppState>();
+    // However this ends, activation_pending_restore must stop waiting.
+    struct Checked<'a>(&'a tokio::sync::watch::Sender<bool>);
+    impl Drop for Checked<'_> {
+        fn drop(&mut self) {
+            self.0.send_replace(true);
+        }
+    }
+    let mut checked = Some(Checked(&state.launch_checked));
+    let plan = match activation::plan_launch(&state, policy) {
+        Ok(Some(plan)) => plan,
+        Ok(None) => return,
+        Err(e) => return eprintln!("fontface: reconcile failed: {e}"),
+    };
+    if !plan.ask.is_empty() {
+        *state.pending_restore() = plan.ask.clone();
+        drop(checked.take());
+        match commands::pending_restore(&state) {
+            Ok(pending) => {
+                let _ = handle.emit("restore-pending", pending);
+            }
+            Err(e) => eprintln!("fontface: couldn't list fonts to restore: {e}"),
+        }
+    }
+    drop(checked);
+    // Each missing path is recorded the moment it's found, so a scan that finishes while this
+    // is still running can already retry it.
+    if let Err(e) = activation::apply_launch(&state, &plan, |path| {
+        state.deferred().insert(path);
+    }) {
+        eprintln!("fontface: reconcile failed: {e}");
+    }
+}
+
+#[cfg(test)]
+mod settings_tests;
 #[cfg(test)]
 mod tests;

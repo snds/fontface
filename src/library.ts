@@ -61,6 +61,23 @@ export interface FilterContext {
 /** Narrows any view by on/off state. */
 export type StatusFilter = "any" | "active" | "inactive";
 
+/** What narrows a view, on top of where its fonts come from. A field left out doesn't filter. */
+export interface Filters {
+  /** On/off state. */
+  status?: StatusFilter;
+  /** Search text: family, style, full or PostScript name, or a tag name. */
+  query?: string;
+  /** Only variable fonts: families with a variable version, showing just their variable styles. */
+  variableOnly?: boolean;
+  /** All Fonts leaves out fonts that are only in the OS's own font folders (a setting); a font
+   *  with a copy in one of the user's folders or services stays. Other views, Font Book among
+   *  them, still list them. */
+  hideInstalled?: boolean;
+}
+
+/** Every copy is in an OS font folder: what All Fonts leaves out when it hides installed fonts. */
+export const onlyInOsFolders = (face: Face) => face.copies.every((c) => c.installed);
+
 /** What the OS calls its own installed-fonts library. */
 export const INSTALLED_LABEL =
   typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent) ? "Windows Fonts" : "Font Book";
@@ -158,26 +175,29 @@ const matches = (f: FontSummary, q: string) =>
 /**
  * Filters at the face level, keeping each Face whole (all copies), so a switch always reflects
  * and acts on every copy in the library, not only the copies visible in this view.
+ * A family is listed when any of its faces is kept, with only those faces.
  */
 export function filterFamilies(
   families: Family[],
   view: LibraryView,
-  status: StatusFilter,
-  query: string,
+  { status = "any", query = "", variableOnly = false, hideInstalled = false }: Filters = {},
   ctx: FilterContext = {},
 ): Family[] {
   const q = query.trim().toLowerCase();
   const inside = view.kind === "location" ? `${view.path}/` : "";
   const keep = (face: Face) => {
+    if (view.kind === "all" && hideInstalled && onlyInOsFolders(face)) return false;
     if (view.kind === "installed" && !face.installed) return false;
     if (view.kind === "folder" && !face.copies.some((c) => c.folderId === view.id)) return false;
     if (view.kind === "location" && !face.copies.some((c) => c.path.startsWith(inside))) return false;
     if (view.kind === "tag" && !ctx.inTag?.(face, view.id)) return false;
     if (status === "active" && !face.active) return false;
     if (status === "inactive" && face.active) return false;
+    // Copies of a face are all variable or all static (it's part of the face key).
+    if (variableOnly && !face.primary.variable) return false;
     return !q || face.copies.some((c) => matches(c, q)) || (ctx.tagNames?.(face).some((n) => n.includes(q)) ?? false);
   };
-  if (view.kind === "all" && status === "any" && !q) return families;
+  if (view.kind === "all" && status === "any" && !q && !variableOnly && !hideInstalled) return families;
   const out: Family[] = [];
   for (const family of families) {
     const faces = family.faces.filter(keep);

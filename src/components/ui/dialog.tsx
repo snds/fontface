@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
+import { DialogDragStrip } from "@/components/TitleBar"
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
@@ -48,6 +49,8 @@ function DialogContent({
   return (
     <DialogPortal>
       <DialogOverlay />
+      {/* macOS: the top row still moves the window while the backdrop covers it. */}
+      <DialogDragStrip />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(

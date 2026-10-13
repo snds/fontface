@@ -9,6 +9,7 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ChoiceGroup } from "./ChoiceGroup";
+import { PageHeader } from "./TitleBar";
 
 interface Props {
   /** Fonts in the Google Fonts folder, for previews of installed families. */
@@ -137,21 +138,17 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex flex-col gap-3 border-b px-4 py-3">
-        <div className="flex items-center gap-3">
-          <Icon name="cloud" size={22} className="text-muted-foreground" />
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold">Google Fonts</h2>
-            <p className="text-xs text-muted-foreground">
-              Free, open-licensed fonts. Fontface downloads the full desktop files from Google's official repository
-              into a folder it manages, then turns them on.
-            </p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => load(true)} disabled={loading}>
-            <Icon name="refresh" size={16} className={cn(loading && "animate-spin")} />
-            Refresh
-          </Button>
-        </div>
+      <PageHeader icon="cloud" title="Google Fonts">
+        <Button variant="outline" size="sm" onClick={() => load(true)} disabled={loading}>
+          <Icon name="refresh" size={16} className={cn(loading && "animate-spin")} />
+          Refresh
+        </Button>
+      </PageHeader>
+      <div className="flex flex-col gap-3 border-b px-4 py-3">
+        <p className="text-xs text-muted-foreground">
+          Free, open-licensed fonts. Fontface downloads the full desktop files from Google's official repository into a
+          folder it manages, then turns them on.
+        </p>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-56">
             <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />
@@ -186,7 +183,7 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
         {catalog?.stale && (
           <p className="text-xs text-muted-foreground">Couldn't reach the catalog, so this is the last saved copy.</p>
         )}
-      </header>
+      </div>
 
       {error && !catalog ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">

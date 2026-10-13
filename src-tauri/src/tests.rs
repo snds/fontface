@@ -730,7 +730,7 @@ fn startup_purges_adobe_rows() {
 mod purchases_flow {
     use std::io::Write;
 
-    use crate::{db, services::purchases};
+    use crate::{activation::Scope, db, services::purchases};
 
     use super::{ANDALE_MONO, HELVETICA_TTC};
 
@@ -1050,7 +1050,8 @@ mod purchases_flow {
         assert_eq!(v2.replaces.as_deref(), Some(old_dir.as_str()), "offered as a Replace, not a second import");
         assert!(finds.iter().filter(|f| f.id != ids[0]).all(|f| f.replaces.is_none()));
 
-        // Only the regular was on. The fake turns nothing off in the OS; it reports what it would.
+        // Only the regular was on, for this login only. The fake turns nothing off in the OS; it
+        // reports what it would.
         let turned_off_in = std::cell::RefCell::new(None);
         let source = purchases::find_source(&conn, &data, ids[0]).unwrap();
         let result = purchases::replace(
@@ -1062,7 +1063,7 @@ mod purchases_flow {
             None,
             |d| {
                 *turned_off_in.borrow_mut() = Some(d.to_path_buf());
-                Ok(vec![format!("{old_dir}/Arial.ttf")])
+                Ok(vec![(format!("{old_dir}/Arial.ttf"), Scope::Session)])
             },
             |_| panic!("nothing to turn back on after a successful swap"),
         )
@@ -1073,6 +1074,7 @@ mod purchases_flow {
         assert_eq!(result.dir, old_dir, "same folder, so the library keeps its place");
         assert_eq!(result.files, vec!["Arial Bold.ttf", "Arial.ttf"]);
         assert_eq!(result.was_active_faces, vec![postscript(ARIAL)], "the UI turns exactly these back on");
+        assert_eq!(result.temporary_faces, vec![postscript(ARIAL)], "and for this login only, as before");
         assert!(result.old_faces.contains(&postscript(ARIAL_BOLD)));
         let folder = std::path::Path::new(&old_dir);
         assert_eq!(std::fs::read(folder.join("Arial.ttf")).unwrap(), newer(ARIAL), "the new version is in place");
@@ -1097,7 +1099,7 @@ mod purchases_flow {
         let folder = std::path::PathBuf::from(&old_dir);
         write_download(&dir.join("Downloads/Arial v2"), &[("Arial.ttf", newer(ARIAL))]);
 
-        let on = vec![format!("{old_dir}/Arial.ttf")];
+        let on = vec![(format!("{old_dir}/Arial.ttf"), Scope::Persistent)];
         let restored = std::cell::RefCell::new(Vec::new());
         let result = purchases::replace(
             &data,
@@ -1195,7 +1197,7 @@ mod purchases_flow {
         // Deleting fails: the fonts come back on and the purchase stays.
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
         let restored = std::cell::RefCell::new(Vec::new());
-        let on = vec![format!("{import_dir}/Arial.ttf")];
+        let on = vec![(format!("{import_dir}/Arial.ttf"), Scope::Session)];
         let failed = purchases::remove_import(&data, &folder, |_| Ok(on.clone()), |p| restored.borrow_mut().extend_from_slice(p));
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(failed.is_err());

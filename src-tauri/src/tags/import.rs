@@ -101,6 +101,8 @@ pub struct ImportResult {
     /// Different fonts not in the library whose tags were kept for when they're added.
     pub kept: usize,
     pub location_colors: usize,
+    /// Tags deleted first, when replacing (see [`replace`]).
+    pub tags_removed: usize,
 }
 
 /// A planned tag with the keys it will write.
@@ -325,13 +327,31 @@ pub fn preview(conn: &Connection, source: &Source) -> AppResult<ImportPreview> {
 /// Applies the chosen tags (by name, as the preview showed them). With `keep_unmatched`,
 /// fonts that aren't in the library keep their tags for later.
 pub fn apply(conn: &mut Connection, source: &Source, chosen: &[String], keep_unmatched: bool) -> AppResult<ImportResult> {
-    let index = LibraryIndex::load(conn)?;
-    let (resolved, _) = resolve(conn, &index, source)?;
+    write(conn, source, chosen, keep_unmatched, false)
+}
+
+/// Like [`apply`], but in place of the tags there now: every tag, tag link and location color
+/// is deleted first, in the same transaction, so a backup comes back as it was (names, colors,
+/// fonts) and nothing changes if any step fails.
+pub fn replace(conn: &mut Connection, source: &Source, chosen: &[String], keep_unmatched: bool) -> AppResult<ImportResult> {
+    write(conn, source, chosen, keep_unmatched, true)
+}
+
+fn write(conn: &mut Connection, source: &Source, chosen: &[String], keep_unmatched: bool, replace: bool) -> AppResult<ImportResult> {
     let chosen: BTreeSet<String> = chosen.iter().map(|n| n.trim().to_ascii_lowercase()).collect();
     let mut result = ImportResult::default();
     let mut styles = BTreeSet::new();
     let mut kept_fonts = BTreeSet::new();
     let tx = conn.transaction()?;
+    if replace {
+        tx.execute("DELETE FROM tag_fonts", [])?;
+        result.tags_removed = tx.execute("DELETE FROM tags", [])?;
+        tx.execute("DELETE FROM location_colors", [])?;
+    }
+    // Planned inside the transaction, so a replace plans against no tags: each one is created
+    // again with the source's color.
+    let index = LibraryIndex::load(&tx)?;
+    let (resolved, _) = resolve(&tx, &index, source)?;
     let mut touched = BTreeSet::new();
     for r in resolved.iter().filter(|r| chosen.contains(&r.tag.name.to_ascii_lowercase())) {
         let (tag, created) = ensure_tag(&tx, &r.tag.name, &r.tag.color)?;

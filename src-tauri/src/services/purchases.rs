@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{adobe::is_adobe_path, service_dir};
 use crate::{
+    activation::{self, Scope, TurnedOff},
     cloud,
     error::{AppError, AppResult},
     scanner,
@@ -1406,6 +1407,10 @@ pub struct Replaced {
     /// PostScript names of every face the old copy had. A face that's new in this version is
     /// turned on too if any face was on.
     pub old_faces: Vec<String>,
+    /// PostScript names of the faces to turn back on for this login only (scope "temporary"),
+    /// because they, or what they replace, were on that way. The others come back to stay
+    /// (scope "persistent"). See `activation::temporary_after_swap`.
+    pub temporary_faces: Vec<String>,
 }
 
 /// PostScript names of the faces in a font file.
@@ -1418,7 +1423,8 @@ fn postscript_names(path: &Path) -> Vec<String> {
 
 /// Replaces an imported purchase with a newer download of it. The new files are copied and
 /// checked first. Only then are the old fonts turned off (`turn_off` returns the files it turned
-/// off) and the files swapped; if the swap fails, `turn_back_on` gets those files back.
+/// off, each with its scope) and the files swapped; if the swap fails, `turn_back_on` gets those
+/// files back.
 pub fn replace(
     data_dir: &Path,
     old_dir: &Path,
@@ -1426,8 +1432,8 @@ pub fn replace(
     source_store: Option<&str>,
     origin_url: Option<String>,
     referrer: Option<String>,
-    turn_off: impl FnOnce(&Path) -> AppResult<Vec<String>>,
-    turn_back_on: impl FnOnce(&[String]),
+    turn_off: impl FnOnce(&Path) -> AppResult<Vec<TurnedOff>>,
+    turn_back_on: impl FnOnce(&[TurnedOff]),
 ) -> AppResult<Replaced> {
     if !is_import_dir(data_dir, old_dir) {
         return Err(AppError::Invalid("That isn't a purchase Fontface imported".into()));
@@ -1441,15 +1447,21 @@ pub fn replace(
     if !families.iter().all(|f| old.meta.families.contains(f)) || !faces.iter().any(|k| old.meta.faces.contains(k)) {
         return Err(AppError::Invalid(format!("That download isn't a version of {}", old.label)));
     }
+    let new_faces: Vec<String> = faces.iter().map(|k| key_postscript(k).to_string()).collect();
     let mut old_faces: Vec<String> = old.meta.faces.iter().map(|k| key_postscript(k).to_string()).collect();
     old_faces.sort();
     old_faces.dedup();
     let turned_off = turn_off(old_dir)?;
-    let mut was_active_faces: Vec<String> = turned_off.iter().flat_map(|p| postscript_names(Path::new(p))).collect();
+    let was_on: Vec<(String, Scope)> = turned_off
+        .iter()
+        .flat_map(|(p, scope)| postscript_names(Path::new(p)).into_iter().map(move |name| (name, *scope)))
+        .collect();
+    let temporary_faces = activation::temporary_after_swap(&was_on, &old_faces.iter().cloned().collect(), &new_faces);
+    let mut was_active_faces: Vec<String> = was_on.into_iter().map(|(name, _)| name).collect();
     was_active_faces.sort();
     was_active_faces.dedup();
     match swap(prepared, old_dir) {
-        Ok(r) => Ok(Replaced { dir: r.dir, store: old.meta.store, files: r.files, was_active_faces, old_faces }),
+        Ok(r) => Ok(Replaced { dir: r.dir, store: old.meta.store, files: r.files, was_active_faces, old_faces, temporary_faces }),
         Err(e) => {
             turn_back_on(&turned_off);
             Err(e)
@@ -1647,12 +1659,13 @@ pub fn delete_import_dir(dir: &Path) -> std::io::Result<()> {
 }
 
 /// Removes an imported purchase: `turn_off` turns its fonts off (returning the files it turned
-/// off), then the folder is deleted. If deleting fails, `turn_back_on` gets those files back.
+/// off, each with its scope), then the folder is deleted. If deleting fails, `turn_back_on` gets
+/// those files back.
 pub fn remove_import(
     data_dir: &Path,
     dir: &Path,
-    turn_off: impl FnOnce(&Path) -> AppResult<Vec<String>>,
-    turn_back_on: impl FnOnce(&[String]),
+    turn_off: impl FnOnce(&Path) -> AppResult<Vec<TurnedOff>>,
+    turn_back_on: impl FnOnce(&[TurnedOff]),
 ) -> AppResult<()> {
     if !is_import_dir(data_dir, dir) {
         return Err(AppError::Invalid("That isn't a purchase Fontface imported".into()));

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 import { viewKey, type Family, type LibraryView } from "@/library";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -12,8 +11,7 @@ import { openTagDialog } from "./dialogs";
 import { toggleOpen, useOpenRows } from "./expanded";
 import { countByTag, useTagIndex, type TagNode } from "./model";
 import { CONTEXT, DROPDOWN, openMenuFromKeyboard, TagMenuItems } from "./menus";
-import { reload, useOrganize } from "./store";
-import { TagDialogHost } from "./TagDialogs";
+import { useOrganize } from "./store";
 
 const n = (v: number) => v.toLocaleString();
 const openId = (id: number) => `tag:${id}`;
@@ -113,15 +111,15 @@ function TagRow({
   );
 }
 
-/** The sidebar's Tags section: every tag as a view, nested by "/", with style counts. */
+/**
+ * The sidebar's Tags section: every tag as a view, nested by "/", with style counts. Tags are
+ * loaded, and their dialogs shown, by App (TagDialogHost), so they work while this section is
+ * hidden or settings are open.
+ */
 export function TagsSection({ families, view, onView }: { families: Family[]; view: LibraryView; onView: (v: LibraryView) => void }) {
   const { loaded } = useOrganize();
   const index = useTagIndex();
   const counts = useMemo(() => countByTag(families, index), [families, index]);
-
-  useEffect(() => {
-    reload().catch((e) => toast.error("Couldn't load tags", { description: String(e) }));
-  }, []);
 
   // A tag view whose tag is gone (deleted, or merged by a rename elsewhere) goes back to All Fonts.
   useEffect(() => {
@@ -164,12 +162,6 @@ export function TagsSection({ families, view, onView }: { families: Family[]; vi
       {index.tree.map((node) => (
         <TagRow key={node.tag.id} node={node} counts={counts} view={view} onView={onView} />
       ))}
-      <TagDialogHost
-        families={families}
-        onDeleted={(ids) => {
-          if (view.kind === "tag" && ids.includes(view.id)) onView({ kind: "all" });
-        }}
-      />
     </div>
   );
 }

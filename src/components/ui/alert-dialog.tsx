@@ -3,6 +3,7 @@ import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog
 import { cn } from "@/lib/utils"
 
 import { Button } from "@/components/ui/button"
+import { DialogDragStrip } from "@/components/TitleBar"
 
 function AlertDialog({ ...props }: AlertDialogPrimitive.Root.Props) {
   return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />
@@ -46,6 +47,8 @@ function AlertDialogContent({
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
+      {/* macOS: the top row still moves the window while the backdrop covers it. */}
+      <DialogDragStrip />
       <AlertDialogPrimitive.Popup
         data-slot="alert-dialog-content"
         data-size={size}

@@ -20,9 +20,9 @@ App / Sidebar / FontList / DetailPanel
 SQLite lives in the app data folder (`~/Library/Application Support/design.snds.fontface/`).
 `fonts.activated` is what the user asked for. The switches show `os_active`, which comes from
 `CTFontManagerCopyAvailableFontURLs`: every font file macOS has loaded right now, including ones
-another app turned on or off. At launch, `activation::reconcile` re-applies recorded intent the
-OS isn't honoring. Files it can't reach yet, such as on a cloud drive that hasn't mounted, are
-retried after their folder's next scan. Reconcile doesn't run after every scan, so it won't undo
+another app turned on or off. At launch, recorded intent the OS isn't honoring is re-applied
+(or asked about, or accepted as off: see **Settings**). Files it can't reach yet, such as on a
+cloud drive that hasn't mounted, are retried after their folder's next scan. Reconcile doesn't run after every scan, so it won't undo
 a change made in another app while Fontface is open. It never clears intent just because a file
 is missing for now.
 
@@ -40,6 +40,7 @@ The UI reflects this: toggling one face of a collection updates every face from 
 `CTFontManagerRegisterFontsForURL(url, kCTFontManagerScopePersistent)` makes fonts available to
 every app. They stay on after the app quits and after a restart, and nothing is copied into
 `~/Library/Fonts`. Both calls are idempotent: "already registered" and "not registered" count as success.
+The "temporary" activation mode uses session scope instead (see **Settings**).
 
 **Previews never depend on activation.**
 The web view loads font bytes through a private `ff://` URL scheme, keyed by library id. It can
@@ -126,6 +127,63 @@ downloaded, so keep cloud font folders set to "Available offline".
 Adding a folder inside an existing one is refused. Adding a parent of existing folders absorbs
 them and keeps their fonts' activation state. This guarantees each file belongs to one folder.
 
+**Settings.**
+`settings.rs` holds the app settings; the settings screen reads and changes them through
+`settings_get`, `settings_update` (a partial object) and `settings_reset`.
+
+- **Storage:** one row per setting in `app_settings` (key → JSON value), created by an
+  idempotent `ensure_schema`. Missing keys take their defaults, unknown keys are ignored, and a
+  damaged row is skipped without resetting the rest. A change is checked as a whole: numbers
+  are pulled into range, and a wrong value is refused in plain words and changes nothing.
+  `AppState` keeps a copy, so window and quit handlers never wait on the database. The settings
+  lock is taken first or alone. Every change sends `settings-changed`.
+- **Activation modes:** "persistent" (the default) registers in CoreText's persistent scope.
+  "Temporary" registers in session scope, which lasts until logout or restart and isn't tied
+  to Fontface's process, and lists the file in `temporary_activations`. Turning a font on that's
+  already on keeps the scope it has (`activation::turn_on_plan`): a temporary font turned on
+  in persistent mode stays temporary, and a persistent one turned on in temporary mode stays
+  persistent. Turning off removes both registrations and the list entry. With "turn off
+  temporary fonts at quit", `RunEvent::Exit` turns them all off and records them as off.
+- **Updates keep each font's scope:** a Google Fonts update and a purchases Replace turn the
+  old files off, then the UI turns the new ones on. `activation::temporary_after_swap` decides
+  which come back temporarily: a font that was temporary, and a font that's new in this
+  version when everything that was on was temporary. The results list those names
+  (`temporaryFiles`, `temporaryFaces`), and `set_activation` takes a `scope` ("persistent" or
+  "temporary") that overrides the mode, so the rest come back to stay whatever the mode is now.
+  If the swap fails, or a purchase can't be removed, each font is turned back on in the scope
+  it had. A temporary font another app turns off is recorded as off and leaves the list, after
+  Fontface removes its own session registration of it.
+- **Launch:** `activation::launch_plan` is a pure function from what's recorded on, what's
+  temporary, what's loaded and what exists, to a plan. A temporary font the OS no longer has
+  means the login ended: it's recorded as off and never turned back on. For other fonts that
+  were on and aren't loaded, the restore policy decides: "always" turns them back on; "ask"
+  keeps the list, sends `restore-pending`, and waits for `activation_restore_decide`; "never"
+  records them as off. Missing files keep their intent under every policy and are retried
+  after their folder's next scan, since a drive that hasn't mounted isn't the user's choice.
+- **Keep running (macOS):** closing the main window hides it, and clicking the Dock icon
+  (`RunEvent::Reopen`) shows it again. Cmd+Q still quits. A window in full screen leaves full
+  screen first and hides when macOS says it has (`NSWindowDidExitFullScreenNotification`, in
+  `window.rs`), so no empty full-screen space is left behind.
+- **Open at login (macOS):** a LaunchAgent at `~/Library/LaunchAgents/design.snds.fontface.plist`
+  that runs Fontface's executable (`RunAtLoad`, `ProcessType` Interactive). The file is the
+  truth: the setting reads as on only while it exists and starts this copy. At launch, a copy
+  running from an app bundle points it at itself only if the copy it starts is gone (the app
+  moved). A copy on a disk image, or one macOS runs from a hidden folder because it was opened
+  straight from a download (App Translocation), never takes it, and turning the setting on
+  there is refused with a plain message to move Fontface to Applications first.
+- **Tag backups:** at launch, if there are tags and the newest backup is a day old, a Fontface
+  tags file (the JSON export) is written to `Backups/` in the app data folder, named
+  `Tags YYYY-MM-DD HH-MM-SS.json` in UTC so names sort by time. Then the oldest beyond the
+  number to keep are deleted, never the one just written. A backup dated a day or more ahead
+  (written while the clock was wrong) counts as the oldest. Only files with exactly that name
+  pattern are ever deleted.
+- **Appearance:** System, Light or Dark (see **Front end**). At setup, and whenever the setting
+  changes, `window::paint_background` colors the main window with the page's background:
+  #FFFFFF, or #0A0A0A for dark (`--background` in `src/index.css`, oklch(1 0 0) and
+  oklch(0.145 0 0)). With System it reads macOS's `AppleInterfaceStyle` then. This only matters
+  before the page's first paint, so a dark launch doesn't flash white; a later macOS change is
+  the page's to follow.
+
 ## Windows plan (architected, not built)
 
 Windows-specific code is isolated behind `#[cfg(target_os = "windows")]`:
@@ -147,5 +205,8 @@ Everything else (scanner, database, protocol, UI) is already cross-platform.
 - **Components:** shadcn/ui (Base UI flavor), styled with Tailwind CSS v4. Generated components live in `src/components/ui/`.
 - **Icons:** Google Material Symbols Rounded, from the bundled variable font (`<Icon name="…" />`).
 - **Type:** IBM Plex Sans for the interface. IBM Plex Mono for technical values such as paths, PostScript names, axis tags and counts. Both are bundled.
-- **Theme:** follows the macOS light or dark setting (a `.dark` class mirrors `prefers-color-scheme`).
+- **Theme:** the Appearance setting: System, Light or Dark. `src/settings/theme.ts` puts a `.dark` class on `<html>`. The last setting used is kept in localStorage and applied before the first render, so the page never starts in the wrong colors; with System it follows `prefers-color-scheme` live. `window.setTheme` keeps the native parts (the window buttons) in step. The window's own background is set from Rust at setup (see **Settings**).
+- **Title bar (macOS):** an overlay (`src-tauri/tauri.macos.conf.json`: `titleBarStyle` Overlay, hidden title, window buttons inset). The app's 52px first row (sidebar strip, toolbar or page header, detail header) is the title bar: `src/components/TitleBar.tsx` marks it as a drag region (`data-tauri-drag-region="deep"`), with controls left clickable. A double-click does what macOS's "Double-click a window's title bar to" setting says (zoom, minimize or nothing) through the `title_bar_double_click` command, which reads `AppleActionOnDoubleClick` (or the older `AppleMiniaturizeOnDoubleClick`), instead of Tauri's built-in zoom. In full screen the row is a plain header. Windows keeps its native frame.
+- **App menu (macOS):** built in `src-tauri/src/window.rs`. It repeats Tauri's default menu (About, Services, Hide, Quit; Edit with undo, cut, copy, paste and select all; View; Window; Help) and adds Settings… (⌘,) and Show All to the Fontface menu. Settings… shows the window if it was closed and sends `open-settings` to the page.
+- **Settings screen:** `src/settings/`. It covers the library while open: the sidebar becomes the list of sections, and a search box finds settings across all of them. Each change saves as it's made (`settings_update`); there's no Save button. Esc goes back to the library.
 - **Large libraries:** the list is virtualized, so only rows on screen exist. A font file loads only when its row scrolls into view.

@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import {
   api,
+  type ActivationMode,
   type Folder,
   type FontSummary,
   type GoogleFamily,
@@ -14,7 +15,16 @@ import {
   type ServiceId,
   type ServiceInfo,
 } from "@/api";
-import { activationIds, filterFamilies, groupFamilies, viewKey, type Face, type LibraryView, type StatusFilter } from "@/library";
+import {
+  activationIds,
+  filterFamilies,
+  groupFamilies,
+  onlyInOsFolders,
+  viewKey,
+  type Face,
+  type LibraryView,
+  type StatusFilter,
+} from "@/library";
 import { faceName } from "@/fontLoader";
 import {
   AlertDialog,
@@ -31,15 +41,24 @@ import { Icon } from "@/components/ui/icon";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { Sidebar, scanStatus } from "@/components/Sidebar";
+import { SETTINGS_BUTTON_ID, Sidebar, scanStatus } from "@/components/Sidebar";
 import { Toolbar } from "@/components/Toolbar";
 import { FontList } from "@/components/FontList";
 import { DetailPanel } from "@/components/DetailPanel";
 import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
+import { IS_MAC } from "@/components/TitleBar";
 import { useLocations } from "@/tags/locations";
 import { useFilterContext } from "@/tags/model";
+import { reload as reloadTags } from "@/tags/store";
+import { TagDialogHost } from "@/tags/TagDialogs";
+import { hiddenBySidebar, useLastView } from "@/settings/lastView";
+import type { SectionId } from "@/settings/parts";
+import { useRestorePrompt } from "@/settings/restorePrompt";
+import { SETTINGS_SEARCH_ID, SettingsScreen } from "@/settings/SettingsView";
+import { applyTheme, useDarkTheme } from "@/settings/theme";
+import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/useSettings";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
@@ -48,10 +67,18 @@ const LIVE_REFRESH_MS = 4000;
 const ANNOUNCE_MS = 15000;
 
 export default function App() {
+  const settingsStore = useSettingsStore();
+  const { settings, ready: settingsReady } = settingsStore;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The settings section opened last this session. */
+  const [settingsSection, setSettingsSection] = useState<SectionId>("general");
+  const dark = useDarkTheme();
   const [folders, setFolders] = useState<Folder[]>([]);
   const [fonts, setFonts] = useState<FontSummary[]>([]);
   const [view, setView] = useState<LibraryView>({ kind: "all" });
   const [status, setStatus] = useState<StatusFilter>("any");
+  /** Only variable fonts (the toolbar's Variable toggle). */
+  const [variableOnly, setVariableOnly] = useState(false);
   const [query, setQuery] = useState("");
   const [previewText, setPreviewText] = useState("");
   const [size, setSize] = useState(32);
@@ -78,6 +105,8 @@ export default function App() {
   const [newPurchases, setNewPurchases] = useState(0);
   const [purchaseBusy, setPurchaseBusy] = useState<Set<string>>(new Set());
   const purchaseBusyRef = useRef(new Set<string>());
+  /** The first library read is done (folders and fonts). */
+  const [libraryLoaded, setLibraryLoaded] = useState(false);
 
   const started = useRef(false);
   const lastLiveRefresh = useRef(0);
@@ -129,6 +158,36 @@ export default function App() {
     setFolders(f);
     setServices(svc);
   }, [loadFonts]);
+
+  // Settings open over the library (which stays as it was underneath). Focus comes back to
+  // where it was, or to the Settings button.
+  const settingsOpenRef = useRef(false);
+  settingsOpenRef.current = settingsOpen;
+  const focusBack = useRef<Element | null>(null);
+  const openSettings = useCallback(() => {
+    // Already open: go to the search field.
+    if (settingsOpenRef.current) return document.getElementById(SETTINGS_SEARCH_ID)?.focus();
+    // Marked open at once, so a second request before the next render (⌘, reaching both the
+    // page and the menu) only goes to the search field.
+    settingsOpenRef.current = true;
+    focusBack.current = document.activeElement;
+    setSettingsOpen(true);
+  }, []);
+  /** ⌘, and the menu's Settings… item. Ignored while a dialog or menu is open, so settings
+   *  never open behind it (close it first). */
+  const openSettingsByShortcut = useCallback(() => {
+    if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+    openSettings();
+  }, [openSettings]);
+  const closeSettings = useCallback(() => {
+    if (!settingsOpenRef.current) return;
+    setSettingsOpen(false);
+    requestAnimationFrame(() => {
+      const back = focusBack.current;
+      const target = back instanceof HTMLElement && back.isConnected && back !== document.body ? back : document.getElementById(SETTINGS_BUTTON_ID);
+      target?.focus();
+    });
+  }, []);
 
   // Another app (Typeface, Font Book) may have turned fonts on or off while this window was in
   // the background. Re-read the OS state when it comes back to the front.
@@ -247,14 +306,21 @@ export default function App() {
       const n = e.payload.length;
       toast.info(n === 1 ? "New font download found" : `${n} new font downloads found`, {
         description: "Add them to your library from Purchases.",
-        action: { label: "Review", onClick: () => setView({ kind: "service", id: "purchases" }) },
+        action: {
+          label: "Review",
+          onClick: () => {
+            setView({ kind: "service", id: "purchases" });
+            // The page opens in the library, so leave settings if they're open.
+            closeSettings();
+          },
+        },
       });
     });
     unlisten.then(() => countNewPurchases());
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [countNewPurchases]);
+  }, [countNewPurchases, closeSettings]);
 
   // A folder view whose folder is gone (e.g. removed while a removal was still running) falls
   // back to All Fonts.
@@ -263,14 +329,68 @@ export default function App() {
   }, [folders]);
 
   // At launch: load the library, then rescan every folder (macOS folders first) to catch changes.
+  // With "Check folders for changes when Fontface opens" off, only folders with no fonts yet
+  // (never scanned, or empty) are scanned.
   useEffect(() => {
     if (started.current) return;
     started.current = true;
     (async () => {
-      await refresh();
-      for (const folder of await api.listFolders()) if (!folder.missing) await scan(folder, true);
+      try {
+        await refresh();
+      } finally {
+        setLibraryLoaded(true);
+      }
+      const { scanAtLaunch } = await settingsReady;
+      for (const folder of await api.listFolders()) {
+        if (!folder.missing && (scanAtLaunch || folder.fontCount === 0)) await scan(folder, true);
+      }
     })().catch((e) => toast.error(String(e)));
-  }, [refresh, scan]);
+  }, [refresh, scan, settingsReady]);
+
+  // Tags show in the list, the detail panel and the sidebar; load them once for all of them.
+  useEffect(() => {
+    reloadTags().catch((e) => toast.error("Couldn't load tags", { description: String(e) }));
+  }, []);
+
+  // Settings that change what's on screen: the appearance, and the preview text and size (at
+  // launch, and again whenever they're changed in settings).
+  useEffect(() => {
+    if (settings) applyTheme(settings.theme);
+  }, [settings?.theme]);
+  useEffect(() => {
+    if (settings) setPreviewText(settings.previewText);
+  }, [settings?.previewText]);
+  useEffect(() => {
+    if (settings) setSize(settings.previewSize);
+  }, [settings?.previewSize]);
+
+  // A view the sidebar no longer shows (its section was just hidden) falls back to All Fonts.
+  const sidebarShows = settings?.sidebar ?? DEFAULT_SETTINGS.sidebar;
+  const sidebarKey = JSON.stringify(sidebarShows);
+  useEffect(() => {
+    setView((v) => (hiddenBySidebar(v, sidebarShows, foldersRef.current) ? { kind: "all" } : v));
+  }, [sidebarKey]);
+
+  // "Ask me": fonts turned off while Fontface was closed are offered back once, at launch.
+  useRestorePrompt(() => loadFonts().catch(() => {}));
+
+  // Cmd+, (Ctrl+, on Windows) opens settings, or goes to their search field if they're open.
+  // On macOS the app menu's Settings… item has ⌘, too and sends "open-settings". The page sees
+  // the key first; preventDefault keeps the menu from acting on it as well, and if both ever
+  // run, the second only focuses the search field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "," || !(IS_MAC ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey) return;
+      e.preventDefault();
+      openSettingsByShortcut();
+    };
+    window.addEventListener("keydown", onKey);
+    const unlisten = listen("open-settings", () => openSettingsByShortcut());
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [openSettingsByShortcut]);
 
   const addFolder = async () => {
     const path = await open({ directory: true, multiple: false, title: "Add a font folder" });
@@ -305,8 +425,16 @@ export default function App() {
     }
   };
 
-  /** Turns fonts on or off. Resolves with the files that ended up on (useful to check a request). */
-  const setActivation = (ids: number[], active: boolean, knownPaths?: string[]): Promise<Set<string>> => {
+  /**
+   * Turns fonts on or off. Resolves with the files that ended up on (useful to check a request).
+   * `scope` turns them on that way instead of the saved activation mode (see bringIntoLibrary).
+   */
+  const setActivation = (
+    ids: number[],
+    active: boolean,
+    knownPaths?: string[],
+    scope: ActivationMode | null = null,
+  ): Promise<Set<string>> => {
     if (ids.length === 0) return Promise.resolve(new Set());
     const paths = knownPaths ?? [...new Set(ids.map((id) => fontById.get(id)?.path).filter((p): p is string => !!p))];
     setBusy((b) => new Set([...b, ...paths]));
@@ -314,7 +442,7 @@ export default function App() {
       mutationEpoch.current++;
       const on = new Set<string>();
       try {
-        const outcomes = await api.setActivation(ids, active);
+        const outcomes = await api.setActivation(ids, active, scope);
         const state = new Map<number, boolean>();
         for (const o of outcomes) {
           if (o.active) on.add(o.path);
@@ -335,6 +463,22 @@ export default function App() {
         });
       }
       return on;
+    };
+    const queued = activationQueue.current.then(run, run);
+    activationQueue.current = queued;
+    return queued;
+  };
+
+  /** Turns off every font Fontface turned on (settings), in turn with other on/off requests. */
+  const turnOffAll = () => {
+    const run = async () => {
+      mutationEpoch.current++;
+      try {
+        return await api.activationTurnOffAll();
+      } finally {
+        mutationEpoch.current++;
+        await loadFonts().catch(() => {});
+      }
     };
     const queued = activationQueue.current.then(run, run);
     activationQueue.current = queued;
@@ -367,13 +511,16 @@ export default function App() {
    * After a service copied files into `dir`: rescan its folder (once more if files are missing),
    * then turn the new fonts on, one copy per style like everywhere else in the library, and
    * check it worked. Throws a plain explanation if the files didn't fully reach the library or
-   * didn't turn on. `pick` narrows which new fonts to turn on (default: all of them).
+   * didn't turn on. `pick` narrows which new fonts to turn on (default: all of them). `scopeOf`
+   * says how each one turns on: an update brings a font back the way the one it replaces was
+   * on (until logout, or to stay), whatever the activation mode is now. Null: the saved mode.
    */
   const bringIntoLibrary = async (
     service: ServiceId,
     dir: string,
     files: string[],
     pick: (name: string, font: FontSummary) => boolean = () => true,
+    scopeOf: (name: string, font: FontSummary) => ActivationMode | null = () => null,
   ) => {
     const verb = service === "google" ? "Downloaded" : "Added";
     const nameOf = (f: FontSummary) => f.path.slice(dir.length + 1);
@@ -402,8 +549,25 @@ export default function App() {
       }),
       true,
     );
-    const wantedFiles = new Set(list.filter((f) => ids.includes(f.id)).map((f) => f.path));
-    const on = await setActivation(ids, true, [...wantedFiles]);
+    const wanted = list.filter((f) => ids.includes(f.id));
+    const wantedFiles = new Set(wanted.map((f) => f.path));
+    // One request per scope; they run in turn, through the same queue as every switch.
+    const byScope = new Map<ActivationMode | null, FontSummary[]>();
+    for (const f of wanted) {
+      const scope = scopeOf(nameOf(f), f);
+      byScope.set(scope, [...(byScope.get(scope) ?? []), f]);
+    }
+    const results = await Promise.all(
+      [...byScope].map(([scope, group]) =>
+        setActivation(
+          group.map((f) => f.id),
+          true,
+          [...new Set(group.map((f) => f.path))],
+          scope,
+        ),
+      ),
+    );
+    const on = new Set(results.flatMap((s) => [...s]));
     await loadFonts();
 
     const turnedOn = [...wantedFiles].filter((p) => on.has(p)).length;
@@ -448,6 +612,8 @@ export default function App() {
   /**
    * Swaps a newer download in for an imported purchase, then turns the same faces back on (and
    * faces that are new in this version, if any were on). Nothing is turned on if it was all off.
+   * Each face comes back on until logout, or to stay, as it was before (the back end works out
+   * which, including for new faces).
    */
   const replacePurchase = (find: PurchaseFind, dir: string) =>
     purchaseOp(`path:${find.path}`, async () => {
@@ -460,10 +626,17 @@ export default function App() {
       }
       const wasOn = new Set(result.wasActiveFaces);
       const old = new Set(result.oldFaces);
-      await bringIntoLibrary("purchases", result.dir, result.files, (_, font) => {
-        const ps = font.postscriptName;
-        return !!ps && (wasOn.has(ps) || (wasOn.size > 0 && !old.has(ps)));
-      });
+      const temporary = new Set(result.temporaryFaces);
+      await bringIntoLibrary(
+        "purchases",
+        result.dir,
+        result.files,
+        (_, font) => {
+          const ps = font.postscriptName;
+          return !!ps && (wasOn.has(ps) || (wasOn.size > 0 && !old.has(ps)));
+        },
+        (_, font) => (font.postscriptName && temporary.has(font.postscriptName) ? "temporary" : "persistent"),
+      );
       toast.success(`Updated ${find.contents.families[0] ?? find.name} to the new version`);
     });
 
@@ -506,8 +679,9 @@ export default function App() {
   /**
    * Downloads a Google Fonts family, adds it to the library, and turns it on. An update turns
    * back on exactly what was on before (nothing, if the family had been turned off), counting a
-   * renamed file (e.g. statics rebuilt as a variable font) as the file it replaced. Throws with a
-   * plain explanation if the family didn't fully reach the library or didn't turn on.
+   * renamed file (e.g. statics rebuilt as a variable font) as the file it replaced, and the same
+   * way as before: until logout, or to stay. A first download uses the activation mode. Throws
+   * with a plain explanation if the family didn't fully reach the library or didn't turn on.
    */
   const installGoogle = (id: string) =>
     googleOp(id, async () => {
@@ -516,9 +690,14 @@ export default function App() {
       // as a variable font) counts as the file it replaced.
       const wasOn = new Set(result.wasActiveFiles);
       const old = new Set(result.oldFiles);
+      const temporary = new Set(result.temporaryFiles);
       const renamedAway = result.wasActiveFiles.some((n) => !result.files.includes(n));
-      await bringIntoLibrary("google", result.dir, result.files, (name) =>
-        !result.updated || wasOn.has(name) || (renamedAway && !old.has(name)),
+      await bringIntoLibrary(
+        "google",
+        result.dir,
+        result.files,
+        (name) => !result.updated || wasOn.has(name) || (renamedAway && !old.has(name)),
+        (name) => (!result.updated ? null : temporary.has(name) ? "temporary" : "persistent"),
       );
     });
 
@@ -570,9 +749,11 @@ export default function App() {
   // Tags narrow tag views and are searched too; location colors show on rows.
   const filterContext = useFilterContext();
   const locations = useLocations(folders, services);
+  // A setting: All Fonts can leave out fonts that are only in the OS's font folders.
+  const hideInstalled = settings ? !settings.showInstalledInAll : false;
   const families = useMemo(
-    () => filterFamilies(allFamilies, view, status, query, filterContext),
-    [allFamilies, view, status, query, filterContext],
+    () => filterFamilies(allFamilies, view, { status, query, variableOnly, hideInstalled }, filterContext),
+    [allFamilies, view, status, query, variableOnly, hideInstalled, filterContext],
   );
   const faceById = useMemo(() => {
     const map = new Map<number, Face>();
@@ -586,14 +767,36 @@ export default function App() {
   const counts = useMemo(() => {
     let all = 0;
     let installed = 0;
+    // What All Fonts leaves out when it hides installed fonts (see filterFamilies).
+    let onlyInstalled = 0;
     for (const family of allFamilies) {
       all += family.faces.length;
       installed += family.faces.filter((face) => face.installed).length;
+      onlyInstalled += family.faces.filter(onlyInOsFolders).length;
     }
-    return { all, installed };
-  }, [allFamilies]);
+    return { all: hideInstalled ? all - onlyInstalled : all, installed };
+  }, [allFamilies, hideInstalled]);
   const viewScan = view.kind === "folder" ? scans.get(view.id) : [...scans.values()][0];
-  const resetKey = `${viewKey(view)}:${status}:${query}`;
+  const resetKey = `${viewKey(view)}:${status}:${variableOnly}:${query}`;
+  // Empty list with filters on: say which fonts were asked for, e.g. "No active variable fonts here."
+  const filtered = !!query || status !== "any" || variableOnly;
+  const kinds = [status !== "any" && status, variableOnly && "variable", "fonts"].filter(Boolean).join(" ");
+  const where = view.kind === "tag" ? " with this tag" : view.kind === "location" ? " in this folder" : "";
+  const noMatch = query ? `No ${kinds}${where} match “${query}”.` : `No ${kinds}${where || " here"}.`;
+
+  // "Open where you left off": the view and filters are saved as they change, and reopened at launch.
+  useLastView({
+    settings,
+    libraryLoaded,
+    folders,
+    families: allFamilies,
+    current: { view, status, variableOnly },
+    apply: (last) => {
+      setView(last.view);
+      setStatus(last.status);
+      setVariableOnly(last.variableOnly);
+    },
+  });
 
   const toggleExpanded = (name: string) =>
     setExpanded((s) => {
@@ -604,164 +807,197 @@ export default function App() {
     });
 
   return (
-    <TooltipProvider>
-      <div className={cn("grid h-full", showDetail ? "grid-cols-[240px_1fr_360px]" : "grid-cols-[240px_1fr]")}>
-        <Sidebar
-          folders={folders}
-          counts={counts}
-          folderCounts={folderCounts}
-          families={allFamilies}
-          services={services}
-          adobeCount={adobeCount}
-          newPurchases={newPurchases}
-          view={view}
-          scans={scans}
-          onView={setView}
-          onAddFolder={addFolder}
-          onRemoveFolder={setPendingRemoval}
-          onRescan={(f) => scan(f)}
-          onCancelScan={(f) => api.cancelScan(f.id).catch((e) => toast.error(String(e)))}
-        />
-        <main className="flex min-h-0 min-w-0 flex-col">
-          {view.kind === "service" ? (
-            view.id === "google" ? (
-              <GoogleFontsPanel
-                fonts={googleFolder ? fonts.filter((f) => f.folderId === googleFolder.id) : []}
-                previewText={previewText}
-                busy={googleBusy}
-                version={googleVersion}
-                updatingAll={googleUpdatingAll}
-                onInstall={installGoogle}
-                onRemove={removeGoogle}
-                onUpdateAll={updateAllGoogle}
-              />
-            ) : view.id === "purchases" ? (
-              <PurchasesPanel
-                version={purchasesVersion}
-                busy={purchaseBusy}
-                onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
-                onImport={importPurchase}
-                onImportPath={importPurchasePath}
-                onReplace={replacePurchase}
-                onRemove={removePurchase}
-                onSubscriptionEnded={purchaseSubscriptionEnded}
-              />
-            ) : (
-              <AdobeFontsPanel previewText={previewText} onStatus={(st) => setAdobeCount(st.faces.length)} />
-            )
-          ) : (
-          <>
-          <Toolbar
-            query={query}
-            onQuery={setQuery}
-            previewText={previewText}
-            onPreviewText={setPreviewText}
-            status={status}
-            onStatus={setStatus}
-            size={size}
-            onSize={setSize}
-            familyCount={families.length}
-            fontCount={styleCount}
-          />
-          {families.length > 0 ? (
-            <FontList
-              families={families}
-              expanded={expanded}
-              onToggleExpanded={toggleExpanded}
-              previewText={previewText}
-              size={size}
-              selectedId={selectedId}
-              busy={busy}
-              resetKey={resetKey}
-              allFamilies={allFamilies}
-              locations={locations}
-              onSelect={setSelectedId}
-              onActivate={setActivation}
+    <SettingsContext.Provider value={settingsStore}>
+      <TooltipProvider>
+        <div className="relative h-full">
+          {/* While settings are open, the library stays as it was, hidden and out of reach underneath. */}
+          <div
+            inert={settingsOpen}
+            className={cn("grid h-full", settingsOpen && "invisible", showDetail ? "grid-cols-[240px_1fr_clamp(272px,30vw,360px)]" : "grid-cols-[240px_1fr]")}
+          >
+            <Sidebar
+              folders={folders}
+              counts={counts}
+              folderCounts={folderCounts}
+              families={allFamilies}
+              services={services}
+              adobeCount={adobeCount}
+              newPurchases={newPurchases}
+              view={view}
+              scans={scans}
+              show={sidebarShows}
+              onView={setView}
+              onAddFolder={addFolder}
+              onRemoveFolder={setPendingRemoval}
+              onRescan={(f) => scan(f)}
+              onCancelScan={(f) => api.cancelScan(f.id).catch((e) => toast.error(String(e)))}
+              onOpenSettings={openSettings}
             />
-          ) : viewScan ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-              <Icon name="progress_activity" size={32} className="animate-spin text-muted-foreground" />
-              <h2 className="text-lg font-semibold">Scanning fonts…</h2>
-              <p className="font-mono text-xs text-muted-foreground tabular-nums">{scanStatus(viewScan)}</p>
-              {viewScan.cloud > 0 && (
-                <p className="max-w-sm text-sm text-muted-foreground">
-                  {viewScan.cloud.toLocaleString()} files are online-only, so each one downloads before it can be read.
-                  Fonts appear here as they're ready.
-                </p>
+            <main className="flex min-h-0 min-w-0 flex-col">
+              {view.kind === "service" ? (
+                view.id === "google" ? (
+                  <GoogleFontsPanel
+                    fonts={googleFolder ? fonts.filter((f) => f.folderId === googleFolder.id) : []}
+                    previewText={previewText}
+                    busy={googleBusy}
+                    version={googleVersion}
+                    updatingAll={googleUpdatingAll}
+                    onInstall={installGoogle}
+                    onRemove={removeGoogle}
+                    onUpdateAll={updateAllGoogle}
+                  />
+                ) : view.id === "purchases" ? (
+                  <PurchasesPanel
+                    version={purchasesVersion}
+                    busy={purchaseBusy}
+                    onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
+                    onImport={importPurchase}
+                    onImportPath={importPurchasePath}
+                    onReplace={replacePurchase}
+                    onRemove={removePurchase}
+                    onSubscriptionEnded={purchaseSubscriptionEnded}
+                  />
+                ) : (
+                  <AdobeFontsPanel previewText={previewText} onStatus={(st) => setAdobeCount(st.faces.length)} />
+                )
+              ) : (
+              <>
+              <Toolbar
+                query={query}
+                onQuery={setQuery}
+                previewText={previewText}
+                onPreviewText={setPreviewText}
+                status={status}
+                onStatus={setStatus}
+                variableOnly={variableOnly}
+                onVariableOnly={setVariableOnly}
+                size={size}
+                onSize={setSize}
+                familyCount={families.length}
+                fontCount={styleCount}
+              />
+              {families.length > 0 ? (
+                <FontList
+                  families={families}
+                  expanded={expanded}
+                  onToggleExpanded={toggleExpanded}
+                  previewText={previewText}
+                  size={size}
+                  selectedId={selectedId}
+                  busy={busy}
+                  resetKey={resetKey}
+                  allFamilies={allFamilies}
+                  locations={locations}
+                  onSelect={setSelectedId}
+                  onActivate={setActivation}
+                />
+              ) : viewScan ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+                  <Icon name="progress_activity" size={32} className="animate-spin text-muted-foreground" />
+                  <h2 className="text-lg font-semibold">Scanning fonts…</h2>
+                  <p className="font-mono text-xs text-muted-foreground tabular-nums">{scanStatus(viewScan)}</p>
+                  {viewScan.cloud > 0 && (
+                    <p className="max-w-sm text-sm text-muted-foreground">
+                      {viewScan.cloud.toLocaleString()} files are online-only, so each one downloads before it can be read.
+                      Fonts appear here as they're ready.
+                    </p>
+                  )}
+                </div>
+              ) : filtered ? (
+                <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">{noMatch}</div>
+              ) : view.kind === "tag" || view.kind === "location" ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
+                  {view.kind === "tag"
+                    ? "No fonts have this tag yet. Select fonts in another view, then tag them from the tag button or by right-clicking."
+                    : "No fonts in this folder."}
+                </div>
+              ) : (
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+                  <Icon name="font_download" size={40} weight={300} className="text-muted-foreground" />
+                  <h2 className="text-lg font-semibold">No fonts here yet</h2>
+                  <p className="max-w-sm text-sm text-muted-foreground">
+                    Add a folder of fonts. Fontface reads them where they are. Nothing is copied or moved.
+                  </p>
+                  <Button onClick={addFolder}>
+                    <Icon name="create_new_folder" size={16} />
+                    Add Folder…
+                  </Button>
+                </div>
               )}
-            </div>
-          ) : view.kind === "tag" || view.kind === "location" ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
-              {query || status !== "any"
-                ? `No fonts ${view.kind === "tag" ? "with this tag" : "in this folder"} match your search or the Active/Inactive filter.`
-                : view.kind === "tag"
-                  ? "No fonts have this tag yet. Select fonts in another view, then tag them from the tag button or by right-clicking."
-                  : "No fonts in this folder."}
-            </div>
-          ) : query || status !== "any" ? (
-            <div className="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
-              {query ? `No fonts match “${query}”` : `No ${status} fonts here`}
-              {query && status !== "any" ? ` among ${status} fonts.` : "."}
-            </div>
-          ) : (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-              <Icon name="font_download" size={40} weight={300} className="text-muted-foreground" />
-              <h2 className="text-lg font-semibold">No fonts here yet</h2>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                Add a folder of fonts. Fontface reads them where they are. Nothing is copied or moved.
-              </p>
-              <Button onClick={addFolder}>
-                <Icon name="create_new_folder" size={16} />
-                Add Folder…
-              </Button>
-            </div>
-          )}
-          </>
-          )}
-        </main>
-        {showDetail && selected && (
-          <DetailPanel
-            // Remount when the file changes, so its info and axes are re-read too.
-            key={faceName(selected.primary)}
-            face={selected}
-            previewText={previewText}
-            busy={selected.copies.some((c) => busy.has(c.path))}
-            locations={locations}
-            onClose={() => setSelectedId(undefined)}
-            onActivate={setActivation}
-            onReveal={(id) => api.revealFont(id).catch((e) => toast.error(String(e)))}
-          />
-        )}
-      </div>
-
-      <AlertDialog open={pendingRemoval !== null} onOpenChange={(o) => !o && setPendingRemoval(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove “{pendingRemoval?.label}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Its fonts will be turned off and removed from the library. The files on disk are not touched.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (pendingRemoval) removeFolder(pendingRemoval);
-                setPendingRemoval(null);
+              </>
+              )}
+            </main>
+            {showDetail && selected && (
+              <DetailPanel
+                // Remount when the file changes, so its info and axes are re-read too.
+                key={faceName(selected.primary)}
+                face={selected}
+                previewText={previewText}
+                busy={selected.copies.some((c) => busy.has(c.path))}
+                locations={locations}
+                onClose={() => setSelectedId(undefined)}
+                onActivate={setActivation}
+                onReveal={(id) => api.revealFont(id).catch((e) => toast.error(String(e)))}
+              />
+            )}
+          </div>
+          {settingsOpen && (
+            <SettingsScreen
+              section={settingsSection}
+              onSection={setSettingsSection}
+              onClose={closeSettings}
+              fonts={fonts}
+              userFolders={folders.filter((f) => f.kind === "user").length}
+              onAddFolder={addFolder}
+              onTurnOffAll={turnOffAll}
+              onPurchasesChanged={() => {
+                // The Purchases page stays mounted underneath; have it read its state again.
+                setPurchasesVersion((v) => v + 1);
+                countNewPurchases();
               }}
-            >
-              Remove
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              onOpenPurchases={() => {
+                setView({ kind: "service", id: "purchases" });
+                closeSettings();
+              }}
+            />
+          )}
+        </div>
 
-      <Toaster position="bottom-right" />
-      {/* One calm, always-present live region for screen readers. */}
-      <div role="status" aria-live="polite" className="sr-only">
-        {announcement}
-      </div>
-    </TooltipProvider>
+        {/* Tag dialogs (new, rename, delete, import, export) can be asked for from anywhere. */}
+        <TagDialogHost
+          families={allFamilies}
+          onDeleted={(ids) => setView((v) => (v.kind === "tag" && ids.includes(v.id) ? { kind: "all" } : v))}
+        />
+
+        <AlertDialog open={pendingRemoval !== null} onOpenChange={(o) => !o && setPendingRemoval(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Remove “{pendingRemoval?.label}”?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Its fonts will be turned off and removed from the library. The files on disk are not touched.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  if (pendingRemoval) removeFolder(pendingRemoval);
+                  setPendingRemoval(null);
+                }}
+              >
+                Remove
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <Toaster position="bottom-right" theme={dark ? "dark" : "light"} />
+        {/* One calm, always-present live region for screen readers. */}
+        <div role="status" aria-live="polite" className="sr-only">
+          {announcement}
+        </div>
+      </TooltipProvider>
+    </SettingsContext.Provider>
   );
 }

@@ -24,14 +24,19 @@ import { createTag, deleteTag, renameTag, setFaceTags } from "./store";
 
 const close = () => openTagDialog(null);
 
-/** Shows whichever tag dialog is open. Mounted once, in the sidebar. */
+/** Shows whichever tag dialog is open. Mounted once, in App. */
 export function TagDialogHost({ families, onDeleted }: { families: Family[]; onDeleted: (ids: number[]) => void }) {
   const dialog = useTagDialog();
   return (
     <>
       <NameDialog dialog={dialog?.kind === "create" || dialog?.kind === "rename" ? dialog : null} />
       <DeleteDialog tag={dialog?.kind === "delete" ? dialog.tag : null} families={families} onDeleted={onDeleted} />
-      <ImportDialog open={dialog?.kind === "import"} onClose={close} />
+      <ImportDialog
+        open={dialog?.kind === "import"}
+        source={dialog?.kind === "import" ? dialog.source : undefined}
+        backupMadeAt={dialog?.kind === "import" ? dialog.backupMadeAt : undefined}
+        onClose={close}
+      />
       <ExportDialog open={dialog?.kind === "export"} tag={dialog?.kind === "export" ? dialog.tag : undefined} onClose={close} />
     </>
   );

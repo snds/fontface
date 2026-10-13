@@ -14,6 +14,7 @@ import type { Locations } from "@/tags/locations";
 import { leafOf, useTagIndex } from "@/tags/model";
 import { applyTags, TagPicker } from "@/tags/TagPicker";
 import { ActivationSwitch, InstalledBadge } from "./ActivationSwitch";
+import { dragRegion, useTitleBar } from "./TitleBar";
 
 interface Props {
   face: Face;
@@ -85,6 +86,7 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
   const [detail, setDetail] = useState<FontDetail | null>(null);
   const [axisValues, setAxisValues] = useState<Record<string, number>>({});
   const state = useFontFace(font);
+  const titleBar = useTitleBar();
 
   useEffect(() => {
     let live = true;
@@ -128,10 +130,11 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
 
   return (
     <aside className="flex min-h-0 flex-col border-l" aria-label="Font details">
-      <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3">
+      {/* 52px, so it lines up with the toolbar; on macOS it's part of the title bar. */}
+      <header className="flex h-13 shrink-0 items-center gap-3 border-b px-4 select-none" {...dragRegion(titleBar)}>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-base font-semibold">{font.family}</h2>
-          <div className="truncate text-sm text-muted-foreground">{font.subfamily}</div>
+          <h2 className="truncate text-base leading-5 font-semibold">{font.family}</h2>
+          <div className="truncate text-sm leading-5 text-muted-foreground">{font.subfamily}</div>
         </div>
         {face.installed ? (
           <InstalledBadge />

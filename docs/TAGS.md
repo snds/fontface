@@ -231,6 +231,10 @@ Export tags… exports every tag, or (from a tag's menu) one tag and the tags in
   and the preview says how many; they never stop the rest of the import.
 - `files` lists every copy. They're for people; matching never needs them.
 - An import only sets location colors that aren't set yet, and never changes existing tags' colors.
+  The exception is restoring a backup with "Replace my tags" (Settings › Backups › Restore…,
+  `tags_import_apply` with `replace`, accepted only for a Fontface tags file). It deletes every
+  tag, tag link and location color first, then brings back the ticked tags with the backup's
+  colors and the backup's location colors, in one transaction.
 - A file whose `version` is higher than 1 is refused with a request to update Fontface.
 
 ### CSV

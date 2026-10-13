@@ -1,5 +1,8 @@
 //! Windows activation — architected, not yet implemented (Mac first, by decision).
 //!
+//! Scopes: `Persistent` is the plan below. `Session` (the "temporary" activation mode) is step 1
+//! alone, with no registry value, so the font is gone after the next sign-in.
+//!
 //! Plan (Windows 10 1809+ supports per-user fonts with no admin rights):
 //!   activate(path):
 //!     1. AddFontResourceExW(path, 0, null)  — makes it available to the current session now.
@@ -16,13 +19,14 @@
 
 use std::{collections::HashSet, path::Path};
 
+use super::Scope;
 use crate::error::{AppError, AppResult};
 
-pub fn activate(_path: &Path) -> AppResult<()> {
+pub fn activate(_path: &Path, _scope: Scope) -> AppResult<()> {
     Err(AppError::Unsupported("font activation on Windows".into()))
 }
 
-pub fn deactivate(_path: &Path) -> AppResult<()> {
+pub fn deactivate(_path: &Path, _scope: Scope) -> AppResult<()> {
     Err(AppError::Unsupported("font activation on Windows".into()))
 }
 
