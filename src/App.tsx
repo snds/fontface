@@ -524,16 +524,14 @@ export default function App() {
    * After a service copied files into `dir`: rescan its folder (once more if files are missing),
    * then turn the new fonts on, one copy per style like everywhere else in the library, and
    * check it worked. Throws a plain explanation if the files didn't fully reach the library or
-   * didn't turn on. `origin`: "arrival" for a first download or an import, "restore" for an
-   * update or a replacement putting back what was on; neither is the user's switch, so sync
-   * doesn't share it as their choice. `pick` narrows which new fonts to turn on (default: all of
-   * them). `scopeOf` says how each one turns on: an update brings a font back the way the one it
-   * replaces was on (until logout, or to stay), whatever the activation mode is now. Null: the
-   * saved mode.
+   * didn't turn on. This isn't the user's switch (origin "arrival"): sync keeps a choice made for
+   * a font on another computer, and shares as on only fonts nobody has chosen for yet. `pick`
+   * narrows which new fonts to turn on (default: all of them). `scopeOf` says how each one turns
+   * on: an update brings a font back the way the one it replaces was on (until logout, or to
+   * stay), whatever the activation mode is now. Null: the saved mode.
    */
   const bringIntoLibrary = async (
     service: ServiceId,
-    origin: Exclude<SwitchOrigin, "switch">,
     dir: string,
     files: string[],
     pick: (name: string, font: FontSummary) => boolean = () => true,
@@ -581,7 +579,7 @@ export default function App() {
           true,
           [...new Set(group.map((f) => f.path))],
           scope,
-          origin,
+          "arrival",
         ),
       ),
     );
@@ -616,14 +614,14 @@ export default function App() {
   const importPurchase = (find: PurchaseFind, store: string | null) =>
     purchaseOp(`path:${find.path}`, async () => {
       const result = await api.purchasesImport(find.id, store);
-      await bringIntoLibrary("purchases", "arrival", result.dir, result.files, (name) => result.files.includes(name));
+      await bringIntoLibrary("purchases", result.dir, result.files, (name) => result.files.includes(name));
       toast.success(`Added ${find.contents.families[0] ?? find.name} to your library`);
     });
 
   const importPurchasePath = (path: string, store: string | null) =>
     purchaseOp(`path:${path}`, async () => {
       const result = await api.purchasesImportPath(path, store);
-      await bringIntoLibrary("purchases", "arrival", result.dir, result.files, (name) => result.files.includes(name));
+      await bringIntoLibrary("purchases", result.dir, result.files, (name) => result.files.includes(name));
       toast.success("Added to your library");
     });
 
@@ -647,7 +645,6 @@ export default function App() {
       const temporary = new Set(result.temporaryFaces);
       await bringIntoLibrary(
         "purchases",
-        "restore",
         result.dir,
         result.files,
         (_, font) => {
@@ -713,7 +710,6 @@ export default function App() {
       const renamedAway = result.wasActiveFiles.some((n) => !result.files.includes(n));
       await bringIntoLibrary(
         "google",
-        result.updated ? "restore" : "arrival",
         result.dir,
         result.files,
         (name) => !result.updated || wasOn.has(name) || (renamedAway && !old.has(name)),

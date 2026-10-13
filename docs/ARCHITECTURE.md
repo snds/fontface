@@ -150,8 +150,9 @@ them and keeps their fonts' activation state. This guarantees each file belongs 
   version when everything that was on was temporary. The results list those names
   (`temporaryFiles`, `temporaryFaces`), and `set_activation` takes a `scope` ("persistent" or
   "temporary") that overrides the mode, so the rest come back to stay whatever the mode is now.
-  It also takes an `origin` ("arrival" for a first download or an import, "restore" for an
-  update or a Replace), so sync doesn't share these as the user's choice ([SYNC.md](SYNC.md)).
+  It also takes an `origin` ("arrival" for a first download, an import, an update or a
+  Replace), so sync doesn't share these as the user's choice: a font that has a choice keeps it,
+  and only fonts nobody has chosen for are shared as on ([SYNC.md](SYNC.md)).
   If the swap fails, or a purchase can't be removed, each font is turned back on in the scope
   it had. A temporary font another app turns off is recorded as off and leaves the list, after
   Fontface removes its own session registration of it.

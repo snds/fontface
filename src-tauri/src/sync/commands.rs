@@ -1,12 +1,16 @@
 //! What the window asks sync to do.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::atomic::Ordering};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::atomic::Ordering,
+};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use super::{
-    engine::{Exception, ExceptionFor},
+    engine::{Engine, Exception, ExceptionFor},
     lock, quietly, restart_watcher, run_logged, shared, transport, wake, Shared, ENABLED,
 };
 use crate::{
@@ -65,10 +69,25 @@ pub struct SyncStatus {
 pub(super) fn status(sh: &Shared) -> AppResult<SyncStatus> {
     let state = sh.app.state::<AppState>();
     let faces = super::local_faces(&state).ok();
-    let guard = lock(&sh.engine);
-    let Some(e) = guard.as_ref() else {
-        return Err(AppError::Other("Sync is still starting".into()));
+    let (mut status, missing) = {
+        let guard = lock(&sh.engine);
+        let Some(e) = guard.as_ref() else {
+            return Err(AppError::Other("Sync is still starting".into()));
+        };
+        (status_of(sh, e), faces.map(|f| e.missing(&f)).unwrap_or_default())
     };
+    // With the engine lock let go: a file on a network drive that dropped can take seconds to
+    // check, and the user's switch and sync itself wait for that lock.
+    status.missing = missing
+        .into_iter()
+        .filter(|m| m.not_here(|path| Path::new(path).exists()))
+        .map(|m| MissingFont { key: m.key, family: m.family, style: m.style })
+        .collect();
+    Ok(status)
+}
+
+/// Everything in the status but the fonts not on this computer.
+fn status_of(sh: &Shared, e: &Engine) -> SyncStatus {
     let me = e.me();
     let mut devices: Vec<DeviceStatus> = e
         .saved
@@ -92,7 +111,7 @@ pub(super) fn status(sh: &Shared) -> AppResult<SyncStatus> {
         .map(|(_, v)| v.clone())
         .collect();
     let newer_format = !e.newer_formats.is_empty() || e.problems.values().any(|p| p.contains("newer version"));
-    Ok(SyncStatus {
+    SyncStatus {
         enabled: e.config.enabled,
         folder: e.config.folder.clone(),
         device_id: me.to_string(),
@@ -103,18 +122,11 @@ pub(super) fn status(sh: &Shared) -> AppResult<SyncStatus> {
         pending: e.outbox.len(),
         devices,
         problems,
-        missing: faces
-            .map(|f| {
-                e.missing(&f, |path| std::path::Path::new(path).exists())
-                    .into_iter()
-                    .map(|(key, family, style)| MissingFont { key, family, style })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        cloud_folder: e.config.folder.as_deref().is_some_and(|f| super::is_cloud_folder(std::path::Path::new(f))),
+        missing: Vec::new(),
+        cloud_folder: e.config.folder.as_deref().is_some_and(|f| super::is_cloud_folder(Path::new(f))),
         cloned: e.cloned,
         newer_format,
-    })
+    }
 }
 
 fn sh() -> AppResult<&'static Shared> {

@@ -295,7 +295,6 @@ pub fn set_activation(
     match origin.unwrap_or_default() {
         SwitchOrigin::Switch => crate::sync::activation_chosen(&state, &font_ids, active, &outcomes),
         SwitchOrigin::Arrival => crate::sync::activation_arrived(&state, &font_ids, &outcomes),
-        SwitchOrigin::Restore => {}
     }
     Ok(outcomes)
 }
@@ -307,11 +306,11 @@ pub enum SwitchOrigin {
     /// The user's switch: their choice.
     #[default]
     Switch,
-    /// Fonts that just came into the library (a first download or an import), turned on by
-    /// Fontface. Shared only where nobody has chosen yet (`sync::activation_arrived`).
+    /// Fonts that just came into the library, turned on by Fontface: a first download, an import,
+    /// or an update or a replacement turning back on what was on (and the styles new in that
+    /// version). Sync shares them only where nobody has chosen yet, and gives the others their
+    /// choice again (`sync::activation_arrived`).
     Arrival,
-    /// An update or a replacement putting back what was on. Nothing changed, so nothing is shared.
-    Restore,
 }
 
 /// The work behind `set_activation` (and Turn Off All). Turning on uses the scope of `mode`, or

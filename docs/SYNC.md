@@ -47,7 +47,8 @@ After that:
   in the folder. Turning it back on later starts fresh and merges again.
 
 The page shows when sync last ran, the other computers and when each was last seen, problems in
-plain words, and fonts that are on elsewhere but aren't on this computer.
+plain words, and fonts that are on elsewhere but aren't on this computer: fonts with no copy
+here, and fonts sync is to turn on with no copy whose file is there.
 
 **A cloud folder that can be online-only** (iCloud Drive, Google Drive, OneDrive, Dropbox):
 reading a file there may download it first. Sync does that on its own thread, so the window
@@ -60,19 +61,27 @@ never waits, but it can make a sync slow. The page suggests keeping the folder d
   group's, then the shared choice.
 - **Your switch is the choice.** Turning a font on or off shares it. If this computer has an
   exception for that font, the switch changes the exception instead, so the two never disagree.
-- **Fonts Fontface turns on by itself aren't your switch.** A first download from Google Fonts
-  and a purchase import turn the new fonts on. A font nobody has chosen for yet is shared as on,
-  the way joining shares fonts already on. A font that already has a choice keeps it: a style
-  turned off on another computer goes off here too, a moment after it arrives. An update or a
-  replacement puts back what was on, and shares nothing.
+- **Fonts Fontface turns on by itself aren't your switch.** A first download from Google Fonts, a
+  purchase import, a Google Fonts update and a purchase Replace turn fonts on (an update puts
+  back what was on, and the styles new in that version). A font nobody has chosen for yet is
+  shared as on, the way joining shares fonts already on: a style new in an update reaches your
+  other computers too. A font that already has a choice keeps it, and nothing is shared: a style
+  turned off on another computer goes off here too, a moment after it comes in. That holds even
+  when that choice is read while the font is still coming in (sync runs while the folder is
+  rescanned, finds the font off already, and would otherwise count the choice as carried out
+  before Fontface turns the font on).
 - **A font this computer doesn't have** keeps its choice and is listed under "Not on this
   computer". It turns on when it arrives (from Google Fonts, a purchase, or a drive you connect).
 - **A font whose file isn't there** (on a drive that isn't connected; the library keeps such
-  fonts) is handled the way launch handles one: sync records it as on, and it turns on after its
-  folder's next scan. Until its file is back, it's listed under "Not on this computer" too. If
-  the library has another copy whose file is there, that copy is turned on instead.
+  fonts) is left as it is: nothing is turned on or recorded as on, and the choice isn't counted
+  as carried out. It's listed under "Not on this computer", with no problem message. The first
+  sync after a copy's file is back turns it on, through the same switch as the window, with the
+  activation mode; that needs no rescan of its folder. Removing its folder meanwhile, or
+  relaunching with "Leave them off", changes nothing: launch only deals with fonts recorded as
+  on. If the library has another copy whose file is there, that copy is turned on instead.
 - **Each synced choice is carried out once.** If you turn a font off here in another app, sync
-  doesn't keep turning it back on. It acts again only when someone changes that font's choice.
+  doesn't keep turning it back on. It acts again only when someone changes that font's choice,
+  or when the font comes into the library again.
 - **A switch that fails** (macOS refuses the file, say) isn't counted as carried out. Sync tries
   again each time it runs, and the page says so until it works.
 - **Other ways a font goes off aren't shared:** Turn Off All, "Leave them off" at launch,
@@ -232,12 +241,14 @@ tag; every tag inside it is in the same group, on every computer.
 - All file work happens on a sync thread, never while a lock is held. Lock order: the cycle
   lock, the engine lock, then the database mutex. Fonts are switched through the same code as the
   window's switches (`commands::switch`), under the cycle lock but never the engine lock: that
-  code takes the activation lock, then the database mutex. A font whose file is missing is
-  recorded as on the same way (`turn_on_later`).
+  code takes the activation lock, then the database mutex. Whether a font's files are there is
+  checked without the engine lock too, both when switching and for the page's list (the engine
+  hands over the files to check, then lets go): a file on a network drive that dropped can take
+  seconds to check, and your switch waits for that lock.
 - **What wakes it:** any write the window makes to the database (it then compares tags, after
-  1.5 s of quiet), an on/off switch, fonts a download or an import turned on, the window coming
-  to the front, a file event in the folder (after 3 s of quiet; its own writes are ignored),
-  and every five minutes.
+  1.5 s of quiet), an on/off switch, fonts a download, an import, an update or a Replace turned
+  on, the window coming to the front, a file event in the folder (after 3 s of quiet; its own
+  writes are ignored), and every five minutes.
 - **Stored locally**, outside the numbered migrations, like the tag tables: `sync_meta` (this
   computer's sync settings, and the merged state as JSON) and `sync_outbox` (changes not yet
   written to the folder, so nothing is lost if the folder is unreachable or Fontface quits).
@@ -250,13 +261,14 @@ tag; every tag inside it is in the same group, on every computer.
 - **Joining adds, it never removes.** A computer's fonts that are on are shared as on when it
   joins, even if another computer turned that font off earlier. The opposite would turn fonts
   off on a new computer by surprise.
-- **A download turns on every style first.** A style turned off elsewhere is on for a moment,
-  until the next sync turns it off. Turning only some styles on would make the download look
-  unfinished.
-- **A synced font that waited for its file comes back on to stay,** even with the activation
-  mode "until logout", like the fonts launch turns back on. Listing it as on for this login
-  while its file is missing would make the next launch count that login as ended and turn it
-  off for good.
+- **A download turns on every style first** (an update, every style that was on, and the new
+  ones). A style turned off elsewhere is on for a moment, until the next sync turns it off.
+  Turning only some styles on would make the download look unfinished.
+- **A font whose file isn't there waits for sync, not for a scan.** It turns on the first time
+  sync runs after its drive is connected: after your next change in the window, when the window
+  comes to the front, or within five minutes. Recording it as on and leaving it to the folder's
+  next scan, as launch does, would lose the choice if the folder went away, and would put it in
+  the hands of launch's "Leave them off" or "Ask", for a font that was never on here.
 - **"Replace my tags" reaches every computer.** Restoring a backup that way deletes the tags made
   since, on every computer, and deletes are final. The restore dialog says so when sync is on.
 - **Delete beats a rename made at the same time.** A rename doesn't bring a deleted tag back.
@@ -301,8 +313,11 @@ tag; every tag inside it is in the same group, on every computer.
   then added to, and synced.
 - **Fonts Fontface switches by itself:** a download that brings styles with choices made
   elsewhere (Bold turned off there goes off here; only a new style is shared), an update made
-  before reading a newer choice (nothing written, the newer choice wins); a switch that fails
-  (tried again, the message stays until it works); a file on a drive that isn't connected
-  (recorded as on, listed as not on this computer, another copy used if its file is there); and
-  device group changes (fonts turned off here stay off; only fonts that group's exceptions change
-  are switched).
+  before reading a newer choice (nothing written, the newer choice wins), and an update during
+  which a sync reads a newer choice and finds nothing to switch yet (that choice still wins, and
+  a style new in the update is shared); a switch that fails (tried again, the message stays until
+  it works); a file on a drive that isn't connected (nothing recorded, listed as not on this
+  computer, another copy used if its file is there, turned on by the first sync after the drive
+  is back, and not listed when the drive goes away again later), even if its folder is removed
+  and added back, or Fontface relaunches with "Leave them off" first; and device group changes
+  (fonts turned off here stay off; only fonts that group's exceptions change are switched).

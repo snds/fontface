@@ -360,8 +360,8 @@ struct Device {
     unplugged: BTreeSet<String>,
     /// Font files whose switch fails here (say macOS refuses them).
     refused: BTreeSet<String>,
-    /// Files sync recorded as on to turn on after their folder's next scan (`AppState::deferred`).
-    deferred: BTreeSet<String>,
+    /// What carrying out the last sync's switches did.
+    switched: engine::Switched,
 }
 
 impl Device {
@@ -386,7 +386,7 @@ impl Device {
             folder_id,
             unplugged: BTreeSet::new(),
             refused: BTreeSet::new(),
-            deferred: BTreeSet::new(),
+            switched: engine::Switched::default(),
         }
     }
 
@@ -399,7 +399,7 @@ impl Device {
     /// Fonts that should be on here but aren't on this computer, by key.
     fn missing(&self) -> Vec<String> {
         let faces = engine::load_faces(&self.conn).unwrap();
-        self.engine.missing(&faces, |p| !self.unplugged.contains(p)).into_iter().map(|m| m.0).collect()
+        self.engine.missing(&faces).into_iter().filter(|m| m.not_here(|p| !self.unplugged.contains(p))).map(|m| m.key).collect()
     }
 
     fn transport(&self) -> FolderTransport {
@@ -439,15 +439,15 @@ impl Device {
     }
 
     /// A font switched here in a way that isn't shared: Turn Off All, "Leave them off" at
-    /// launch, another app, an update or a replacement putting back what was on. Nothing tells
-    /// sync (`set_activation` with origin "restore" records nothing).
+    /// launch, another app, the old file going off in an update. Nothing tells sync.
     fn switch_here(&mut self, key: &str, on: bool) {
         let ps = tags::key_postscript_name(key).unwrap();
         self.conn.execute("UPDATE fonts SET activated = ?1 WHERE postscript_name = ?2", params![on, ps]).unwrap();
     }
 
-    /// Fontface turning on fonts that just came into the library (a first download, an import):
-    /// on here, then the hook `set_activation` calls for them (origin "arrival").
+    /// Fontface turning on fonts that just came into the library (a first download, an import,
+    /// an update or a replacement putting back what was on): on here, then the hook
+    /// `set_activation` calls for them (origin "arrival").
     fn arrive(&mut self, keys: &[&String]) {
         for key in keys {
             self.switch_here(key, true);
@@ -574,7 +574,6 @@ impl Device {
             self.engine.seed(&tx, &faces).unwrap();
         }
         let applied = self.engine.apply(&tx, &faces, &mismatched).unwrap();
-        let mut deferred = BTreeSet::new();
         let switched = engine::carry_out(
             &applied,
             |path| !self.unplugged.contains(path),
@@ -590,15 +589,9 @@ impl Device {
                 }
                 ok
             },
-            // As `turn_on_later` does.
-            |path| {
-                tx.execute("UPDATE fonts SET activated = 1 WHERE path = ?1", [path]).unwrap();
-                deferred.insert(path.to_string());
-                true
-            },
         );
-        self.deferred.extend(deferred);
         self.engine.switched(&applied, &switched);
+        self.switched = switched;
         self.engine.save_state(&tx).unwrap();
         tx.commit().unwrap();
         // Write, as `write_files` does.
@@ -783,8 +776,8 @@ fn a_font_this_device_lacks_keeps_its_choice_until_it_arrives() {
     a.switch(&okuda, true);
     a.sync();
     b.sync();
-    let missing = b.engine.missing(&engine::load_faces(&b.conn).unwrap(), |_| true);
-    assert_eq!(missing, [(okuda.clone(), "Okuda".to_string(), "Regular".to_string())]);
+    let missing = b.engine.missing(&engine::load_faces(&b.conn).unwrap());
+    assert_eq!(missing, [engine::Missing { key: okuda.clone(), family: "Okuda".into(), style: "Regular".into(), files: vec![] }]);
     // The font turns up at B (a drive mounted, a download finished): it's turned on.
     b.font("Okuda", "Okuda");
     b.sync();
@@ -974,7 +967,7 @@ fn a_different_font_with_the_same_name_isnt_merged() {
 }
 
 #[test]
-fn a_download_takes_the_choices_made_elsewhere_and_an_update_records_nothing() {
+fn a_download_or_an_update_takes_the_choices_made_elsewhere() {
     let folder = Folder::new("arrival");
     let mut a = Device::new("A", &folder.0, "machine-a");
     let mut b = Device::new("B", &folder.0, "machine-b");
@@ -1004,12 +997,13 @@ fn a_download_takes_the_choices_made_elsewhere_and_an_update_records_nothing() {
     assert_eq!(a.missing(), [black.clone()], "Black is on at B, which shared it");
 
     // B updates Roboto before it has read A's newest change (Regular off). The update puts back
-    // what was on, and records nothing, so A's later choice still wins on both computers.
+    // what was on. Regular has a choice, so nothing is written, and A's later choice still wins on
+    // both computers.
     a.switch(&regular, false);
     a.sync();
     let written = b.written();
     b.switch_here(&regular, false);
-    b.switch_here(&regular, true);
+    b.arrive(&[&regular]);
     b.sync();
     assert_eq!(b.written(), written, "the update wrote nothing");
     assert!(!b.is_on(&regular));
@@ -1053,25 +1047,29 @@ fn a_synced_switch_that_fails_is_tried_again_and_a_missing_file_waits_for_it() {
     let nova_on: Vec<String> =
         b.conn.prepare("SELECT path FROM fonts WHERE postscript_name = 'Nova' AND activated = 1").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
     assert_eq!(nova_on, [b.dir.join("fonts/Nova.otf").to_string_lossy().into_owned()]);
-    // Okuda: recorded as on, to turn on after its folder's next scan; until then it's listed as
-    // not on this computer.
-    assert!(b.is_on(&okuda));
-    assert_eq!(b.deferred, BTreeSet::from([b.path(&okuda)]));
+    // Okuda: no file to turn on. It's left as it is, not counted as done, and listed as not on
+    // this computer.
+    assert!(!b.is_on(&okuda));
+    assert_eq!(b.switched.absent, BTreeSet::from([okuda.clone()]));
     assert_eq!(b.missing(), [okuda.clone()]);
-    // Inter: not done, and the page says so.
+    // Inter: not done, and the page says so (for Inter only).
     assert!(!b.is_on(&inter));
-    assert!(b.engine.problems.contains_key("switch"));
+    assert_eq!(b.switched.failed, BTreeSet::from([inter.clone()]));
+    assert!(b.engine.problems["switch"].starts_with("1 font "));
 
-    // The next sync tries Inter again (it fails again, and the message stays), and nothing else.
+    // The next sync tries Inter again (it fails again, and the message stays). Okuda still waits.
+    // Nothing else is switched again.
     let applied = b.sync();
-    assert_eq!(applied.turn_on.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), [inter.as_str()]);
+    assert_eq!(applied.turn_on.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), [inter.as_str(), okuda.as_str()]);
+    assert_eq!(b.switched.failed, BTreeSet::from([inter.clone()]));
+    assert_eq!(b.switched.absent, BTreeSet::from([okuda.clone()]));
     assert!(b.engine.problems.contains_key("switch"));
 
-    // macOS takes Inter now, and the drive is back (its scan turns Okuda on).
+    // macOS takes Inter now, and the drive is back: both turn on.
     b.refused.clear();
     b.unplugged.clear();
     b.sync();
-    assert!(b.is_on(&inter));
+    assert!(b.is_on(&inter) && b.is_on(&okuda));
     assert!(!b.engine.problems.contains_key("switch"));
     assert!(b.missing().is_empty());
     assert!(!b.sync().switches(), "each choice was carried out once");
@@ -1155,6 +1153,130 @@ fn a_sync_that_planned_earlier_doesnt_cover_an_arrival_or_a_group_change() {
     b.sync();
     assert!(!b.is_on(&bold));
     assert!(b.is_on(&inter));
+}
+
+#[test]
+fn an_update_keeps_choices_read_while_it_runs_and_shares_new_styles() {
+    let folder = Folder::new("update-race");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    // At A: Roboto Regular on, Black switched off. B has only Regular, which it turns on.
+    let regular = a.font("Roboto-Regular", "Roboto");
+    let black = a.font("Roboto-Black", "Roboto");
+    a.switch(&regular, true);
+    a.switch(&black, false);
+    a.sync();
+    b.font("Roboto-Regular", "Roboto");
+    b.sync();
+    assert!(b.is_on(&regular));
+    // A turns Regular off; B hasn't read that yet.
+    a.switch(&regular, false);
+    a.sync();
+
+    // B updates Roboto (a Google Fonts update, or a purchase Replace). The old file goes off, and
+    // the new version comes into the library with Black, and with Thin, which nobody has chosen
+    // for yet. While the folder is rescanned, a sync runs: it reads A's change, and finds Regular
+    // and Black off already, so it has nothing to switch.
+    b.switch_here(&regular, false);
+    b.font("Roboto-Black", "Roboto");
+    let thin = b.font("Roboto-Thin", "Roboto");
+    assert!(!b.sync().switches());
+    // Then Fontface turns back on what was on, and the styles new in this version.
+    b.arrive(&[&regular, &black, &thin]);
+    b.sync();
+    assert!(!b.is_on(&regular), "A's newer choice, read while the update ran, still wins");
+    assert!(!b.is_on(&black), "Black stays off, as chosen at A");
+    assert!(b.is_on(&thin));
+    a.sync();
+    assert!(!a.is_on(&regular) && !a.is_on(&black), "A's choices stand");
+    assert_eq!(a.missing(), [thin.clone()], "Thin, new in this version, is shared as on");
+}
+
+#[test]
+fn a_font_whose_file_isnt_there_turns_on_once_it_is() {
+    let folder = Folder::new("absent");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    let okuda = a.font("Okuda", "Okuda");
+    let inter = a.font("Inter", "Inter");
+    b.font("Okuda", "Okuda");
+    b.font("Inter", "Inter");
+    a.sync();
+    b.sync();
+    // Inter is turned on while B's drive is connected.
+    a.switch(&inter, true);
+    a.sync();
+    b.sync();
+    assert!(b.is_on(&inter));
+
+    // The drive is unplugged, then Okuda is turned on at A. B has nothing to turn on: Okuda isn't
+    // recorded as on, isn't counted as carried out, and is listed as not on this computer. It's
+    // no failed switch either.
+    let drive = BTreeSet::from([b.path(&okuda), b.path(&inter)]);
+    b.unplugged = drive.clone();
+    a.switch(&okuda, true);
+    a.sync();
+    b.sync();
+    assert!(!b.is_on(&okuda));
+    assert_eq!(b.missing(), [okuda.clone()]);
+    assert!(!b.engine.problems.contains_key("switch"));
+    // The engine hands over Okuda's file without checking it: the page checks it after letting
+    // go of the engine lock.
+    let faces = engine::load_faces(&b.conn).unwrap();
+    let candidates: Vec<(String, Vec<String>)> = b.engine.missing(&faces).into_iter().map(|m| (m.key, m.files)).collect();
+    assert_eq!(candidates, [(okuda.clone(), vec![b.path(&okuda)])]);
+
+    // The drive is back: the next sync turns Okuda on, the usual way.
+    b.unplugged.clear();
+    b.sync();
+    assert!(b.is_on(&okuda) && b.is_on(&inter));
+    assert!(b.missing().is_empty());
+    assert!(!b.sync().switches(), "carried out once");
+
+    // Unplugged again: both fonts are on here, and their choices carried out. Neither is listed,
+    // Okuda no more than Inter.
+    b.unplugged = drive;
+    b.sync();
+    assert!(b.missing().is_empty());
+    // Nothing was shared back.
+    a.sync();
+    assert!(a.is_on(&okuda) && a.is_on(&inter));
+}
+
+#[test]
+fn a_turn_on_waiting_for_its_file_survives_a_rescan_and_leave_them_off() {
+    let folder = Folder::new("absent-relaunch");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    let nova = a.font("Nova", "Nova");
+    let okuda = a.font("Okuda", "Okuda");
+    b.font("Nova", "Nova");
+    b.font("Okuda", "Okuda");
+    a.sync();
+    b.sync();
+    // Both files are on a drive that isn't connected at B when A turns them on.
+    b.unplugged = BTreeSet::from([b.path(&nova), b.path(&okuda)]);
+    a.switch(&nova, true);
+    a.switch(&okuda, true);
+    a.sync();
+    b.sync();
+    assert_eq!(b.missing(), [nova.clone(), okuda.clone()]);
+
+    // Okuda's folder is removed from the library (or a scan drops its row): still listed.
+    b.conn.execute("DELETE FROM fonts WHERE postscript_name = 'Okuda'", []).unwrap();
+    b.sync();
+    assert_eq!(b.missing(), [nova.clone(), okuda.clone()]);
+    // The drive is connected again and the folder added back. Fontface relaunches before anything
+    // rescans Nova's folder, with "Leave them off": a font recorded as on that macOS doesn't have
+    // is recorded as off (in these tests, macOS has none).
+    b.font("Okuda", "Okuda");
+    b.unplugged.clear();
+    b.conn.execute("UPDATE fonts SET activated = 0", []).unwrap();
+    b.relaunch("machine-b");
+    b.sync();
+    assert!(b.is_on(&nova), "the shared choice is carried out, not left off by launch");
+    assert!(b.is_on(&okuda), "the shared choice is carried out when the font is back");
+    assert!(b.missing().is_empty());
 }
 
 // ----------------------------------------------------------------------------- tag groups

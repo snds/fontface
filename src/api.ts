@@ -256,11 +256,11 @@ export type ActivationMode = "persistent" | "temporary";
 
 /**
  * Why fonts are switched. "switch": the user's switch, their choice. "arrival": Fontface turning on
- * fonts that just came into the library (a first download, an import); sync shares them only where
- * nobody has chosen yet. "restore": an update or a replacement putting back what was on; sync
- * records nothing.
+ * fonts that just came into the library (a first download, an import, or an update or a
+ * replacement putting back what was on); sync shares them only where nobody has chosen yet, and
+ * gives the others their choice again.
  */
-export type SwitchOrigin = "switch" | "arrival" | "restore";
+export type SwitchOrigin = "switch" | "arrival";
 /** What launch does with fonts that were on last time but aren't on now. */
 export type RestorePolicy = "always" | "ask" | "never";
 

@@ -16,10 +16,12 @@
 //! **On/off** isn't compared like that, because the library also switches fonts off for reasons
 //! that aren't the user's choice (a drive that isn't mounted, "Leave them off" at launch). Only an
 //! on/off switch the user flips becomes a change (`choose`). Fonts Fontface turns on by itself
-//! when they come into the library (a download, an import) are shared only if nobody has chosen
-//! for them yet (`arrived`). A synced choice is applied once per change (`applied`), so a font
-//! switched off by hand here isn't switched back on until somebody changes that font's choice
-//! again. A switch that fails isn't counted as applied, so the next sync tries it again.
+//! when they come into the library (a download, an import, an update, a replacement) are shared
+//! only if nobody has chosen for them yet, and otherwise get their choice again (`arrived`). A
+//! synced choice is applied once per change (`applied`), so a font switched off by hand here
+//! isn't switched back on until somebody changes that font's choice again. A switch that fails,
+//! or a turn-on with no copy whose file is there, isn't counted as applied, so a later sync tries
+//! it again.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -178,10 +180,6 @@ pub struct Saved {
     pub base: BTreeMap<i64, BaseTag>,
     /// Face key → the `Effective::stamp` last carried out on this device.
     pub applied: BTreeMap<String, Hlc>,
-    /// Fonts sync turned on whose files weren't there (on a drive that isn't connected, say).
-    /// They turn on after their folder's next scan; until their file is back, they're listed as
-    /// not on this computer.
-    pub waiting: BTreeSet<String>,
     pub peers: BTreeMap<String, Peer>,
     /// The last change file this device wrote.
     pub seq: u64,
@@ -211,6 +209,8 @@ pub struct Engine {
     /// Fonts whose `applied` stamp was dropped (`arrived`, `set_group`) since `apply` last
     /// planned. A sync that planned before that mustn't count them as carried out.
     replan: BTreeSet<String>,
+    /// The fonts `apply` last left alone because they're another font with the same name here.
+    mismatched: BTreeSet<String>,
 }
 
 fn meta_get(conn: &Connection, key: &str) -> AppResult<Option<String>> {
@@ -460,6 +460,8 @@ pub struct Applied {
 }
 
 impl Applied {
+    /// Anything to switch. (A sync goes by what it tried: `Switched::tried`.)
+    #[cfg(test)]
     pub fn switches(&self) -> bool {
         !self.turn_on.is_empty() || !self.turn_off.is_empty()
     }
@@ -470,44 +472,60 @@ impl Applied {
 pub struct Switched {
     /// Fonts whose switch failed. They aren't counted as done, so the next sync tries again.
     pub failed: BTreeSet<String>,
-    /// Fonts to turn on whose files aren't there (on a drive that isn't connected, say): recorded
-    /// as on, and turned on after their folder's next scan.
-    pub waiting: BTreeSet<String>,
+    /// Fonts to turn on with no copy whose file is there (on a drive that isn't connected, say).
+    /// Nothing is switched or recorded for them, and they aren't counted as done: they stay
+    /// listed as not on this computer, and the first sync after a copy's file is back turns them
+    /// on, the usual way.
+    pub absent: BTreeSet<String>,
+    /// A switch was tried, so the library may have changed.
+    pub tried: bool,
 }
 
 /// Carries out the switches `apply` planned. `switch` turns fonts on or off (the window's own
 /// code) and says whether all of it worked. A font is turned on from the first of its copies
-/// whose file `exists`. If none does, `defer` records the first copy as on, for the retry that
-/// runs after its folder's next scan (as launch does with a file that's missing), and says
-/// whether that worked.
-pub fn carry_out(
-    applied: &Applied,
-    exists: impl Fn(&str) -> bool,
-    mut switch: impl FnMut(&[i64], bool) -> bool,
-    mut defer: impl FnMut(&str) -> bool,
-) -> Switched {
+/// whose file `exists`; with none, it's left for a later sync.
+pub fn carry_out(applied: &Applied, exists: impl Fn(&str) -> bool, mut switch: impl FnMut(&[i64], bool) -> bool) -> Switched {
     let mut out = Switched::default();
     for (key, ids) in &applied.turn_off {
+        out.tried = true;
         if !switch(ids, false) {
             out.failed.insert(key.clone());
         }
     }
     for (key, copies) in &applied.turn_on {
-        let done = match copies.iter().find(|(_, path)| exists(path)) {
-            Some((id, _)) => switch(&[*id], true),
-            None => {
-                let deferred = copies.first().is_some_and(|(_, path)| defer(path));
-                if deferred {
-                    out.waiting.insert(key.clone());
+        match copies.iter().find(|(_, path)| exists(path)) {
+            Some((id, _)) => {
+                out.tried = true;
+                if !switch(&[*id], true) {
+                    out.failed.insert(key.clone());
                 }
-                deferred
             }
-        };
-        if !done {
-            out.failed.insert(key.clone());
+            None => {
+                out.absent.insert(key.clone());
+            }
         }
     }
     out
+}
+
+/// A font that should be on here and that sync hasn't turned on (`Engine::missing`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Missing {
+    pub key: String,
+    pub family: String,
+    pub style: String,
+    /// The files of its copies here, for a font sync is to turn on; none for a font with no copy
+    /// here.
+    pub files: Vec<String>,
+}
+
+impl Missing {
+    /// Not on this computer: no copy here, or none whose file `exists`. The caller checks after
+    /// letting go of the engine lock, since a file on a network drive that dropped can take
+    /// seconds to check.
+    pub fn not_here(&self, exists: impl Fn(&str) -> bool) -> bool {
+        !self.files.iter().any(|f| exists(f))
+    }
 }
 
 /// "Follow sync", "Always on here" or "Never on here".
@@ -567,6 +585,7 @@ impl Engine {
             prints: HashMap::new(),
             device_dirty: true,
             replan: BTreeSet::new(),
+            mismatched: BTreeSet::new(),
         };
         let mut stmt = conn.prepare("SELECT id, line FROM sync_outbox ORDER BY id")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
@@ -953,11 +972,13 @@ impl Engine {
         Ok(made)
     }
 
-    /// Fonts that just came into the library and that Fontface turned on by itself (a download
-    /// or an import), not with the user's switch. A font nobody has chosen for yet is shared as
-    /// on, the way joining shares fonts already on. A font that has a choice keeps it: the next
-    /// `apply` carries it out again, so a style turned off on another computer goes off here
-    /// too. Returns whether anything changed.
+    /// Fonts that just came into the library and that Fontface turned on by itself, not with the
+    /// user's switch: a download, an import, or an update or a replacement turning back on what
+    /// was on (and the styles new in that version). A font nobody has chosen for yet is shared as
+    /// on, the way joining shares fonts already on. A font that has a choice keeps it, and nothing
+    /// is recorded: the next `apply` carries it out again, so a style turned off on another
+    /// computer goes off here too, even if that choice was read (and found nothing to switch off)
+    /// while the font was coming in. Returns whether anything changed.
     pub fn arrived(&mut self, conn: &Connection, keys: &[String]) -> AppResult<bool> {
         let faces = load_faces(conn)?;
         let (me, group) = (self.config.device_id.clone(), self.config.group.clone());
@@ -1055,6 +1076,7 @@ impl Engine {
         }
         self.saved.base = base;
         self.replan.clear();
+        self.mismatched = mismatched.clone();
         self.plan_switches(faces, mismatched, &mut out);
         Ok(out)
     }
@@ -1100,18 +1122,17 @@ impl Engine {
         }
     }
 
-    /// Records what `carry_out` did with the switches `apply` planned. A switch that worked, or
-    /// that waits for its file, is carried out, and isn't done again until that font's choice
-    /// changes. One that failed isn't: the next sync tries it again, and the page says so until
-    /// it works. Nor is a font that's to be carried out again since `apply` planned (`replan`).
+    /// Records what `carry_out` did with the switches `apply` planned. A switch that worked is
+    /// carried out, and isn't done again until that font's choice changes. One that failed isn't:
+    /// the next sync tries it again, and the page says so until it works. Nor is a turn-on with
+    /// no file to turn on (it waits, listed as not on this computer, with no message), or a font
+    /// that's to be carried out again since `apply` planned (`replan`).
     pub fn switched(&mut self, applied: &Applied, done: &Switched) {
-        for (key, stamp) in applied.stamps.iter().filter(|(k, _)| !done.failed.contains(*k) && !self.replan.contains(*k)) {
-            self.saved.applied.insert(key.clone(), stamp.clone());
+        for (key, stamp) in &applied.stamps {
+            if !done.failed.contains(key) && !done.absent.contains(key) && !self.replan.contains(key) {
+                self.saved.applied.insert(key.clone(), stamp.clone());
+            }
         }
-        self.saved.waiting.extend(done.waiting.iter().cloned());
-        let (me, group) = (self.config.device_id.as_str(), self.config.group.as_deref());
-        let merged = &self.saved.merged;
-        self.saved.waiting.retain(|k| merged.effective(k, me, group).is_some_and(|e| e.on));
         match done.failed.len() {
             0 => self.problems.remove("switch"),
             n => self.problems.insert(
@@ -1121,26 +1142,37 @@ impl Engine {
         };
     }
 
-    /// Fonts that should be on here but aren't on this device: (key, family, style). That
-    /// includes fonts sync turned on whose files aren't there (`waiting`); `exists` says whether
-    /// a file is.
-    pub fn missing(&self, faces: &LocalFaces, exists: impl Fn(&str) -> bool) -> Vec<(String, String, String)> {
+    /// Fonts that should be on here and that sync hasn't turned on: those with no copy here, and
+    /// those a sync would turn on now (`plan_switches`), with their files. Of those, the ones
+    /// with no file there are the fonts not on this computer (`Missing::not_here`). Touches no
+    /// file, so it can run under the engine lock.
+    pub fn missing(&self, faces: &LocalFaces) -> Vec<Missing> {
         let (me, group) = (self.config.device_id.as_str(), self.config.group.as_deref());
+        let mut planned = Applied::default();
+        self.plan_switches(faces, &self.mismatched, &mut planned);
+        let to_turn_on: BTreeMap<&String, &Vec<(i64, String)>> = planned.turn_on.iter().map(|(k, copies)| (k, copies)).collect();
         self.saved
             .merged
             .faces
             .keys()
-            .filter(|k| match faces.faces.get(*k) {
-                None => true,
-                Some(face) => self.saved.waiting.contains(*k) && !face.copies.iter().any(|c| exists(&c.path)),
-            })
-            .filter(|k| self.saved.merged.effective(k, me, group).is_some_and(|e| e.on))
-            .map(|k| {
+            .filter_map(|k| {
                 let local = faces.faces.get(k);
+                let files = match local {
+                    None => {
+                        self.saved.merged.effective(k, me, group).filter(|e| e.on)?;
+                        Vec::new()
+                    }
+                    Some(_) => to_turn_on.get(k)?.iter().map(|(_, path)| path.clone()).collect(),
+                };
                 let text = |field: &str, here: Option<&String>| {
                     self.saved.merged.face_str(k, field).map(String::from).or_else(|| here.cloned()).unwrap_or_default()
                 };
-                (k.clone(), text(face_field::FAMILY, local.map(|f| &f.family)), text(face_field::STYLE, local.map(|f| &f.style)))
+                Some(Missing {
+                    key: k.clone(),
+                    family: text(face_field::FAMILY, local.map(|f| &f.family)),
+                    style: text(face_field::STYLE, local.map(|f| &f.style)),
+                    files,
+                })
             })
             .collect()
     }
