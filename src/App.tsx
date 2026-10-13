@@ -60,6 +60,7 @@ import { useRestorePrompt } from "@/settings/restorePrompt";
 import { SETTINGS_SEARCH_ID, SettingsScreen } from "@/settings/SettingsView";
 import { applyTheme, useDarkTheme } from "@/settings/theme";
 import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/useSettings";
+import { useSyncEvents } from "@/sync/store";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
@@ -373,6 +374,7 @@ export default function App() {
 
   // "Ask me": fonts turned off while Fontface was closed are offered back once, at launch.
   useRestorePrompt(() => loadFonts().catch(() => {}));
+  useSyncEvents(useCallback(() => void loadFonts().catch(() => {}), [loadFonts]));
 
   // Cmd+, (Ctrl+, on Windows) opens settings, or goes to their search field if they're open.
   // On macOS the app menu's Settings… item has ⌘, too and sends "open-settings". The page sees

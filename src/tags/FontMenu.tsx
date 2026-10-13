@@ -12,6 +12,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
+import { SyncFontMenuItems } from "@/sync/SyncFontMenu";
 import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
 import { openMenuFromKeyboard } from "./menus";
@@ -117,6 +118,7 @@ export function FontTagMenuItems({ faces, index }: { faces: Face[]; index: TagIn
           )}
         </ContextMenuSubContent>
       </ContextMenuSub>
+      <SyncFontMenuItems faces={faces} />
     </>
   );
 }

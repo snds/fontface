@@ -11,6 +11,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { openTagDialog } from "@/tags/dialogs";
+import { useSyncSection } from "@/sync/SyncSection";
 import { ConfirmButton, describe, NumberField, SECTION_LIST, TextSetting, type RowDef, type RowIds, type SectionDef, type SectionId } from "./parts";
 import { useSettings } from "./useSettings";
 
@@ -115,6 +116,7 @@ const SIDEBAR_ROWS: { key: keyof SidebarSections; label: string; description: st
 export function useSections(props: SectionProps): SectionDef[] | null {
   const { settings: s, update, reset } = useSettings();
   const outside = useOutsideState(props.onPurchasesChanged);
+  const syncSection = useSyncSection();
   // Font files Fontface has turned on, outside the OS's own font folders: what Turn Off All
   // covers (`wanted`), and how many of those macOS has on right now (`on`). The rest are set to
   // come back on, e.g. from a drive that isn't connected, or waiting on "Ask me".
@@ -625,7 +627,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
     ],
   };
 
-  return [general, library, sidebar, activation, purchasesSection, backupsSection, about];
+  return [general, library, sidebar, activation, syncSection, purchasesSection, backupsSection, about];
 }
 
 /** The preview size slider: moves freely, and saves when you let go. */
