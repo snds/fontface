@@ -179,11 +179,12 @@ export interface GoogleFamily {
   weights: number[];
   styles: string[];
   subsets: string[];
+  /** SPDX id. Icon families (Material Icons and Symbols) show Apache-2.0, their real license. */
   license: string;
   lastModified: string;
   installed: { dir: string; lastModified: string } | null;
   updateAvailable: boolean;
-  /** Why it can't be downloaded (e.g. icon fonts live elsewhere), if it can't. */
+  /** Why it can't be downloaded (an icon font Fontface doesn't know where to get yet), if it can't. */
   unavailable: string | null;
 }
 

@@ -8,7 +8,7 @@ Fontface never copies, decrypts, converts or re-shares a font in a way its licen
 
 Status (2026-10-12): built so far:
 - the All Fonts, Font Book and Folders views;
-- Google Fonts (keyless: the Fontsource catalog plus full files from the google/fonts repository);
+- Google Fonts (keyless: the Fontsource catalog plus full files from the google/fonts repository, and Google's icon fonts from google/material-design-icons);
 - the read-only Adobe Fonts listing;
 - the Purchases download watcher (§3.3). Still to do there: the "Replace with newer version" offer, the 30-day trial reminder, and a "License transferred" status. Everything else here is still a plan. Facts were checked live on 2026-10-12, and each section ends with its sources. Fontface uses only other font managers' public documentation, never their code, binaries or hosted data (see [FEATURES.md](FEATURES.md)).
 
@@ -164,12 +164,39 @@ Google offers an official API that lists every family and links to complete desk
 - With `VF`, expect one file per style (upright and italic), as in Google's sample. Remove duplicate URLs anyway, but don't depend on that. Confirm with the first keyed call.
 - Files come from `fonts.gstatic.com` as TTF. They are complete desktop fonts, not web pieces. Save them under `Sources/google/<slug>/<version>/`.
 - Licenses: fetch `METADATA.pb` and the license file from `raw.githubusercontent.com/google/fonts/main/{ofl|apache|ufl}/<slug>/`. Parse with the `gf-metadata` crate (0.2.5). Ignore the `cc-by-sa/` folder, which holds articles, not fonts. Encode the brackets in file names such as `Inter[opsz,wght].ttf`.
-- Material Icons and Material Symbols (9 families) have no folder in that repo. Their license is Apache 2.0 from google/material-design-icons. Show them under an "Icons" filter, not with text fonts.
+- Icon fonts: built (2026-10-13). See "Icon fonts (as built)" below.
 - Eleven static families, such as Asap Condensed and Encode Sans Condensed, repeat the width axis of a variable sibling. Hide them when the sibling's variable font is installed.
 - Caching: Google's terms (§5e) limit how long API data may be kept to the response's cache header. Keep the catalog only that long. Long-lived records of installed fonts come from the font files and `METADATA.pb`.
 - Update check: a new `version`, or a new `/v<N>/` in a file URL.
 - Repo fallback: the repo's `main` branch can run ahead of the live site, which updates about weekly. GitHub allows 60 unauthenticated requests an hour. Fetch one family at a time. Never clone the 3.3 GB repo.
 - Opt-in, labeled unofficial: `fonts.google.com/metadata/fonts` (keyless catalog) and `fonts.google.com/download/list?family=X` (strip the `)]}'` prefix), which adds Google's extra optical-size and width statics. The old `fonts.google.com/download?family=` zip link now returns a web page.
+
+**Icon fonts (as built, 2026-10-13)**
+
+Material Icons and Material Symbols have no folder in google/fonts. Google publishes them in a second official repository, google/material-design-icons. Fontsource lists 9 icon families, all labelled OFL-1.1, which is wrong: they use the Apache License 2.0.
+
+- Source table: `src-tauri/src/services/google/icons.rs` maps each catalog id to its file in that repository, read from `raw.githubusercontent.com/google/material-design-icons/master/`. No GitHub API calls.
+
+  | Catalog id | File |
+  |---|---|
+  | `material-icons` | `font/MaterialIcons-Regular.ttf` |
+  | `material-icons-outlined` | `font/MaterialIconsOutlined-Regular.otf` |
+  | `material-icons-round` | `font/MaterialIconsRound-Regular.otf` |
+  | `material-icons-sharp` | `font/MaterialIconsSharp-Regular.otf` |
+  | `material-icons-two-tone` | `font/MaterialIconsTwoTone-Regular.otf` |
+  | `material-symbols-outlined` | `variablefont/MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].ttf` |
+  | `material-symbols-rounded` | `variablefont/MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf` |
+  | `material-symbols-sharp` | `variablefont/MaterialSymbolsSharp[FILL,GRAD,opsz,wght].ttf` |
+
+- License: the repository's `LICENSE` (Apache 2.0) is saved next to the fonts as `LICENSE.txt`. Like every Google family, an install without its license is refused. The catalog and the Google Fonts page show `Apache-2.0` for these families, whatever Fontsource says, and file them under Icons.
+- The static `material-symbols` entry is hidden. Fontsource lists it as static weights 100–700 under "monospace". It holds the same icons as Material Symbols Outlined, whose variable font covers all of those weights, and Google publishes no desktop files for it on their own. Offering it would only install a second copy of Outlined under another name, so each icon font shows once.
+- A catalog icon family that isn't in the table (say, one Google adds later) shows "Not downloadable here" until the table learns its file.
+- Install, update and remove use the same steps as other Google families: download and check into a hidden folder, swap into place with the old copy kept until the new one is in place, the per-family lock, and turning fonts off before a swap or removal. File names keep their brackets and commas, as in google/fonts; the URLs encode them.
+- Update check: Fontsource's `lastModified`, like other families, recorded at install.
+- Unchanged files are skipped (all Google families): each install records every font file's ETag (a tag the server gives each version of a file) and size in `.fontface.json`. An update asks for each file with `If-None-Match`. If the server answers 304 (not modified) and the local copy is still that size and still reads as a font, that copy is reused. License files are small and always downloaded again.
+- Turning on: nothing special. They're TTF, OTF and variable TTF files, which CoreText turns on like any other; after a download the page rescans the folder and turns them on through the same path as other families.
+- Previews: Material Icons' letters draw nothing alone (words like "home" turn into icons through ligatures, letters drawn as one shape), so the library preview shows a sample of its icons, labelled Symbols. Material Symbols also has a plain alphabet, so the library preview draws its name in those letters. On the Google Fonts page, downloaded icon families preview as five icons (home, search, settings, favorite, star) by their code points, which every one of these fonts has.
+- Sizes: Material Icons styles are 0.3–0.7 MB each; the variable Material Symbols are 9–15 MB each.
 
 **License and ToS guardrails**
 
@@ -185,7 +212,7 @@ Google offers an official API that lists every family and links to complete desk
 - Same API and files, saved under `%LOCALAPPDATA%\design.snds.fontface\Sources\google\`. Static fonts matter more, because older Office and GDI apps handle variable fonts poorly.
 - A loaded font outside `%WINDIR%\Fonts` can't be replaced until it is unloaded. Updates unload first and may finish after a restart.
 
-Sources: [Developer API](https://developers.google.com/fonts/docs/developer_api) · [Google APIs Terms](https://developers.google.com/terms) · [google/fonts](https://github.com/google/fonts) · [gf-metadata](https://github.com/googlefonts/gf-metadata) · [AddFontResourceEx](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-addfontresourceexa)
+Sources: [Developer API](https://developers.google.com/fonts/docs/developer_api) · [Google APIs Terms](https://developers.google.com/terms) · [google/fonts](https://github.com/google/fonts) · [google/material-design-icons](https://github.com/google/material-design-icons) · [gf-metadata](https://github.com/googlefonts/gf-metadata) · [AddFontResourceEx](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-addfontresourceexa)
 
 ### 3.2 Adobe Fonts (P1)
 

@@ -6,17 +6,22 @@
 //!   isn't retried for a while.
 //! - **Files:** Google's official `google/fonts` repository. Each family's `METADATA.pb` lists its
 //!   complete desktop font files (not web subsets), downloaded from raw.githubusercontent.com
-//!   together with the family's license file, which is required.
+//!   together with the family's license file, which is required. Icon fonts (Material Icons and
+//!   Material Symbols) aren't in google/fonts: they come from google/material-design-icons, by
+//!   a small table (see `icons`), with that repository's license (Apache 2.0).
 //! - **Installed state:** each family folder holds a hidden `.fontface.json` with the catalog id,
-//!   the repository folder and the `lastModified` it was installed at (for update detection).
+//!   where the files came from, the `lastModified` it was installed at (for update detection),
+//!   and each font file's ETag and size (so an update downloads only files that changed).
 //!
 //! Installs happen in two steps. `prepare` downloads and checks everything into a hidden
 //! temporary folder; `commit` swaps it into place, keeping the old copy until the new one is in
 //! place and restoring it if anything fails. Every font here is open-licensed (OFL, Apache 2.0 or
 //! the Ubuntu Font Licence), which allows downloading and installing them.
 
+pub mod icons;
+
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -27,7 +32,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{fetch_bytes, service_dir, Deadline, Fetch};
+use super::{fetch, fetch_bytes, service_dir, Deadline, Fetch, Fetched};
 use crate::{
     error::{AppError, AppResult},
     scanner,
@@ -76,7 +81,26 @@ struct Sidecar {
     id: String,
     family: String,
     last_modified: String,
+    /// `google/fonts:<license dir>/<folder>`, or `google/material-design-icons`.
     source: String,
+    /// Per font file: the ETag and size it was downloaded with. Missing in older installs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    upstream: BTreeMap<String, Upstream>,
+}
+
+/// What the server said about a downloaded file, so a later update can ask "has it changed?".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Upstream {
+    etag: String,
+    bytes: u64,
+}
+
+fn read_sidecar(dir: &Path) -> Option<Sidecar> {
+    let path = dir.join(SIDECAR);
+    if std::fs::metadata(&path).ok()?.len() > MAX_SMALL_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,10 +171,18 @@ fn slug(id: &str) -> String {
     id.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase()
 }
 
-/// Families Fontsource lists under Google Fonts that google/fonts doesn't hold.
+/// Families the catalog lists that Fontface can't download, and why: an icon font that isn't
+/// in the icon table (say, one Google adds later), or the left-out static Material Symbols.
 fn unavailable_reason(f: &CatalogFamily) -> Option<String> {
-    (f.category == "icons" || f.id.starts_with("material-icons") || f.id.starts_with("material-symbols"))
-        .then(|| "Icon fonts are published separately, in google/material-design-icons.".to_string())
+    if icons::lookup(&f.id).is_some() {
+        None
+    } else if icons::hidden(&f.id) {
+        Some("This is the same as Material Symbols Outlined. Get that one instead.".to_string())
+    } else if icons::looks_like_icons(f) {
+        Some("Fontface doesn't know where Google publishes this icon font yet.".to_string())
+    } else {
+        None
+    }
 }
 
 /// Installed families by catalog id, plus by repository folder (so a twin id still matches).
@@ -164,8 +196,7 @@ fn installed_index(data_dir: &Path) -> (HashMap<String, Installed>, HashMap<Stri
             continue;
         }
         let dir = entry.path();
-        let Ok(bytes) = std::fs::read(dir.join(SIDECAR)) else { continue };
-        if let Ok(meta) = serde_json::from_slice::<Sidecar>(&bytes) {
+        if let Some(meta) = read_sidecar(&dir) {
             let item = Installed { dir: dir.to_string_lossy().into_owned(), last_modified: meta.last_modified };
             if let Some(repo) = meta.source.strip_prefix("google/fonts:").and_then(|s| s.rsplit('/').next()) {
                 by_repo.insert(repo.to_string(), item.clone());
@@ -225,6 +256,12 @@ fn build(data_dir: &Path, data: CachedCatalog, stale: bool) -> Catalog {
     // (e.g. "bj-cree" and "bjcree"). Keep the newest.
     let mut by_slug: HashMap<String, CatalogFamily> = HashMap::new();
     for f in data.families {
+        // The static Material Symbols is a second copy of Outlined (see `icons`).
+        if icons::hidden(&f.id) {
+            continue;
+        }
+        // Icon families show their real license (Fontsource says OFL) and sit under Icons.
+        let f = icons::corrected(f);
         let key = slug(&f.id);
         match by_slug.get(&key) {
             Some(existing) if existing.last_modified >= f.last_modified => {}
@@ -304,6 +341,50 @@ fn safe_folder_name(family: &str) -> String {
     if trimmed.is_empty() { "Untitled".into() } else { trimmed }
 }
 
+/// Where a family's files come from.
+struct Source {
+    /// Recorded as the install's source: `google/fonts:<license dir>/<folder>`, or
+    /// `google/material-design-icons`.
+    label: String,
+    /// Each font file: the name it's saved under, and its URL.
+    fonts: Vec<(String, String)>,
+    /// License files to try, in order: the name it's saved under, and its URL. The first one
+    /// found is saved.
+    licenses: Vec<(String, String)>,
+}
+
+/// Finds a family's files: icon fonts from the icon table, others from their google/fonts
+/// folder (found through its METADATA.pb).
+fn locate(family: &CatalogFamily) -> AppResult<Source> {
+    if let Some(icon) = icons::lookup(&family.id) {
+        return Ok(icons::source(icon));
+    }
+    // Only a 404 means "try the next folder"; any other failure is reported.
+    for dir in repo_candidates(family) {
+        match fetch_bytes(&format!("{REPO_RAW}/{dir}/METADATA.pb"), MAX_SMALL_BYTES, Deadline::Small) {
+            Ok(text) => {
+                let files = metadata_filenames(&String::from_utf8_lossy(&text));
+                if !files.is_empty() {
+                    return Ok(Source {
+                        fonts: files
+                            .into_iter()
+                            .map(|name| {
+                                let url = format!("{REPO_RAW}/{dir}/{}", urlencode_path(&name));
+                                (name, url)
+                            })
+                            .collect(),
+                        licenses: LICENSE_FILES.iter().map(|l| (l.to_string(), format!("{REPO_RAW}/{dir}/{l}"))).collect(),
+                        label: format!("google/fonts:{dir}"),
+                    });
+                }
+            }
+            Err(Fetch::NotFound) => {}
+            Err(Fetch::Failed(e)) => return Err(e),
+        }
+    }
+    Err(AppError::NotFound(format!("{} wasn't found in Google's font repository", family.family)))
+}
+
 /// A family downloaded and checked, waiting in a hidden folder to be swapped into place.
 pub struct Prepared {
     family: CatalogFamily,
@@ -314,6 +395,8 @@ pub struct Prepared {
     pub replaces: Option<PathBuf>,
     /// Font file names in the copy being replaced.
     pub old_files: Vec<String>,
+    /// Font files that hadn't changed upstream, so the copy being replaced was reused.
+    pub reused: Vec<String>,
 }
 
 impl Drop for Prepared {
@@ -327,30 +410,15 @@ impl Drop for Prepared {
 
 /// Step 1: downloads every font file of a family, plus its license, into a hidden temporary
 /// folder unique to this install, and checks each file is a real font. Nothing visible changes.
+/// An update asks the server for each file only if it changed since the copy being replaced
+/// was downloaded; an unchanged file is copied from that copy instead.
 pub fn prepare(data_dir: &Path, family: &CatalogFamily) -> AppResult<Prepared> {
     if let Some(reason) = unavailable_reason(family) {
         return Err(AppError::Invalid(reason));
     }
     let root = service_dir(data_dir, "google").ok_or_else(|| AppError::Other("Google Fonts folder missing".into()))?;
     std::fs::create_dir_all(&root)?;
-
-    // Find the family's folder. Only a 404 means "try the next one"; any other failure is reported.
-    let mut found = None;
-    for dir in repo_candidates(family) {
-        match fetch_bytes(&format!("{REPO_RAW}/{dir}/METADATA.pb"), MAX_SMALL_BYTES, Deadline::Small) {
-            Ok(text) => {
-                let files = metadata_filenames(&String::from_utf8_lossy(&text));
-                if !files.is_empty() {
-                    found = Some((dir, files));
-                    break;
-                }
-            }
-            Err(Fetch::NotFound) => {}
-            Err(Fetch::Failed(e)) => return Err(e),
-        }
-    }
-    let (repo_dir, files) =
-        found.ok_or_else(|| AppError::NotFound(format!("{} wasn't found in Google's font repository", family.family)))?;
+    let source = locate(family)?;
 
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let tmp = root.join(format!(".download-{}-{nonce}", slug(&family.id)));
@@ -368,36 +436,43 @@ pub fn prepare(data_dir: &Path, family: &CatalogFamily) -> AppResult<Prepared> {
                 .collect()
         })
         .unwrap_or_default();
-    let prepared = Prepared {
+    // What the copy being replaced recorded about its downloads.
+    let recorded = existing.as_deref().and_then(read_sidecar).map(|s| s.upstream).unwrap_or_default();
+    let mut prepared = Prepared {
         family: family.clone(),
         dest: existing.clone().unwrap_or_else(|| root.join(safe_folder_name(&family.family))),
         old_files,
         replaces: existing,
         tmp,
-        files: files.clone(),
+        files: source.fonts.iter().map(|(name, _)| name.clone()).collect(),
+        reused: Vec::new(),
     };
 
-    for name in &files {
-        let url = format!("{REPO_RAW}/{repo_dir}/{}", urlencode_path(name));
-        let bytes = fetch_bytes(&url, MAX_FONT_BYTES, Deadline::Large).map_err(|e| match e {
-            Fetch::NotFound => AppError::NotFound(format!("{name} is listed for {} but missing from the repository", family.family)),
-            Fetch::Failed(e) => e,
-        })?;
-        scanner::parse_file(&bytes).map_err(|e| AppError::Invalid(format!("{name} isn't a usable font: {e}")))?;
-        std::fs::write(prepared.tmp.join(name), bytes).map_err(|e| AppError::Other(format!("Couldn't save {name}: {e}")))?;
+    let mut upstream = BTreeMap::new();
+    for (name, url) in &source.fonts {
+        let old = prepared.replaces.as_ref().map(|d| d.join(name)).zip(recorded.get(name));
+        let got = download_font(family, name, url, old)?;
+        scanner::parse_file(&got.bytes).map_err(|e| AppError::Invalid(format!("{name} isn't a usable font: {e}")))?;
+        std::fs::write(prepared.tmp.join(name), &got.bytes).map_err(|e| AppError::Other(format!("Couldn't save {name}: {e}")))?;
+        if got.reused {
+            prepared.reused.push(name.clone());
+        }
+        if let Some(tag) = got.upstream {
+            upstream.insert(name.clone(), tag);
+        }
     }
 
     // The license travels with the fonts. It's required: an install without it is refused.
     let mut license_saved = false;
-    for license in LICENSE_FILES {
-        match fetch_bytes(&format!("{REPO_RAW}/{repo_dir}/{license}"), MAX_SMALL_BYTES, Deadline::Small) {
-            Ok(bytes) => {
-                std::fs::write(prepared.tmp.join(license), bytes)
-                    .map_err(|e| AppError::Other(format!("Couldn't save {license}: {e}")))?;
+    for (saved_as, url) in &source.licenses {
+        match fetch_bytes(url, MAX_SMALL_BYTES, Deadline::Small) {
+            Ok(bytes) if !bytes.is_empty() => {
+                std::fs::write(prepared.tmp.join(saved_as), bytes)
+                    .map_err(|e| AppError::Other(format!("Couldn't save {saved_as}: {e}")))?;
                 license_saved = true;
                 break;
             }
-            Err(Fetch::NotFound) => {}
+            Ok(_) | Err(Fetch::NotFound) => {}
             Err(Fetch::Failed(e)) => return Err(e),
         }
     }
@@ -409,11 +484,54 @@ pub fn prepare(data_dir: &Path, family: &CatalogFamily) -> AppResult<Prepared> {
         id: family.id.clone(),
         family: family.family.clone(),
         last_modified: family.last_modified.clone(),
-        source: format!("google/fonts:{repo_dir}"),
+        source: source.label,
+        upstream,
     };
     std::fs::write(prepared.tmp.join(SIDECAR), serde_json::to_vec_pretty(&sidecar).unwrap_or_default())
         .map_err(|e| AppError::Other(format!("Couldn't save install details: {e}")))?;
     Ok(prepared)
+}
+
+/// One font file, downloaded or reused.
+struct Got {
+    bytes: Vec<u8>,
+    /// The ETag and size to record, if the server gave an ETag.
+    upstream: Option<Upstream>,
+    /// The file hadn't changed, so the copy being replaced was used.
+    reused: bool,
+}
+
+/// Downloads one font file. `old` is the file in the copy being replaced, with the ETag and size
+/// it was downloaded with. If it's still that size there, the request asks for the file only if
+/// it changed; when it hasn't, the local copy is used, provided it still reads as a font.
+/// Otherwise (or if the local copy can't be used) the file is downloaded in full.
+fn download_font(family: &CatalogFamily, name: &str, url: &str, old: Option<(PathBuf, &Upstream)>) -> AppResult<Got> {
+    let failed = |e: Fetch| match e {
+        Fetch::NotFound => AppError::NotFound(format!("{name} is listed for {} but missing from the repository", family.family)),
+        Fetch::Failed(e) => e,
+    };
+    let downloaded = |bytes: Vec<u8>, etag: Option<String>| {
+        let upstream = etag.map(|etag| Upstream { etag, bytes: bytes.len() as u64 });
+        Got { bytes, upstream, reused: false }
+    };
+    let old = old.filter(|(path, rec)| std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == rec.bytes));
+    if let Some((path, rec)) = old {
+        match fetch(url, MAX_FONT_BYTES, Deadline::Large, Some(&rec.etag)).map_err(failed)? {
+            Fetched::Body { bytes, etag } => return Ok(downloaded(bytes, etag)),
+            Fetched::NotModified => {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if bytes.len() as u64 == rec.bytes && scanner::parse_file(&bytes).is_ok() {
+                        return Ok(Got { bytes, upstream: Some(rec.clone()), reused: true });
+                    }
+                }
+                // The local copy can't be read, or changed since it was downloaded: fetch it in full.
+            }
+        }
+    }
+    match fetch(url, MAX_FONT_BYTES, Deadline::Large, None).map_err(failed)? {
+        Fetched::Body { bytes, etag } => Ok(downloaded(bytes, etag)),
+        Fetched::NotModified => Err(AppError::Other(format!("Couldn't download {name}"))),
+    }
 }
 
 /// Step 2: swaps the prepared family into place. The old copy is moved aside first and only
@@ -494,9 +612,16 @@ mod tests {
     }
 
     #[test]
-    fn icon_fonts_are_marked_unavailable() {
-        assert!(unavailable_reason(&fam("material-symbols-rounded", "Apache-2.0")).is_some());
+    fn known_icon_fonts_are_downloadable_and_unknown_ones_say_why() {
+        assert!(unavailable_reason(&fam("material-symbols-rounded", "OFL-1.1")).is_none());
+        assert!(unavailable_reason(&fam("material-icons", "OFL-1.1")).is_none());
         assert!(unavailable_reason(&fam("inter", "OFL-1.1")).is_none());
+        let mut future = fam("noto-icons", "OFL-1.1");
+        future.category = "icons".into();
+        for f in [future, fam("material-symbols-extra", "OFL-1.1")] {
+            let why = unavailable_reason(&f).expect("an icon font Fontface doesn't know");
+            assert!(!why.contains("published separately"), "{why}");
+        }
     }
 
     #[test]
@@ -508,5 +633,284 @@ mod tests {
     fn folder_names_are_safe() {
         assert_eq!(safe_folder_name("A/B: C"), "A-B- C");
         assert_eq!(safe_folder_name(".hidden"), "hidden");
+    }
+
+    // ------------------------------------------------------------------ icon fonts
+
+    use crate::services::fake_net;
+
+    /// Every id Fontsource lists under Google Fonts for Google's icon fonts (2026-10-13).
+    const FONTSOURCE_ICON_IDS: [&str; 9] = [
+        "material-icons",
+        "material-icons-outlined",
+        "material-icons-round",
+        "material-icons-sharp",
+        "material-icons-two-tone",
+        "material-symbols",
+        "material-symbols-outlined",
+        "material-symbols-rounded",
+        "material-symbols-sharp",
+    ];
+
+    /// A family as Fontsource lists it: icon families labelled OFL-1.1.
+    fn listed(id: &str, category: &str, last_modified: &str) -> CatalogFamily {
+        let family = icons::lookup(id).map_or(id, |i| i.family).to_string();
+        CatalogFamily { family, category: category.into(), last_modified: last_modified.into(), ..fam(id, "OFL-1.1") }
+    }
+
+    /// A fresh data folder for one test.
+    fn data_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fontface-google-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn font(family: &str, letters: &str) -> Vec<u8> {
+        crate::test_fonts::FontBuilder::new().named(family).chars(letters).build()
+    }
+
+    fn icon_url(dir: &str, name: &str) -> String {
+        format!("{}/{dir}/{}", icons::REPO_RAW, urlencode_path(name))
+    }
+
+    fn license_url() -> String {
+        format!("{}/LICENSE", icons::REPO_RAW)
+    }
+
+    const APACHE: &[u8] = b"Apache License\nVersion 2.0, January 2004\n";
+
+    fn sidecar_in(dir: &str) -> Sidecar {
+        read_sidecar(Path::new(dir)).expect("install details")
+    }
+
+    /// Hidden folders left in the Google Fonts folder (downloads or backups).
+    fn leftovers(data: &Path) -> Vec<String> {
+        std::fs::read_dir(service_dir(data, "google").unwrap())
+            .map(|entries| {
+                entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with('.')).collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn icon_table_covers_every_listed_icon_family_with_safe_names() {
+        let mut ids: Vec<&str> = icons::FAMILIES.iter().map(|f| f.id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), icons::FAMILIES.len(), "ids are unique");
+        for id in FONTSOURCE_ICON_IDS {
+            assert!(icons::lookup(id).is_some() != icons::hidden(id), "{id}: in the table or hidden, not both");
+        }
+        for icon in icons::FAMILIES {
+            assert!(!icon.files.is_empty());
+            let source = icons::source(icon);
+            assert_eq!(source.label, "google/material-design-icons");
+            assert_eq!(source.licenses, vec![("LICENSE.txt".to_string(), license_url())]);
+            for ((dir, name), (saved, url)) in icon.files.iter().zip(&source.fonts) {
+                assert!(safe_font_file_name(name), "{name}");
+                assert_eq!(saved, name);
+                assert!(url.starts_with("https://raw.githubusercontent.com/google/material-design-icons/master/"), "{url}");
+                assert!(url.ends_with(&format!("/{dir}/{}", urlencode_path(name))), "{url}");
+                assert!(!url.contains('[') && !url.contains(','), "brackets and commas are encoded: {url}");
+            }
+        }
+        let rounded = icons::source(icons::lookup("material-symbols-rounded").unwrap());
+        assert_eq!(rounded.fonts[0].0, "MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf");
+        assert_eq!(
+            rounded.fonts[0].1,
+            "https://raw.githubusercontent.com/google/material-design-icons/master/variablefont/MaterialSymbolsRounded%5BFILL%2CGRAD%2Copsz%2Cwght%5D.ttf"
+        );
+        let icons_ttf = icons::source(icons::lookup("material-icons").unwrap());
+        assert_eq!(
+            icons_ttf.fonts,
+            vec![(
+                "MaterialIcons-Regular.ttf".to_string(),
+                "https://raw.githubusercontent.com/google/material-design-icons/master/font/MaterialIcons-Regular.ttf".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn catalog_shows_icon_families_as_apache_licensed_icons() {
+        let data = data_dir("catalog-icons");
+        let families = vec![
+            listed("material-icons", "icons", "2025-09-17"),
+            listed("material-symbols-rounded", "icons", "2026-10-08"),
+            listed("material-symbols", "monospace", "2026-10-08"),
+            listed("noto-icons", "icons", "2026-01-01"),
+            listed("inter", "sans-serif", "2026-01-01"),
+        ];
+        let catalog = build(&data, CachedCatalog { fetched_at: now(), families }, false);
+        let get = |id: &str| catalog.families.iter().find(|e| e.family.id == id);
+        for id in ["material-icons", "material-symbols-rounded"] {
+            let e = get(id).unwrap();
+            assert_eq!((e.family.license.as_str(), e.family.category.as_str()), ("Apache-2.0", "icons"), "{id}");
+            assert!(e.unavailable.is_none(), "{id} can be downloaded");
+        }
+        // Not in the table: Fontsource's label stays, and the row says it can't be downloaded.
+        let unknown = get("noto-icons").unwrap();
+        assert_eq!(unknown.family.license, "OFL-1.1");
+        assert!(unknown.unavailable.is_some());
+        // Text fonts are untouched.
+        let inter = get("inter").unwrap();
+        assert_eq!((inter.family.license.as_str(), inter.family.category.as_str()), ("OFL-1.1", "sans-serif"));
+        assert!(get("material-symbols").is_none(), "the static Material Symbols is left out");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn static_material_symbols_is_left_out_and_never_downloaded() {
+        assert!(icons::hidden("material-symbols"));
+        assert!(icons::lookup("material-symbols").is_none());
+        assert!(icons::lookup("material-symbols-outlined").is_some(), "Outlined (the same icons) is offered");
+        let data = data_dir("static-symbols");
+        let _net = fake_net::serve(vec![]);
+        let err = prepare(&data, &listed("material-symbols", "monospace", "2026-10-08")).err().expect("refused");
+        assert!(matches!(&err, AppError::Invalid(why) if why.contains("Material Symbols Outlined")), "{err:?}");
+        assert!(fake_net::take_requests().is_empty(), "nothing is downloaded");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn icon_family_installs_updates_and_skips_unchanged_files() {
+        let data = data_dir("icons-install");
+        let name = "MaterialIcons-Regular.ttf";
+        let url = icon_url("font", name);
+        let v1 = font("Material Icons", "abc");
+        let _net = fake_net::serve(vec![(url.clone(), v1.clone(), Some("\"v1\"")), (license_url(), APACHE.to_vec(), None)]);
+        let family = icons::corrected(listed("material-icons", "icons", "2025-09-17"));
+
+        // First download: the font and the license, saved as LICENSE.txt, with its ETag.
+        let prepared = prepare(&data, &family).unwrap();
+        assert_eq!(prepared.files, vec![name]);
+        assert!(prepared.replaces.is_none() && prepared.reused.is_empty());
+        let dir = commit(prepared).unwrap();
+        assert!(dir.ends_with("/Material Icons"), "{dir}");
+        assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v1);
+        assert_eq!(std::fs::read(Path::new(&dir).join("LICENSE.txt")).unwrap(), APACHE);
+        assert_eq!(fake_net::take_requests(), vec![(url.clone(), None), (license_url(), None)]);
+        let saved = sidecar_in(&dir);
+        assert_eq!((saved.id.as_str(), saved.source.as_str(), saved.last_modified.as_str()), ("material-icons", "google/material-design-icons", "2025-09-17"));
+        assert_eq!(saved.upstream[name], Upstream { etag: "\"v1\"".into(), bytes: v1.len() as u64 });
+
+        // The catalog sees it as installed, and offers an update when Fontsource's date moves on.
+        let listing = |last_modified: &str| {
+            let families = vec![listed("material-icons", "icons", last_modified)];
+            build(&data, CachedCatalog { fetched_at: now(), families }, false).families.remove(0)
+        };
+        let entry = listing("2025-09-17");
+        assert!(entry.installed.is_some() && !entry.update_available);
+        let entry = listing("2026-01-01");
+        assert!(entry.update_available);
+
+        // Update, file unchanged upstream: asked with its ETag, answered "not modified", reused.
+        let newer = icons::corrected(listed("material-icons", "icons", "2026-01-01"));
+        let prepared = prepare(&data, &newer).unwrap();
+        assert_eq!(prepared.reused, vec![name]);
+        assert_eq!(prepared.replaces.as_ref().map(|d| std::fs::canonicalize(d).unwrap()), Some(PathBuf::from(&dir)));
+        assert_eq!(fake_net::take_requests()[0], (url.clone(), Some("\"v1\"".to_string())));
+        let dir = commit(prepared).unwrap();
+        assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v1);
+        assert_eq!(sidecar_in(&dir).last_modified, "2026-01-01");
+        assert!(!listing("2026-01-01").update_available);
+        assert!(leftovers(&data).is_empty(), "{:?}", leftovers(&data));
+
+        // Update, file changed upstream: the new file is downloaded and its ETag recorded.
+        let v2 = font("Material Icons", "abcdef");
+        fake_net::set(&url, v2.clone(), Some("\"v2\""));
+        let prepared = prepare(&data, &newer).unwrap();
+        assert!(prepared.reused.is_empty());
+        let dir = commit(prepared).unwrap();
+        assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v2);
+        assert_eq!(sidecar_in(&dir).upstream[name].etag, "\"v2\"");
+
+        // The local copy changed size since: no "has it changed?" question; downloaded in full.
+        std::fs::write(Path::new(&dir).join(name), b"damaged").unwrap();
+        fake_net::take_requests();
+        let prepared = prepare(&data, &newer).unwrap();
+        assert!(prepared.reused.is_empty());
+        assert_eq!(fake_net::take_requests()[0], (url.clone(), None));
+        let dir = commit(prepared).unwrap();
+        assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v2);
+
+        // Same size but no longer a font (say it was overwritten): not reused either.
+        std::fs::write(Path::new(&dir).join(name), vec![0u8; v2.len()]).unwrap();
+        let prepared = prepare(&data, &newer).unwrap();
+        assert!(prepared.reused.is_empty());
+        let dir = commit(prepared).unwrap();
+        assert_eq!(std::fs::read(Path::new(&dir).join(name)).unwrap(), v2);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn variable_icon_family_keeps_brackets_and_commas_in_its_file_name() {
+        let data = data_dir("icons-variable");
+        let name = "MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf";
+        let _net = fake_net::serve(vec![
+            (icon_url("variablefont", name), font("Material Symbols Rounded", "ab"), None),
+            (license_url(), APACHE.to_vec(), None),
+        ]);
+        let family = icons::corrected(listed("material-symbols-rounded", "icons", "2026-10-08"));
+        let dir = commit(prepare(&data, &family).unwrap()).unwrap();
+        assert!(dir.ends_with("/Material Symbols Rounded"), "{dir}");
+        let bytes = std::fs::read(Path::new(&dir).join(name)).unwrap();
+        assert_eq!(scanner::parse_file(&bytes).unwrap()[0].family, "Material Symbols Rounded");
+        assert!(Path::new(&dir).join("LICENSE.txt").exists());
+        // No ETag from the server: nothing recorded, so the next update downloads in full.
+        assert!(sidecar_in(&dir).upstream.is_empty());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn icon_family_without_its_license_or_with_a_broken_file_is_refused() {
+        let data = data_dir("icons-refused");
+        let name = "MaterialIconsSharp-Regular.otf";
+        let family = icons::corrected(listed("material-icons-sharp", "icons", "2025-06-17"));
+        {
+            let _net = fake_net::serve(vec![(icon_url("font", name), font("Material Icons Sharp", "ab"), None)]);
+            let err = prepare(&data, &family).err().expect("no license, no install");
+            assert!(matches!(&err, AppError::NotFound(why) if why.contains("license")), "{err:?}");
+        }
+        {
+            let _net = fake_net::serve(vec![(icon_url("font", name), b"not a font".to_vec(), None), (license_url(), APACHE.to_vec(), None)]);
+            let err = prepare(&data, &family).err().expect("not a font");
+            assert!(matches!(&err, AppError::Invalid(why) if why.contains(name)), "{err:?}");
+        }
+        {
+            let _net = fake_net::serve(vec![(license_url(), APACHE.to_vec(), None)]);
+            let err = prepare(&data, &family).err().expect("missing upstream");
+            assert!(matches!(&err, AppError::NotFound(why) if why.contains(name)), "{err:?}");
+        }
+        assert!(installed_dir(&data, "material-icons-sharp").is_none());
+        assert!(leftovers(&data).is_empty(), "{:?}", leftovers(&data));
+        let visible: Vec<_> = std::fs::read_dir(service_dir(&data, "google").unwrap()).unwrap().flatten().collect();
+        assert!(visible.is_empty(), "nothing installed: {visible:?}");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn text_family_still_installs_from_google_fonts() {
+        let data = data_dir("text-install");
+        let name = "Inter[opsz,wght].ttf";
+        let metadata = "name: \"Inter\"\nfonts {\n  filename: \"Inter[opsz,wght].ttf\"\n}\n";
+        let _net = fake_net::serve(vec![
+            (format!("{REPO_RAW}/ofl/inter/METADATA.pb"), metadata.as_bytes().to_vec(), None),
+            (format!("{REPO_RAW}/ofl/inter/{}", urlencode_path(name)), font("Inter", "Inter"), Some("\"i1\"")),
+            (format!("{REPO_RAW}/ofl/inter/OFL.txt"), b"SIL Open Font License".to_vec(), None),
+        ]);
+        let family = CatalogFamily { last_modified: "2026-01-01".into(), ..fam("inter", "OFL-1.1") };
+        let dir = commit(prepare(&data, &family).unwrap()).unwrap();
+        assert!(Path::new(&dir).join(name).exists() && Path::new(&dir).join("OFL.txt").exists());
+        let saved = sidecar_in(&dir);
+        assert_eq!(saved.source, "google/fonts:ofl/inter");
+        assert_eq!(saved.upstream[name].etag, "\"i1\"");
+        // An update asks for the font only if it changed, like icon families.
+        fake_net::take_requests();
+        let prepared = prepare(&data, &family).unwrap();
+        assert_eq!(prepared.reused, vec![name]);
+        drop(prepared);
+        assert!(leftovers(&data).is_empty(), "an abandoned download is cleaned up");
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

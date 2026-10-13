@@ -42,9 +42,16 @@ type Show = "all" | "installed" | "updates";
 
 const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 
+/** What downloaded icon families preview with: home, search, settings, favorite and star. Every
+ *  Material Icons and Material Symbols font has them at these code points (the live install
+ *  test checks), so they draw without relying on ligatures (icon names typed as words). The
+ *  profile alone isn't enough: Material Symbols also has plain letters, so it would draw its
+ *  name. */
+const ICON_PREVIEW = "\uE88A \uE8B6 \uE8B8 \uE87D \uE838";
+
 /** Installed families preview in their own font (from the local files), fitted like the library
- *  list (icon families show their icons). Others show their name. Like the list, a preview waits
- *  for its profile at most 300 ms, then draws the name. */
+ *  list; icon families show a few of their icons. Others show their name. Like the list, a
+ *  preview waits for its profile at most 300 ms, then draws the name. */
 function FamilyPreview({ family, font, text }: { family: GoogleFamily; font: FontSummary | undefined; text: string }) {
   const state = useFontFace(font);
   const { profile, pending } = usePreviewProfile(font);
@@ -53,16 +60,18 @@ function FamilyPreview({ family, font, text }: { family: GoogleFamily; font: Fon
   if (!font || state === "error" || state === "cloud" || state === "too-large") {
     return <div className="truncate text-lg font-medium">{family.family}</div>;
   }
+  // Typed preview text wins, as everywhere; icon names typed as words draw as icons.
+  const icons = !text && family.category === "icons";
   return (
     <PreviewText
       fontFamily={`"${faceName(font)}"`}
       face={faceName(font)}
-      text={text || profile?.familyText || family.family}
+      text={text || (icons ? ICON_PREVIEW : profile?.familyText || family.family)}
       size={22}
-      ready={state === "ready" && (!pending || waited)}
+      ready={state === "ready" && (icons || !pending || waited)}
       profile={profile}
-      ownText={!text && !!profile && font.family === family.family}
-      sample={!text && isSampleKind(profile)}
+      ownText={!text && !icons && !!profile && font.family === family.family}
+      sample={icons || (!text && isSampleKind(profile))}
     />
   );
 }
@@ -156,7 +165,7 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
       </PageHeader>
       <div className="flex flex-col gap-3 border-b px-4 py-3">
         <p className="text-xs text-muted-foreground">
-          Free, open-licensed fonts. Fontface downloads the full desktop files from Google's official repository into a
+          Free, open-licensed fonts. Fontface downloads the full desktop files from Google's official repositories into a
           folder it manages, then turns them on.
         </p>
         <div className="flex flex-wrap items-center gap-2">
@@ -190,6 +199,12 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
             </Button>
           )}
         </div>
+        {category === "icons" && (
+          <p className="text-xs text-muted-foreground">
+            Icon fonts draw an icon when you type its name, such as “home”, in apps that support ligatures (letters drawn
+            as one shape).
+          </p>
+        )}
         {catalog?.stale && (
           <p className="text-xs text-muted-foreground">Couldn't reach the catalog, so this is the last saved copy.</p>
         )}
@@ -250,7 +265,7 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
                     </Button>
                   ) : fam.unavailable ? (
                     <span className="text-xs text-muted-foreground" title={fam.unavailable}>
-                      Not downloadable here
+                      Not downloadable here<span className="sr-only">. {fam.unavailable}</span>
                     </span>
                   ) : fam.updateAvailable ? (
                     <Button size="sm" aria-label={`Update ${fam.family}`} onClick={() => run(fam, onInstall, "updated")}>
@@ -294,7 +309,8 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
         </div>
       )}
       <footer className="border-t px-4 py-1.5 text-[11px] text-muted-foreground">
-        Catalog by Fontsource · files from github.com/google/fonts · {catalog ? `${catalog.families.length.toLocaleString()} families` : ""}
+        Catalog by Fontsource · files from github.com/google/fonts and github.com/google/material-design-icons ·{" "}
+        {catalog ? `${catalog.families.length.toLocaleString()} families` : ""}
       </footer>
     </div>
   );

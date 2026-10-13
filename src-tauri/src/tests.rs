@@ -675,6 +675,84 @@ fn google_live_install() {
     let _ = std::fs::remove_dir_all(&data);
 }
 
+/// Live: downloads Google's Material Icons from google/material-design-icons into a temp data
+/// folder (no catalog call), with its license. Checks the font parses under its own family name,
+/// that its library preview draws icons (the scanner works previews out the same way), and that
+/// it has the icons the Google Fonts page previews icon families with. Then reinstalls it: the
+/// file hasn't changed upstream, so the downloaded copy is reused.
+///   cargo test google_icons_live -- --ignored --nocapture
+/// With FONTFACE_LIVE_ALL_ICONS=1 it does every family in the icon table (about 40 MB).
+#[test]
+#[ignore]
+fn google_icons_live_install() {
+    use crate::{
+        preview::profile::Kind,
+        services::google::{self, icons},
+    };
+    let data = std::env::temp_dir().join(format!("fontface-google-icons-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let all = std::env::var_os("FONTFACE_LIVE_ALL_ICONS").is_some();
+    for icon in icons::FAMILIES.iter().filter(|i| all || i.id == "material-icons") {
+        let family = google::CatalogFamily {
+            id: icon.id.into(),
+            family: icon.family.into(),
+            category: icons::CATEGORY.into(),
+            variable: false,
+            weights: vec![],
+            styles: vec![],
+            subsets: vec![],
+            license: icons::LICENSE_ID.into(),
+            last_modified: "live".into(),
+        };
+        let prepared = google::prepare(&data, &family).unwrap_or_else(|e| panic!("{}: {e:?}", icon.id));
+        let files = prepared.files.clone();
+        let dir = google::commit(prepared).unwrap();
+        let license = std::fs::read_to_string(Path::new(&dir).join("LICENSE.txt")).unwrap();
+        assert!(license.contains("Apache License") && license.contains("Version 2.0"), "{}", &license[..license.len().min(200)]);
+        for f in &files {
+            let bytes = std::fs::read(Path::new(&dir).join(f)).unwrap();
+            let stem = Path::new(f).file_stem().unwrap().to_string_lossy();
+            let faces = scanner::parse_file_with_previews(&bytes, &stem).unwrap();
+            for face in &faces {
+                let preview = face.preview.as_ref().expect("a preview profile");
+                println!(
+                    "{}: {f} ({} KB) family={:?} style={:?} variable={} preview={:?} sample={:?}",
+                    icon.id,
+                    bytes.len() / 1024,
+                    face.family,
+                    face.subfamily,
+                    face.variable,
+                    preview.kind,
+                    preview.family_text.as_deref().map(|t| t.chars().take(8).collect::<String>()),
+                );
+                assert_eq!(face.family, icon.family);
+                if icon.id.starts_with("material-icons") {
+                    // Its letters draw nothing alone (they only build ligatures), so the
+                    // library preview shows a sample of its icons.
+                    assert_eq!(preview.kind, Kind::Symbols, "{f}");
+                } else {
+                    // Material Symbols also has a plain alphabet, so it can draw its own name.
+                    assert!(matches!(preview.kind, Kind::Name | Kind::Symbols), "{f}: {:?}", preview.kind);
+                }
+            }
+            // ICON_PREVIEW in GoogleFontsPanel.tsx: home, search, settings, favorite, star.
+            let face = ttf_parser::Face::parse(&bytes, 0).unwrap();
+            for cp in [0xE88A, 0xE8B6, 0xE8B8, 0xE87D, 0xE838] {
+                let glyph = char::from_u32(cp).and_then(|c| face.glyph_index(c));
+                assert!(glyph.and_then(|g| face.glyph_bounding_box(g)).is_some(), "{f}: U+{cp:04X} draws an icon");
+            }
+        }
+        let again = google::prepare(&data, &family).unwrap();
+        assert_eq!(again.reused, files, "{}: unchanged upstream, so reused", icon.id);
+        google::commit(again).unwrap();
+    }
+    let root = std::fs::read_dir(data.join("Services/Google Fonts")).unwrap();
+    let leftovers: Vec<_> = root.flatten().filter(|e| e.file_name().to_string_lossy().starts_with('.')).collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+    let _ = std::fs::remove_dir_all(&data);
+}
+
 /// Creative Cloud's font store is never read, even through symlinks (Adobe's terms).
 #[test]
 fn adobe_font_store_is_never_scanned_or_switched() {
