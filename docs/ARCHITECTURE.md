@@ -150,6 +150,20 @@ a small *profile* per face instead:
   set**. Symbol-only fonts go straight to the sample only when their letter keys hold pictures
   (an icon word in the name, or glyph names such as Webdings' "town"); Monica and Jedi Solid,
   plain letters in a symbol map, draw their names.
+- **Icon fonts with plain letters** (Material Symbols, Google Symbols) can draw their names,
+  but they are really their icons: typing "home" draws a house through a ligature. A font goes
+  straight to a Symbols sample of its private-use icons only when both hold:
+  - an icon word is in its names (Icons, Symbols, Glyphs, Pi …);
+  - it has a big private-use icon set (`profile::pua_icons`): 200 or more real glyphs at
+    private-use code points, or 20 or more ligatures (GSUB) that spell a run of 4+ letters,
+    digits or `_` into one of them.
+
+  The sample then takes its 12 icons from the private-use area only. Without an icon word, a
+  big private-use set changes nothing: SF Pro keeps 8,300 symbols there, and text fonts such as
+  Garamond Premier Pro put up to 44 short ligatures there (ffi, Th). Without a big set, an
+  icon word keeps the cascade above (ITC Symbol is a text face). On the library this turned 10
+  faces from the name to icons: the 7 Material Symbols faces, Google Symbols, Min Icon VF and
+  National Code Pi Std.
 - A letter that draws nothing alone but starts a ligature (Material Icons' "home") isn't listed
   as missing.
 - The profile also keeps the printable ASCII characters the face can't draw, its line ascent

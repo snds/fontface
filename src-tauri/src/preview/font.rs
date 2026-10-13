@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ttf_parser::{cmap, gsub::SubstitutionSubtable, Face, GlyphId, OutlineBuilder, PlatformId, Rect, Tag};
+use ttf_parser::{cmap, gsub::{LigatureSubstitution, SubstitutionSubtable}, Face, GlyphId, LazyArray16, OutlineBuilder, PlatformId, Rect, Tag};
 
 /// How much work one face may take.
 pub mod limits {
@@ -213,7 +213,7 @@ pub struct FontView<'f, 'a> {
     /// Glyph → how many glyphs it expands to through composite references.
     expansion: RefCell<HashMap<u16, u32>>,
     names: OnceCell<GlyphNames<'a>>,
-    ligature_starts: OnceCell<Vec<ttf_parser::opentype_layout::Coverage<'a>>>,
+    ligatures: OnceCell<Vec<LigatureSubstitution<'a>>>,
     deadline: Instant,
     limited: Cell<bool>,
     /// The shape shared by many letter slots in Expert-style fonts, if this face has one.
@@ -237,7 +237,7 @@ impl<'f, 'a> FontView<'f, 'a> {
             shapes: RefCell::default(),
             expansion: RefCell::default(),
             names: OnceCell::new(),
-            ligature_starts: OnceCell::new(),
+            ligatures: OnceCell::new(),
             deadline: Instant::now() + time,
             limited: Cell::new(cut),
             placeholder: None,
@@ -481,23 +481,40 @@ impl<'f, 'a> FontView<'f, 'a> {
         self.names.get_or_init(|| GlyphNames::read(self.face)).get(self.face, g)
     }
 
-    /// The glyph starts a ligature (GSUB): a letter that draws nothing alone can still be part
-    /// of a word the font draws as one picture (Material Icons draws "home" as a house).
-    pub fn starts_ligature(&self, g: GlyphId) -> bool {
-        let starts = self.ligature_starts.get_or_init(|| {
+    /// The font's ligature subtables (GSUB), read once.
+    fn ligature_tables(&self) -> &[LigatureSubstitution<'a>] {
+        self.ligatures.get_or_init(|| {
             let Some(gsub) = self.face.tables().gsub else { return vec![] };
             let mut out = vec![];
             for i in 0..gsub.lookups.len().min(1024) {
                 let Some(lookup) = gsub.lookups.get(i) else { continue };
                 for j in 0..lookup.subtables.len().min(64) {
                     if let Some(SubstitutionSubtable::Ligature(l)) = lookup.subtables.get::<SubstitutionSubtable>(j) {
-                        out.push(l.coverage);
+                        out.push(l);
                     }
                 }
             }
             out
-        });
-        starts.iter().any(|c| c.contains(g))
+        })
+    }
+
+    /// The glyph starts a ligature (GSUB): a letter that draws nothing alone can still be part
+    /// of a word the font draws as one picture (Material Icons draws "home" as a house).
+    pub fn starts_ligature(&self, g: GlyphId) -> bool {
+        self.ligature_tables().iter().any(|l| l.coverage.contains(g))
+    }
+
+    /// Calls `visit` with each ligature that starts with `first`: the glyphs after it, and the
+    /// glyph they all become. Stops when `visit` returns false.
+    pub fn ligatures_from(&self, first: GlyphId, visit: &mut dyn FnMut(LazyArray16<'a, GlyphId>, GlyphId) -> bool) {
+        for table in self.ligature_tables() {
+            let Some(set) = table.coverage.get(first).and_then(|i| table.ligature_sets.get(i)) else { continue };
+            for ligature in set {
+                if !visit(ligature.components, ligature.glyph) {
+                    return;
+                }
+            }
+        }
     }
 
     /// Line ascent and descent in em (descent positive below the baseline), as CoreText reports

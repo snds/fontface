@@ -58,7 +58,9 @@ pub use profile::{Names, Profile};
 /// Bump after changing how profiles are worked out: every profile is recomputed at next launch.
 /// 2: symbol-only fonts with plain letters draw their names, empty one-point glyphs count as
 /// empty, more Expert sets are found, and the full name keeps its own kind.
-pub const PREVIEW_REV: i64 = 2;
+/// 3: icon fonts with plain letters and a big private-use icon set (Material Symbols) show
+/// their icons.
+pub const PREVIEW_REV: i64 = 3;
 
 /// At most this many ids per `preview_profiles` call.
 pub const MAX_ON_DEMAND: usize = 64;

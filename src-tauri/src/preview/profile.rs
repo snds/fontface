@@ -9,11 +9,12 @@
 //! 4. **Name ID 19**, the font's own sample text, when it's all real glyphs.
 //! 5. **A sample of the font's real characters** (see `sample`).
 //!
-//! Expert sets and symbol-only fonts whose letter keys hold pictures go straight to step 5.
+//! Expert sets, symbol-only fonts whose letter keys hold pictures, and icon fonts with a big
+//! private-use icon set (`pua_icons`) go straight to step 5.
 //! The two strings are worked out separately, so a style row can draw a sample while its
 //! family row draws the name (`kind` and `full_kind`).
 
-use std::{cell::OnceCell, collections::{BTreeMap, HashSet}};
+use std::{cell::OnceCell, collections::{BTreeMap, BTreeSet, HashSet}};
 
 use ttf_parser::{Face, GlyphId};
 
@@ -84,6 +85,9 @@ pub mod flags {
     pub const LIMITED: u32 = 1024;
     /// The profile couldn't be worked out (the font made it fail): the name is drawn as is.
     pub const FAILED: u32 = 2048;
+    /// An icon word, and a big set of private-use icons (see `pua_icons`): the preview shows
+    /// those icons, even though the letters are real (Material Symbols).
+    pub const PUA_ICONS: u32 = 4096;
 }
 
 /// The names a profile is worked out from.
@@ -313,12 +317,16 @@ pub fn profile(face: &Face, names: &Names) -> Profile {
 
 pub fn profile_of(f: &FontView, names: &Names) -> Profile {
     let Expertise { expert, mut flags, icon_word, pictures } = expertise(f, names);
-    let force_sample = expert || pictures;
+    let pua_icons = icon_word && pua_icons(f);
+    if pua_icons {
+        flags |= flags::PUA_ICONS;
+    }
+    let force_sample = expert || pictures || pua_icons;
     let full = names.full_or_default();
 
     // Worked out only when a name fails, which most faces never do.
     let sample_cell: OnceCell<Option<Sample>> = OnceCell::new();
-    let sample = || sample_cell.get_or_init(|| make_sample(f, expert, icon_word || pictures)).as_ref();
+    let sample = || sample_cell.get_or_init(|| make_sample(f, expert, icon_word || pictures, pua_icons)).as_ref();
     let id19_cell = OnceCell::new();
     let id19 = || id19_cell.get_or_init(|| sample_text(f)).clone();
 
@@ -408,6 +416,69 @@ fn sample_text(f: &FontView) -> Option<String> {
         return None;
     }
     Some(s.chars().take(64).collect::<String>().trim_end().to_string())
+}
+
+/// Private-use icons that make an icon set, by either count.
+pub const PUA_ICON_GLYPHS: usize = 200;
+pub const PUA_ICON_LIGATURES: usize = 20;
+
+/// The private-use code points: U+E000–F8FF, and planes 15 and 16.
+fn private_use(cp: u32) -> bool {
+    matches!(cp, 0xE000..=0xF8FF | 0xF_0000..=0xF_FFFD | 0x10_0000..=0x10_FFFD)
+}
+
+/// Does this face hold a big set of private-use icons? Asked only of fonts with an icon word in
+/// their name, whose letters are real: Material Symbols has plain letters, and draws "home" as
+/// the house at U+E88A. Either count is enough:
+/// - `PUA_ICON_GLYPHS` real glyphs at private-use code points (Unicode maps only: a Symbol map
+///   puts its letter keys at U+F0xx);
+/// - `PUA_ICON_LIGATURES` ligatures (GSUB) that turn a word, a run of 4 or more letters, digits
+///   and `_`, into a real private-use glyph. Text fonts put ligatures such as ffi and Th there,
+///   but those are shorter.
+///
+/// A few logo glyphs (Apple's U+F8FF) don't count, and neither does a big private-use set without
+/// an icon word in the name (SF Pro keeps its symbols there).
+pub fn pua_icons(f: &FontView) -> bool {
+    let (glyphs, ligatures) = pua_icon_counts(f, PUA_ICON_GLYPHS, PUA_ICON_LIGATURES);
+    glyphs >= PUA_ICON_GLYPHS || ligatures >= PUA_ICON_LIGATURES
+}
+
+/// Distinct real private-use glyphs, and ligatures from letters into them. Counting stops as
+/// soon as either count reaches its cap, and after 100,000 ligatures.
+pub fn pua_icon_counts(f: &FontView, glyph_cap: usize, ligature_cap: usize) -> (usize, usize) {
+    if f.lookup != Lookup::Unicode {
+        return (0, 0);
+    }
+    let pua: BTreeSet<u16> = f.map.iter().filter(|(cp, _)| private_use(**cp)).map(|(_, g)| g.0).collect();
+    let mut real: HashSet<u16> = HashSet::new();
+    for g in pua {
+        if f.real(GlyphId(g)) {
+            real.insert(g);
+            if real.len() >= glyph_cap {
+                return (real.len(), 0);
+            }
+        }
+    }
+    if real.is_empty() {
+        return (0, 0);
+    }
+    let spelling: BTreeSet<u16> =
+        ('A'..='Z').chain('a'..='z').chain('0'..='9').chain(['_']).filter_map(|c| f.glyph(c as u32)).map(|g| g.0).collect();
+    let mut icons: HashSet<u16> = HashSet::new();
+    let mut visits = 0usize;
+    for &first in &spelling {
+        if visits > 100_000 || icons.len() >= ligature_cap {
+            break;
+        }
+        f.ligatures_from(GlyphId(first), &mut |rest, result| {
+            visits += 1;
+            if rest.len() >= 3 && rest.into_iter().all(|g| spelling.contains(&g.0)) && real.contains(&result.0) {
+                icons.insert(result.0);
+            }
+            visits <= 100_000 && icons.len() < ligature_cap
+        });
+    }
+    (real.len(), icons.len())
 }
 
 // ---------------------------------------------------------------------------------- samples
@@ -612,14 +683,14 @@ struct Candidate {
 /// A run of the font's real characters, and what kind of font that makes it:
 /// 1. **Expert:** 12 characters spread evenly across all of them.
 /// 2. **Symbols** (`pictures`: an icon word in the name, or a symbol-only font whose letter keys
-///    hold pictures; mostly private-use and symbol characters; or no letters, digits or script
-///    at all): 12 spread evenly, preferring
+///    hold pictures; `pua_icons`; mostly private-use and symbol characters; or no letters,
+///    digits or script at all): 12 spread evenly, preferring
 ///    glyphs within normal height and code points above U+00FF (which skips emoji keycap
-///    digits), never regional-indicator letters.
+///    digits), never regional-indicator letters. With `pua_icons`, private-use icons only.
 /// 3. **Script:** the script `meta` names (5+ characters), else the biggest one (10+, and at
 ///    least as many as Latin letters): its first 10 letters, or 10 spread evenly across 300+.
 /// 4. **Partial:** the first 12 Latin letters and digits, or 12 spread evenly when fewer than 4.
-fn make_sample(f: &FontView, expert: bool, pictures: bool) -> Option<Sample> {
+fn make_sample(f: &FontView, expert: bool, pictures: bool, pua_icons: bool) -> Option<Sample> {
     let mut seen_glyphs = HashSet::new();
     let mut seen_shapes = HashSet::new();
     let dedupe_shapes = f.map.len() <= 4000;
@@ -654,8 +725,9 @@ fn make_sample(f: &FontView, expert: bool, pictures: bool) -> Option<Sample> {
     }
     let symbolish = cands.iter().filter(|c| matches!(c.group, Group::Pua | Group::Symbol)).count();
     let no_letters = !cands.iter().any(|c| matches!(c.group, Group::Latin | Group::Digit | Group::Script(_)));
-    if pictures || symbolish * 2 >= cands.len() || (no_letters && symbolish > 0) {
-        let pool: Vec<Candidate> = cands.iter().filter(|c| c.cp > 0xFF && !(0x1F1E6..=0x1F1FF).contains(&c.cp)).cloned().collect();
+    if pictures || pua_icons || symbolish * 2 >= cands.len() || (no_letters && symbolish > 0) {
+        let icon = |c: &Candidate| if pua_icons { c.group == Group::Pua } else { c.cp > 0xFF && !(0x1F1E6..=0x1F1FF).contains(&c.cp) };
+        let pool: Vec<Candidate> = cands.iter().filter(|c| icon(c)).cloned().collect();
         let pool = if pool.len() >= 6 { pool } else { cands.clone() };
         return Some(Sample { kind: Kind::Symbols, text: text(&spread(&normal(&pool), 12), " "), label: "Symbols".into() });
     }

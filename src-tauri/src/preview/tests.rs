@@ -146,6 +146,101 @@ fn private_use_icon_font_shows_icons_spread_across_its_range() {
     assert_eq!(p.ascii_missing.len(), 94);
 }
 
+/// Plain letters and digits, plus `icons` private-use glyphs from U+E000 (Material Symbols has
+/// both). Returns the font and the icons' glyph ids.
+fn letters_and_icons(icons: u32) -> (FontBuilder, Vec<u16>) {
+    let mut font = latin_except("");
+    let gids = (0..icons).map(|i| font.char(0xE000 + i, None)).collect();
+    (font, gids)
+}
+
+/// Each word, spelled in the font's own letters, becomes the next icon (GSUB ligatures).
+fn spelled(font: &FontBuilder, words: &[&str], icons: &[u16]) -> Vec<u8> {
+    let data = font.build();
+    let face = Face::parse(&data, 0).unwrap();
+    let spell = |w: &str| -> Vec<u16> { w.chars().map(|c| face.glyph_index(c).unwrap().0).collect() };
+    let runs: Vec<Vec<u16>> = words.iter().map(|w| spell(w)).collect();
+    let ligatures: Vec<(&[u16], u16)> = runs.iter().zip(icons).map(|(r, g)| (r.as_slice(), *g)).collect();
+    ligature_gsub(&ligatures)
+}
+
+const ICON_NAMES: [&str; 24] = [
+    "home", "menu", "search", "close", "settings", "delete", "favorite", "share", "star_half", "check_box", "add_circle", "alarm",
+    "bolt", "cloud", "draft", "edit_note", "folder", "image", "label", "lock_open", "mail", "pause", "print", "push_pin",
+];
+
+#[test]
+fn icon_font_with_plain_letters_and_many_private_use_icons_shows_icons() {
+    let (mut font, _) = letters_and_icons(profile::PUA_ICON_GLYPHS as u32);
+    // Arrows outside the private-use area aren't part of the icon set.
+    for cp in 0x2190..0x21A0 {
+        font.char(cp, None);
+    }
+    let p = profile_of(&font, "Material Symbols Rounded");
+    assert_eq!((p.kind, p.full_kind), (Kind::Symbols, Kind::Symbols), "the letters draw, but the font is its icons");
+    assert!(p.flags & flags::PUA_ICONS != 0 && p.flags & flags::ICON_WORD != 0);
+    assert_eq!(p.label.as_deref(), Some("Symbols"));
+    let cps = chars_of(p.family_text.as_deref().unwrap());
+    assert_eq!(cps.len(), 12);
+    assert!(cps.iter().all(|cp| (0xE000..0xE000 + profile::PUA_ICON_GLYPHS as u32).contains(cp)), "private-use icons only: {cps:X?}");
+    assert_eq!((cps[0], cps[11]), (0xE000, 0xE0C7), "spread from the first icon to the last");
+    assert_eq!(p.family_text, p.full_text);
+    assert_eq!(p.ascii_missing, "", "every letter is real");
+}
+
+#[test]
+fn icon_font_spelling_its_icons_with_ligatures_shows_icons() {
+    // Fewer icons than the glyph count asks for, but each is spelled by a word.
+    let (font, icons) = letters_and_icons(30);
+    let gsub = spelled(&font, &ICON_NAMES, &icons);
+    let p = profile_of(&font.raw_table(b"GSUB", gsub), "Foo Icons");
+    assert_eq!(p.kind, Kind::Symbols);
+    assert!(p.flags & flags::PUA_ICONS != 0);
+    assert!(chars_of(p.family_text.as_deref().unwrap()).iter().all(|cp| (0xE000..0xE01E).contains(cp)));
+}
+
+#[test]
+fn short_ligatures_into_private_use_are_not_icons() {
+    // Text fonts put ligatures such as ffi and Th in the private-use area: too short to be icon names.
+    let (font, icons) = letters_and_icons(30);
+    let short: Vec<String> = ICON_NAMES.iter().map(|w| w[..3].to_string()).collect();
+    let short: Vec<&str> = short.iter().map(String::as_str).collect();
+    let gsub = spelled(&font, &short, &icons);
+    let p = profile_of(&font.raw_table(b"GSUB", gsub), "Foo Icons");
+    assert_eq!(p.kind, Kind::Name);
+    assert_eq!(p.flags & flags::PUA_ICONS, 0);
+}
+
+#[test]
+fn ordinary_fonts_with_private_use_glyphs_keep_their_names() {
+    // A few logo glyphs, with or without an icon word in the name.
+    let (font, _) = letters_and_icons(5);
+    for name in ["Plain Sans", "Elementa Symbol"] {
+        let p = profile_of(&font, name);
+        assert_eq!((p.kind, p.full_kind), (Kind::Name, Kind::Name), "{name}");
+        assert_eq!(p.flags & flags::PUA_ICONS, 0, "{name}");
+    }
+    // A big private-use set without an icon word: SF Pro keeps thousands of symbols there.
+    let (font, _) = letters_and_icons(profile::PUA_ICON_GLYPHS as u32 + 100);
+    let p = profile_of(&font, "SF Pro Text");
+    assert_eq!((p.kind, p.full_kind), (Kind::Name, Kind::Name));
+    assert_eq!(p.flags & flags::PUA_ICONS, 0);
+    assert_eq!(p.sample, None, "no sample is built when the name draws");
+}
+
+#[test]
+fn an_icon_word_without_private_use_icons_keeps_the_old_rules() {
+    // ITC Symbol is a text face: its letters are real, so it draws its name.
+    let p = profile_of(&latin_except(""), "ITC Symbol Std");
+    assert_eq!(p.kind, Kind::Name);
+    assert!(p.flags & flags::ICON_WORD != 0);
+    assert_eq!(p.flags & flags::PUA_ICONS, 0);
+    // Without letters it shows its symbols, as before.
+    let p = profile_of(&FontBuilder::new().chars(" ABCDEFGHIJKLMNOPQRSTUVWXYZ"), "Foo Icons");
+    assert_eq!(p.kind, Kind::Symbols);
+    assert_eq!(p.flags & flags::PUA_ICONS, 0);
+}
+
 /// A symbol-only font (Wingdings): its codes are U+F0xx, or plain 0x20–0xFF in some fonts.
 fn symbol_font(base: u32) -> FontBuilder {
     let mut font = FontBuilder::new();
@@ -1487,6 +1582,15 @@ mod real {
         // Letters of one point (blank alone) and an Expert set named only by its file.
         ("Material Icons", "family = 'Material Icons'", "symbols"),
         ("Trek Signs", "family = 'Trek Signs'", "symbols"),
+        // Plain letters and a big private-use icon set: the icons, not the name.
+        ("Material Symbols Outlined", "family LIKE 'Material Symbols Outlined%'", "symbols"),
+        ("Material Symbols Rounded", "family LIKE 'Material Symbols Rounded%'", "symbols"),
+        ("Material Symbols Sharp", "family LIKE 'Material Symbols Sharp%'", "symbols"),
+        ("Google Symbols", "family = 'Google Symbols'", "symbols"),
+        // An icon word but no private-use icons, and private-use ligatures but no icon word.
+        ("ITC Symbol Std", "family = 'ITC Symbol Std'", "name"),
+        ("Apple Symbols", "family = 'Apple Symbols'", "name"),
+        ("Garamond Premier Pro", "family = 'Garamond Premier Pro'", "name"),
         ("BigCaslonExp", "path LIKE '%/BigCaslonExp.otf'", "expert"),
         ("BigCaslonRom", "path LIKE '%/BigCaslonRom.otf'", "name"),
         // The family draws in capitals, the full name needs a sample (checked below).
