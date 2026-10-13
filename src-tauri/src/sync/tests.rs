@@ -355,6 +355,13 @@ struct Device {
     conn: Connection,
     engine: Engine,
     folder_id: i64,
+    /// Font files that aren't there (on a drive that isn't connected). Every other file counts
+    /// as there, though the tests make none.
+    unplugged: BTreeSet<String>,
+    /// Font files whose switch fails here (say macOS refuses them).
+    refused: BTreeSet<String>,
+    /// Files sync recorded as on to turn on after their folder's next scan (`AppState::deferred`).
+    deferred: BTreeSet<String>,
 }
 
 impl Device {
@@ -371,7 +378,28 @@ impl Device {
         engine.config.enabled = true;
         engine.config.folder = Some(folder.to_string_lossy().into_owned());
         engine.save_config(&conn).unwrap();
-        Device { dir, folder: folder.to_path_buf(), conn, engine, folder_id }
+        Device {
+            dir,
+            folder: folder.to_path_buf(),
+            conn,
+            engine,
+            folder_id,
+            unplugged: BTreeSet::new(),
+            refused: BTreeSet::new(),
+            deferred: BTreeSet::new(),
+        }
+    }
+
+    /// The file a font's face is in.
+    fn path(&self, key: &str) -> String {
+        let ps = tags::key_postscript_name(key).unwrap();
+        self.conn.query_row("SELECT path FROM fonts WHERE postscript_name = ?1", [ps], |r| r.get(0)).unwrap()
+    }
+
+    /// Fonts that should be on here but aren't on this computer, by key.
+    fn missing(&self) -> Vec<String> {
+        let faces = engine::load_faces(&self.conn).unwrap();
+        self.engine.missing(&faces, |p| !self.unplugged.contains(p)).into_iter().map(|m| m.0).collect()
     }
 
     fn transport(&self) -> FolderTransport {
@@ -380,7 +408,13 @@ impl Device {
 
     /// Adds a font file with one face. Returns its face key.
     fn font(&self, ps: &str, family: &str) -> String {
-        let path = self.dir.join("fonts").join(format!("{ps}.otf")).to_string_lossy().into_owned();
+        self.font_in("fonts", ps, family)
+    }
+
+    /// Adds a font file with one face, in this folder inside the device's own (another copy of
+    /// a font, say). Returns its face key.
+    fn font_in(&self, subfolder: &str, ps: &str, family: &str) -> String {
+        let path = self.dir.join(subfolder).join(format!("{ps}.otf")).to_string_lossy().into_owned();
         self.conn
             .execute(
                 "INSERT INTO fonts (folder_id, path, face_index, file_size, mtime, family, subfamily, postscript_name,
@@ -402,6 +436,24 @@ impl Device {
         let ps = tags::key_postscript_name(key).unwrap();
         self.conn.execute("UPDATE fonts SET activated = ?1 WHERE postscript_name = ?2", params![on, ps]).unwrap();
         self.engine.choose(&self.conn, &[key.to_string()], on).unwrap();
+    }
+
+    /// A font switched here in a way that isn't shared: Turn Off All, "Leave them off" at
+    /// launch, another app, an update or a replacement putting back what was on. Nothing tells
+    /// sync (`set_activation` with origin "restore" records nothing).
+    fn switch_here(&mut self, key: &str, on: bool) {
+        let ps = tags::key_postscript_name(key).unwrap();
+        self.conn.execute("UPDATE fonts SET activated = ?1 WHERE postscript_name = ?2", params![on, ps]).unwrap();
+    }
+
+    /// Fontface turning on fonts that just came into the library (a first download, an import):
+    /// on here, then the hook `set_activation` calls for them (origin "arrival").
+    fn arrive(&mut self, keys: &[&String]) {
+        for key in keys {
+            self.switch_here(key, true);
+        }
+        let keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        self.engine.arrived(&self.conn, &keys).unwrap();
     }
 
     fn tag(&mut self, name: &str) -> i64 {
@@ -462,8 +514,22 @@ impl Device {
     /// As if this computer had run a Fontface from before tag groups: the tags table has no
     /// `builtin` column, and sync's saved state knows no tag's group.
     fn before_groups(&mut self) {
-        self.engine.save_state(&self.conn).unwrap();
+        self.forget_saved_groups();
         self.conn.execute_batch("ALTER TABLE tags DROP COLUMN builtin").unwrap();
+    }
+
+    /// As if this computer had run a Fontface whose sync didn't know tag groups, in a library
+    /// that already had them (main at 4f5aeb0): the tags in `made_by_sync` were made by that
+    /// sync, so they got the column's default, My tags; and sync's saved state knows no group.
+    fn older_sync(&mut self, made_by_sync: &[&str]) {
+        self.forget_saved_groups();
+        for name in made_by_sync {
+            self.conn.execute("UPDATE tags SET builtin = 0 WHERE name = ?1", [name]).unwrap();
+        }
+    }
+
+    fn forget_saved_groups(&mut self) {
+        self.engine.save_state(&self.conn).unwrap();
         let mut state: serde_json::Value =
             serde_json::from_str(&self.conn.query_row("SELECT value FROM sync_meta WHERE key = 'state'", [], |r| r.get::<_, String>(0)).unwrap())
                 .unwrap();
@@ -475,12 +541,19 @@ impl Device {
 
     /// Launches the Fontface with tag groups: the column is added and tags are sorted once.
     fn upgrade(&mut self, machine: &str) {
-        tags::ensure_schema(&self.conn).unwrap();
-        self.engine = Engine::load(&self.conn, machine, "upgraded").unwrap();
+        self.relaunch(machine);
         assert!(self.engine.saved.base.values().all(|b| b.builtin.is_none()), "a state saved before groups");
     }
 
-    /// One sync, as `run_cycle` does it, with the font switches done straight in the database.
+    /// Launches this Fontface, as `lib.rs` does before sync starts.
+    fn relaunch(&mut self, machine: &str) {
+        tags::ensure_schema(&self.conn).unwrap();
+        super::upgrade_saved_state(&self.conn).unwrap();
+        self.engine = Engine::load(&self.conn, machine, "relaunched").unwrap();
+    }
+
+    /// One sync, as `run_cycle` does it, with the font switches done straight in the database
+    /// (except for `unplugged` and `refused` files).
     fn sync(&mut self) -> Applied {
         self.cycle(true)
     }
@@ -501,14 +574,31 @@ impl Device {
             self.engine.seed(&tx, &faces).unwrap();
         }
         let applied = self.engine.apply(&tx, &faces, &mismatched).unwrap();
-        for (on, list) in [(false, &applied.turn_off), (true, &applied.turn_on)] {
-            for (_, ids) in list {
+        let mut deferred = BTreeSet::new();
+        let switched = engine::carry_out(
+            &applied,
+            |path| !self.unplugged.contains(path),
+            |ids, on| {
+                let mut ok = true;
                 for id in ids {
-                    tx.execute("UPDATE fonts SET activated = ?1 WHERE path = (SELECT path FROM fonts WHERE id = ?2)", params![on, id]).unwrap();
+                    let path: String = tx.query_row("SELECT path FROM fonts WHERE id = ?1", [id], |r| r.get(0)).unwrap();
+                    if self.refused.contains(&path) || self.unplugged.contains(&path) {
+                        ok = false;
+                    } else {
+                        tx.execute("UPDATE fonts SET activated = ?1 WHERE path = ?2", params![on, path]).unwrap();
+                    }
                 }
-            }
-        }
-        self.engine.mark_applied(applied.stamps.clone());
+                ok
+            },
+            // As `turn_on_later` does.
+            |path| {
+                tx.execute("UPDATE fonts SET activated = 1 WHERE path = ?1", [path]).unwrap();
+                deferred.insert(path.to_string());
+                true
+            },
+        );
+        self.deferred.extend(deferred);
+        self.engine.switched(&applied, &switched);
         self.engine.save_state(&tx).unwrap();
         tx.commit().unwrap();
         // Write, as `write_files` does.
@@ -693,13 +783,13 @@ fn a_font_this_device_lacks_keeps_its_choice_until_it_arrives() {
     a.switch(&okuda, true);
     a.sync();
     b.sync();
-    let missing = b.engine.missing(&engine::load_faces(&b.conn).unwrap());
+    let missing = b.engine.missing(&engine::load_faces(&b.conn).unwrap(), |_| true);
     assert_eq!(missing, [(okuda.clone(), "Okuda".to_string(), "Regular".to_string())]);
     // The font turns up at B (a drive mounted, a download finished): it's turned on.
     b.font("Okuda", "Okuda");
     b.sync();
     assert!(b.is_on(&okuda));
-    assert!(b.engine.missing(&engine::load_faces(&b.conn).unwrap()).is_empty());
+    assert!(b.missing().is_empty());
 }
 
 #[test]
@@ -881,6 +971,190 @@ fn a_different_font_with_the_same_name_isnt_merged() {
     b.conn.execute("UPDATE fonts SET family = 'Nova Sans'", []).unwrap();
     b.sync();
     assert!(b.is_on(&key));
+}
+
+#[test]
+fn a_download_takes_the_choices_made_elsewhere_and_an_update_records_nothing() {
+    let folder = Folder::new("arrival");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    // At A: Roboto Regular on, Bold switched off.
+    let regular = a.font("Roboto-Regular", "Roboto");
+    let bold = a.font("Roboto-Bold", "Roboto");
+    a.switch(&regular, true);
+    a.switch(&bold, true);
+    a.switch(&bold, false);
+    a.sync();
+    b.sync();
+    assert_eq!(b.missing(), [regular.clone()], "on at A, not on this computer");
+
+    // B downloads Roboto. Every style arrives and Fontface turns it on, Black (new in this
+    // version, nobody has chosen for it) too. That's not the user's switch: Bold goes off again,
+    // as chosen at A, and only Black is shared as on.
+    b.font("Roboto-Regular", "Roboto");
+    b.font("Roboto-Bold", "Roboto");
+    let black = b.font("Roboto-Black", "Roboto");
+    b.arrive(&[&regular, &bold, &black]);
+    let applied = b.sync();
+    assert_eq!(applied.turn_off.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), [bold.as_str()]);
+    assert!(b.is_on(&regular) && !b.is_on(&bold) && b.is_on(&black));
+    assert!(b.missing().is_empty());
+    a.sync();
+    assert!(a.is_on(&regular) && !a.is_on(&bold), "A's choices stand");
+    assert_eq!(a.missing(), [black.clone()], "Black is on at B, which shared it");
+
+    // B updates Roboto before it has read A's newest change (Regular off). The update puts back
+    // what was on, and records nothing, so A's later choice still wins on both computers.
+    a.switch(&regular, false);
+    a.sync();
+    let written = b.written();
+    b.switch_here(&regular, false);
+    b.switch_here(&regular, true);
+    b.sync();
+    assert_eq!(b.written(), written, "the update wrote nothing");
+    assert!(!b.is_on(&regular));
+    a.sync();
+    assert!(!a.is_on(&regular));
+
+    // The same font arriving again (removed, then downloaded again) takes its choice again.
+    b.arrive(&[&regular]);
+    b.sync();
+    assert!(!b.is_on(&regular));
+    assert_eq!(b.written(), written);
+}
+
+#[test]
+fn a_synced_switch_that_fails_is_tried_again_and_a_missing_file_waits_for_it() {
+    let folder = Folder::new("failed-switch");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    let okuda = a.font("Okuda", "Okuda");
+    let inter = a.font("Inter", "Inter");
+    let nova = a.font("Nova", "Nova");
+    b.font("Okuda", "Okuda");
+    b.font("Inter", "Inter");
+    // B has two copies of Nova; the one it would pick first is on a drive that isn't connected.
+    b.font_in("Drive", "Nova", "Nova");
+    b.font("Nova", "Nova");
+    a.sync();
+    b.sync();
+    // At B, Okuda's file is on that drive too (its folder can't be scanned, so the library keeps
+    // it), and macOS refuses Inter.
+    b.unplugged.insert(b.path(&okuda));
+    b.unplugged.insert(b.dir.join("Drive/Nova.otf").to_string_lossy().into_owned());
+    b.refused.insert(b.path(&inter));
+    for key in [&okuda, &inter, &nova] {
+        a.switch(key, true);
+    }
+    a.sync();
+    b.sync();
+
+    // Nova: the copy whose file is there is turned on.
+    let nova_on: Vec<String> =
+        b.conn.prepare("SELECT path FROM fonts WHERE postscript_name = 'Nova' AND activated = 1").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(nova_on, [b.dir.join("fonts/Nova.otf").to_string_lossy().into_owned()]);
+    // Okuda: recorded as on, to turn on after its folder's next scan; until then it's listed as
+    // not on this computer.
+    assert!(b.is_on(&okuda));
+    assert_eq!(b.deferred, BTreeSet::from([b.path(&okuda)]));
+    assert_eq!(b.missing(), [okuda.clone()]);
+    // Inter: not done, and the page says so.
+    assert!(!b.is_on(&inter));
+    assert!(b.engine.problems.contains_key("switch"));
+
+    // The next sync tries Inter again (it fails again, and the message stays), and nothing else.
+    let applied = b.sync();
+    assert_eq!(applied.turn_on.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), [inter.as_str()]);
+    assert!(b.engine.problems.contains_key("switch"));
+
+    // macOS takes Inter now, and the drive is back (its scan turns Okuda on).
+    b.refused.clear();
+    b.unplugged.clear();
+    b.sync();
+    assert!(b.is_on(&inter));
+    assert!(!b.engine.problems.contains_key("switch"));
+    assert!(b.missing().is_empty());
+    assert!(!b.sync().switches(), "each choice was carried out once");
+    // Nothing was shared back: B's switches came from sync.
+    a.sync();
+    assert!(a.is_on(&okuda) && a.is_on(&inter) && a.is_on(&nova));
+}
+
+#[test]
+fn changing_the_device_group_keeps_fonts_turned_off_here_off() {
+    let folder = Folder::new("group-change");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    let okuda = a.font("Okuda", "Okuda");
+    let inter = a.font("Inter", "Inter");
+    b.font("Okuda", "Okuda");
+    b.font("Inter", "Inter");
+    a.sync();
+    b.sync();
+    // Shared: Okuda on, Inter off. The device group "Work" always has Inter on.
+    a.switch(&okuda, true);
+    a.switch(&inter, false);
+    a.engine.set_group(Some("Work".into()));
+    a.engine.set_exception(&a.conn, &[inter.clone()], Exception::On, ExceptionFor::ThisGroup).unwrap();
+    a.sync();
+    b.sync();
+    assert!(b.is_on(&okuda) && !b.is_on(&inter));
+    // At B: Turn Off All. Only this computer.
+    b.switch_here(&okuda, false);
+    b.sync();
+    assert!(!b.is_on(&okuda));
+
+    // B joins the group "Home", which has no exceptions: nothing changes, nothing turns back on.
+    b.engine.set_group(Some("Home".into()));
+    assert!(!b.sync().switches());
+    assert!(!b.is_on(&okuda) && !b.is_on(&inter));
+
+    // B moves to "Work": Inter turns on there. Okuda's choice doesn't change, so it stays off.
+    b.engine.set_group(Some("Work".into()));
+    b.sync();
+    assert!(!b.is_on(&okuda) && b.is_on(&inter));
+
+    // No group: Inter goes back to the shared choice, off. Okuda stays off.
+    b.engine.set_group(None);
+    b.sync();
+    assert!(!b.is_on(&okuda) && !b.is_on(&inter));
+    assert!(b.engine.outbox.is_empty(), "nothing to share: group changes stay on this computer");
+}
+
+#[test]
+fn a_sync_that_planned_earlier_doesnt_cover_an_arrival_or_a_group_change() {
+    let folder = Folder::new("replan");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    let bold = a.font("Roboto-Bold", "Roboto");
+    let inter = a.font("Inter", "Inter");
+    b.font("Inter", "Inter");
+    b.sync(); // B has joined
+    a.switch(&bold, true);
+    a.switch(&bold, false);
+    // "Work" always has Inter on; later, Inter's shared choice is off. Both give B the same stamp.
+    a.engine.set_group(Some("Work".into()));
+    a.engine.set_exception(&a.conn, &[inter.clone()], Exception::On, ExceptionFor::ThisGroup).unwrap();
+    a.engine.set_group(None);
+    a.switch(&inter, false);
+    a.sync();
+
+    // B reads that and plans its switches; meanwhile Roboto Bold arrives and Fontface turns it
+    // on, and B joins "Work". Then the sync records what it planned as done.
+    b.font("Roboto-Bold", "Roboto");
+    let progress: BTreeMap<String, u64> = b.engine.saved.peers.iter().map(|(d, p)| (d.clone(), p.seq)).collect();
+    b.engine.merge(engine::read_folder(&b.transport(), &progress));
+    let faces = engine::load_faces(&b.conn).unwrap();
+    let planned = b.engine.apply(&b.conn, &faces, &BTreeSet::new()).unwrap();
+    assert!(!planned.switches() && planned.stamps.contains_key(&bold) && planned.stamps.contains_key(&inter));
+    b.arrive(&[&bold]);
+    b.engine.set_group(Some("Work".into()));
+    b.engine.switched(&planned, &engine::Switched::default());
+
+    // The next sync still carries both out: Bold off, as chosen at A; Inter on, as in "Work".
+    b.sync();
+    assert!(!b.is_on(&bold));
+    assert!(b.is_on(&inter));
 }
 
 // ----------------------------------------------------------------------------- tag groups
@@ -1106,6 +1380,35 @@ fn the_one_time_sort_on_two_computers_doesnt_fight() {
         b.sync();
     }
     assert_eq!((a.written(), b.written()), (aw, bw));
+    assert_eq!(a.groups(), want);
+    assert_eq!(b.groups(), want);
+}
+
+#[test]
+fn tags_an_older_sync_made_dont_move_when_it_updates() {
+    let folder = Folder::new("group-older-sync");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    // A imports Font Book's "Fun": Built-in, where its name puts it, so no group is written.
+    a.tag("Fun/Party");
+    a.set_group("Fun", true);
+    a.sync();
+    // B's own "Web", made in Fontface: My tags.
+    b.tag("Web");
+    b.sync();
+    a.sync();
+    let want = groups(&[("Fun", true), ("Fun/Party", true), ("Web", false)]);
+    assert_eq!(b.groups(), want);
+
+    // But B ran a Fontface whose sync didn't know groups, in a library that had them: the "Fun"
+    // that sync made there is in My tags. Then B updates.
+    b.older_sync(&["Fun", "Fun/Party"]);
+    assert!(!b.builtin("Fun"));
+    b.relaunch("machine-b");
+    b.sync();
+    a.sync();
+    b.sync();
+    // Nobody moved "Fun": it's in Built-in on both computers. "Web" stays B's own.
     assert_eq!(a.groups(), want);
     assert_eq!(b.groups(), want);
 }

@@ -620,7 +620,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
           {
             id: "reset",
             label: "Reset all settings",
-            description: "Put every setting back the way it started. Your fonts, folders and tags aren't touched, and nor is watching for purchases.",
+            description: "Put every setting back the way it started. Your fonts, folders and tags aren't touched. Sync and watching for purchases stay as they are.",
             keywords: "defaults reset restore factory",
             control: (ids) => (
               <ConfirmButton
@@ -628,7 +628,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 label="Reset to defaults…"
                 aria-describedby={ids.description}
                 title="Reset all settings?"
-                description={`Every setting on these pages goes back to how it started${IS_MAC ? ", and Fontface stops opening at login" : ""}. Watching for font purchases stays as it is. Your fonts, folders, tags and purchased fonts aren't touched.`}
+                description={`Every setting on these pages goes back to how it started${IS_MAC ? ", and Fontface stops opening at login" : ""}. Sync and watching for font purchases stay as they are. Your fonts, folders, tags and purchased fonts aren't touched.`}
                 confirm="Reset"
                 onConfirm={async () => {
                   if (await reset()) toast.success("Settings are back to their defaults");

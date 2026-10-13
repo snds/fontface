@@ -74,7 +74,7 @@ search results from all of them, and every change saves at once. Not yet checked
 | Turn off all fonts Fontface turned on | 🟡 | ⬜ | Asks first, with the number of font files on now, and how many more are set to come back on (e.g. on a drive that isn't connected) |
 | Watch for font purchases (mirrors the Purchases page) | 🟡 | ⬜ | Shows the watched folders and any problem with each; "Open Purchases" goes to the page, which shows the change |
 | Daily tag backups, number to keep, Back up now, Restore | 🟡 | ⬜ | Restore names the backup and opens its preview. "Add to my tags" brings its tags back next to yours; "Replace my tags" puts tags and location colors back as they were in the backup (tags made since are deleted). Font files aren't included |
-| About: version, app data folder, reset all settings | 🟡 | ⬜ | Reset asks first. It leaves watching for purchases as it is |
+| About: version, app data folder, reset all settings | 🟡 | ⬜ | Reset asks first. It leaves sync and watching for purchases as they are |
 
 ## Phase 1.5: More formats
 

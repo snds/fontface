@@ -60,14 +60,27 @@ never waits, but it can make a sync slow. The page suggests keeping the folder d
   group's, then the shared choice.
 - **Your switch is the choice.** Turning a font on or off shares it. If this computer has an
   exception for that font, the switch changes the exception instead, so the two never disagree.
+- **Fonts Fontface turns on by itself aren't your switch.** A first download from Google Fonts
+  and a purchase import turn the new fonts on. A font nobody has chosen for yet is shared as on,
+  the way joining shares fonts already on. A font that already has a choice keeps it: a style
+  turned off on another computer goes off here too, a moment after it arrives. An update or a
+  replacement puts back what was on, and shares nothing.
 - **A font this computer doesn't have** keeps its choice and is listed under "Not on this
   computer". It turns on when it arrives (from Google Fonts, a purchase, or a drive you connect).
-  This is how an unmounted drive already works.
+- **A font whose file isn't there** (on a drive that isn't connected; the library keeps such
+  fonts) is handled the way launch handles one: sync records it as on, and it turns on after its
+  folder's next scan. Until its file is back, it's listed under "Not on this computer" too. If
+  the library has another copy whose file is there, that copy is turned on instead.
 - **Each synced choice is carried out once.** If you turn a font off here in another app, sync
   doesn't keep turning it back on. It acts again only when someone changes that font's choice.
+- **A switch that fails** (macOS refuses the file, say) isn't counted as carried out. Sync tries
+  again each time it runs, and the page says so until it works.
 - **Other ways a font goes off aren't shared:** Turn Off All, "Leave them off" at launch,
   another app turning a font off, a folder being removed, temporary fonts ending at logout.
   They only affect this computer.
+- **Changing this computer's device group** carries out again only the fonts whose on/off
+  changes with the group (that group's exceptions). Every other font stays as it is here, so a
+  font turned off in one of the ways above stays off.
 - **Turning on picks one copy:** one already on, or else a file with only that font in it.
   Turning off skips a collection file that also holds a font that should stay on.
 - **Different fonts with the same name** aren't merged. If both computers know a font's content
@@ -164,6 +177,14 @@ tag; every tag inside it is in the same group, on every computer.
   change, two computers that update never undo each other's sort, and a group someone chose on
   another computer wins over the sort. A tag moved by hand after the update, even before the
   first sync, does count as a change.
+- **A sync from before groups, in a library that had them** (a build like main at 4f5aeb0) made
+  the tags it brought in with the column's default, My tags, whatever their name. So at launch,
+  before the window can change anything (`sync::upgrade_saved_state`), a top-level tag whose
+  name was written on another computer, that's in My tags here, and whose name gives Built-in,
+  counts as having been in My tags. Nothing is sent for it, and it takes the group the other
+  computers give it. A tag named on this computer still counts by its name, so one made in
+  Fontface stays in My tags everywhere. A tag from elsewhere that someone moved from Built-in to
+  My tags on such a build looks the same, and goes back to Built-in.
 - **Older files and older apps.** A change without `group` (any file from before tag groups)
   leaves the name to decide. A `group` value this version doesn't know counts as no choice. A
   computer still on a Fontface from before tag groups keeps the field and passes it on, but has
@@ -192,7 +213,8 @@ tag; every tag inside it is in the same group, on every computer.
   dropped, the same way everywhere.
 - **No echoes.** Local tag changes are found by comparing the tags now with the tags as sync
   last left them, never with the merged state. Writing other computers' changes into the
-  library never counts as a change here. On/off changes come only from your switch.
+  library never counts as a change here. On/off changes come only from your switch, and from
+  fonts nobody has chosen for yet when this computer joins or they arrive.
 
 ## Identity
 
@@ -209,10 +231,13 @@ tag; every tag inside it is in the same group, on every computer.
 
 - All file work happens on a sync thread, never while a lock is held. Lock order: the cycle
   lock, the engine lock, then the database mutex. Fonts are switched through the same code as the
-  window's switches (`commands::switch`), with no sync lock held.
+  window's switches (`commands::switch`), under the cycle lock but never the engine lock: that
+  code takes the activation lock, then the database mutex. A font whose file is missing is
+  recorded as on the same way (`turn_on_later`).
 - **What wakes it:** any write the window makes to the database (it then compares tags, after
-  1.5 s of quiet), an on/off switch, the window coming to the front, a file event in the folder
-  (after 3 s of quiet; its own writes are ignored), and every five minutes.
+  1.5 s of quiet), an on/off switch, fonts a download or an import turned on, the window coming
+  to the front, a file event in the folder (after 3 s of quiet; its own writes are ignored),
+  and every five minutes.
 - **Stored locally**, outside the numbered migrations, like the tag tables: `sync_meta` (this
   computer's sync settings, and the merged state as JSON) and `sync_outbox` (changes not yet
   written to the folder, so nothing is lost if the folder is unreachable or Fontface quits).
@@ -225,6 +250,15 @@ tag; every tag inside it is in the same group, on every computer.
 - **Joining adds, it never removes.** A computer's fonts that are on are shared as on when it
   joins, even if another computer turned that font off earlier. The opposite would turn fonts
   off on a new computer by surprise.
+- **A download turns on every style first.** A style turned off elsewhere is on for a moment,
+  until the next sync turns it off. Turning only some styles on would make the download look
+  unfinished.
+- **A synced font that waited for its file comes back on to stay,** even with the activation
+  mode "until logout", like the fonts launch turns back on. Listing it as on for this login
+  while its file is missing would make the next launch count that login as ended and turn it
+  off for good.
+- **"Replace my tags" reaches every computer.** Restoring a backup that way deletes the tags made
+  since, on every computer, and deletes are final. The restore dialog says so when sync is on.
 - **Delete beats a rename made at the same time.** A rename doesn't bring a deleted tag back.
 - **A group someone chose beats the name rule.** When two computers' same-named tags meet, a
   computer that never chose a group for its tag doesn't outvote one that did, even if it joins
@@ -262,5 +296,13 @@ tag; every tag inside it is in the same group, on every computer.
 - **Tag groups across computers:** a group change both ways, with Undo; tags made inside a
   moved tag; renames and moves that keep a group; group changes racing renames and moves;
   same-named tags; the one-time sort on two computers (nothing written, an earlier choice kept,
-  a move made just after updating sent); change files from before groups; and a backup restored
-  with "Replace my tags", then added to, and synced.
+  a move made just after updating sent); tags an older sync made in My tags (nothing sent when
+  it updates); change files from before groups; and a backup restored with "Replace my tags",
+  then added to, and synced.
+- **Fonts Fontface switches by itself:** a download that brings styles with choices made
+  elsewhere (Bold turned off there goes off here; only a new style is shared), an update made
+  before reading a newer choice (nothing written, the newer choice wins); a switch that fails
+  (tried again, the message stays until it works); a file on a drive that isn't connected
+  (recorded as on, listed as not on this computer, another copy used if its file is there); and
+  device group changes (fonts turned off here stay off; only fonts that group's exceptions change
+  are switched).

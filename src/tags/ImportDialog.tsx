@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { useSync } from "@/sync/store";
 import { colorVar, tagsApi, type ImportPreview, type ImportSource } from "./api";
 import { depthOf, leafOf, parentOf } from "./model";
 
@@ -43,6 +44,11 @@ const RESTORE_MODES: { value: RestoreMode; label: string; description: string }[
       "Your tags become the ones ticked below, as they were in the backup. Tags you made since are deleted, and location colors go back to the backup's.",
   },
 ];
+
+/** Replacing with sync on changes the other computers' tags too, and deletes reach them all. */
+const RESTORE_MODES_WITH_SYNC = RESTORE_MODES.map((m) =>
+  m.value === "replace" ? { ...m, description: `${m.description} Sync is on, so your other computers' tags change to match.` } : m,
+);
 
 const SOURCES: { kind: ImportSource["kind"]; icon: string; title: string; hint: string }[] = [
   {
@@ -140,6 +146,7 @@ export function ImportDialog({
   /** Why the backup couldn't be read (restoring only; other sources go back to the list). */
   const [failed, setFailed] = useState<string | null>(null);
   const replace = restoring && mode === "replace";
+  const syncOn = useSync().status?.enabled ?? false;
   // Each preview request gets a number. Closing the dialog or starting another request makes
   // older answers stale, so a slow one can't land in a dialog that has moved on.
   const request = useRef(0);
@@ -306,7 +313,13 @@ export function ImportDialog({
           // -m-1 p-1: room for focus rings inside the scrolling area.
           <div className="-m-1 flex min-h-0 flex-col gap-3 overflow-y-auto p-1">
             {restoring && preview.tags.length > 0 && (
-              <ChoiceGroup look="cards" label="How to restore" value={mode} options={RESTORE_MODES} onChange={changeMode} />
+              <ChoiceGroup
+                look="cards"
+                label="How to restore"
+                value={mode}
+                options={syncOn ? RESTORE_MODES_WITH_SYNC : RESTORE_MODES}
+                onChange={changeMode}
+              />
             )}
             <p className="text-sm">
               {preview.tags.length ? (
@@ -403,6 +416,14 @@ export function ImportDialog({
           </div>
         )}
 
+        {/* Next to the button, since the choice above may have scrolled away. */}
+        {preview && replace && syncOn && (
+          <p id="import-replace-sync" className="flex items-start gap-1.5 text-xs text-destructive">
+            <Icon name="sync" size={14} className="mt-px shrink-0" />
+            Sync is on. Tags this deletes are deleted on your other computers too, including ones made there since this backup.
+          </p>
+        )}
+
         <DialogFooter>
           {preview && !restoring && (
             <Button variant="ghost" className="mr-auto" onClick={() => setPreview(null)} disabled={applying}>
@@ -413,7 +434,12 @@ export function ImportDialog({
             Cancel
           </Button>
           {preview && (
-            <Button variant={replace ? "destructive" : "default"} onClick={apply} disabled={!chosen.size || applying || loading}>
+            <Button
+              variant={replace ? "destructive" : "default"}
+              onClick={apply}
+              disabled={!chosen.size || applying || loading}
+              aria-describedby={replace && syncOn ? "import-replace-sync" : undefined}
+            >
               {applying
                 ? restoring
                   ? "Restoring…"

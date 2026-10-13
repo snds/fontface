@@ -119,6 +119,10 @@ pub fn run() {
             settings::ensure_schema(&conn)?;
             activation::ensure_schema(&conn)?;
             sync::ensure_schema(&conn)?;
+            // Before the window can change any tag: sync's saved state from an older build.
+            if let Err(e) = sync::upgrade_saved_state(&conn) {
+                eprintln!("fontface: sync couldn't update its saved state: {e}");
+            }
             // The macOS font folders and the service folders are always in the library; the UI
             // scans them at launch.
             db::ensure_system_folders(&mut conn)?;

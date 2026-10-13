@@ -9,8 +9,9 @@
 //!
 //! **Threads and locks.** All file work happens on the sync thread, never while a lock is
 //! held, because reading from an online-only cloud folder can download. Lock order: the cycle
-//! lock, then the engine lock, then the database mutex. The activation lock is only taken by
-//! `commands::switch`, which runs with none of these held.
+//! lock, then the engine lock, then the database mutex. Fonts are switched (`commands::switch`,
+//! `turn_on_later`) under the cycle lock only: they take the activation lock, then the database
+//! mutex, never the engine lock.
 
 pub mod commands;
 pub mod device;
@@ -40,7 +41,7 @@ use crate::{error::AppResult, model::ActivationOutcome, AppState};
 use engine::{Engine, LocalFaces};
 use transport::{FolderTransport, Transport};
 
-pub use engine::ensure_schema;
+pub use engine::{ensure_schema, upgrade_saved_state};
 
 /// A device or tag id: lowercase hex.
 pub fn is_device_id(s: &str) -> bool {
@@ -200,6 +201,25 @@ fn quietly<T>(f: impl FnOnce() -> T) -> T {
 /// The user switched fonts on or off (`set_activation`). Each font that ended up the way they
 /// asked becomes a change. Called after the switch, with no lock held.
 pub fn activation_chosen(state: &AppState, font_ids: &[i64], active: bool, outcomes: &[ActivationOutcome]) {
+    record_switch(state, font_ids, active, outcomes, |engine, conn, keys| engine.choose(conn, keys, active).map(|_| true));
+}
+
+/// Fontface turned on fonts that just came into the library (a download or an import), not the
+/// user's switch: see `Engine::arrived`. Called after the switch, with no lock held. (An update
+/// or a replacement putting back what was on records nothing at all.)
+pub fn activation_arrived(state: &AppState, font_ids: &[i64], outcomes: &[ActivationOutcome]) {
+    record_switch(state, font_ids, true, outcomes, |engine, conn, keys| engine.arrived(conn, keys));
+}
+
+/// The face keys of the fonts that ended up the way `active` asked, handed to `record` in one
+/// database write. Wakes sync if anything changed.
+fn record_switch(
+    state: &AppState,
+    font_ids: &[i64],
+    active: bool,
+    outcomes: &[ActivationOutcome],
+    record: impl FnOnce(&mut Engine, &rusqlite::Connection, &[String]) -> AppResult<bool>,
+) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
@@ -230,15 +250,16 @@ pub fn activation_chosen(state: &AppState, font_ids: &[i64], active: bool, outco
     let result = quietly(|| {
         state.write(|conn| {
             let tx = conn.transaction()?;
-            engine.choose(&tx, &keys, active)?;
+            let changed = record(engine, &tx, &keys)?;
             engine.save_state(&tx)?;
             tx.commit()?;
-            Ok(())
+            Ok(changed)
         })
     });
     drop(guard);
     match result {
-        Ok(()) => wake(true, false),
+        Ok(true) => wake(true, false),
+        Ok(false) => {}
         Err(e) => eprintln!("fontface: sync couldn't record an on/off change: {e}"),
     }
 }
@@ -312,32 +333,34 @@ pub fn run_cycle(remote: bool) -> AppResult<()> {
         })?
     };
 
-    // Switch fonts: the same path as the switches in the window, with no sync lock held, and
-    // without recording them as choices (they came from sync).
-    let mut failed = 0;
-    for (on, list) in [(false, &applied.turn_off), (true, &applied.turn_on)] {
-        for (_, ids) in list {
-            match quietly(|| crate::commands::switch(&state, ids, on, None)) {
-                Ok(outcomes) => failed += outcomes.iter().filter(|o| o.error.is_some()).count(),
-                Err(e) => {
-                    eprintln!("fontface: sync couldn't switch a font: {e}");
-                    failed += 1;
-                }
+    // Switch fonts: the same path as the switches in the window, without the engine lock, and
+    // without recording them as choices (they came from sync). A font whose file isn't there is
+    // turned on after its folder's next scan instead.
+    let switched = engine::carry_out(
+        &applied,
+        |path| Path::new(path).exists(),
+        |ids, on| match quietly(|| crate::commands::switch(&state, ids, on, None)) {
+            Ok(outcomes) => outcomes.iter().all(|o| o.error.is_none()),
+            Err(e) => {
+                eprintln!("fontface: sync couldn't switch a font: {e}");
+                false
             }
-        }
-    }
+        },
+        |path| match quietly(|| turn_on_later(&state, path)) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("fontface: sync couldn't record {path} as on: {e}");
+                false
+            }
+        },
+    );
 
     // Write this device's files.
     let me_now;
     {
         let mut guard = lock(&sh.engine);
         let Some(e) = guard.as_mut() else { return Ok(()) };
-        e.mark_applied(applied.stamps.clone());
-        if failed > 0 {
-            e.problems.insert("switch".into(), format!("{failed} {} couldn't be switched here", if failed == 1 { "font" } else { "fonts" }));
-        } else {
-            e.problems.remove("switch");
-        }
+        e.switched(&applied, &switched);
         me_now = e.me().to_string();
         quietly(|| state.write(|conn| e.save_state(conn)))?;
     }
@@ -357,6 +380,19 @@ pub fn run_cycle(remote: bool) -> AppResult<()> {
     if applied.tags_changed || applied.switches() {
         let _ = sh.app.emit("sync-changed", ());
     }
+    Ok(())
+}
+
+/// A synced turn-on whose file isn't there (on a drive that isn't connected, say): recorded as
+/// on, and turned on by the retry that runs after its folder's next scan, the way launch handles
+/// a font whose file is missing. Takes the activation lock, then the database mutex.
+fn turn_on_later(state: &AppState, path: &str) -> AppResult<()> {
+    let _guard = crate::activation::lock();
+    state.write(|conn| {
+        conn.execute("UPDATE fonts SET activated = 1 WHERE path = ?1", [path])?;
+        Ok(())
+    })?;
+    state.deferred().insert(path.to_string());
     Ok(())
 }
 

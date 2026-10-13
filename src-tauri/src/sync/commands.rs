@@ -104,7 +104,12 @@ pub(super) fn status(sh: &Shared) -> AppResult<SyncStatus> {
         devices,
         problems,
         missing: faces
-            .map(|f| e.missing(&f).into_iter().map(|(key, family, style)| MissingFont { key, family, style }).collect())
+            .map(|f| {
+                e.missing(&f, |path| std::path::Path::new(path).exists())
+                    .into_iter()
+                    .map(|(key, family, style)| MissingFont { key, family, style })
+                    .collect()
+            })
             .unwrap_or_default(),
         cloud_folder: e.config.folder.as_deref().is_some_and(|f| super::is_cloud_folder(std::path::Path::new(f))),
         cloned: e.cloned,
@@ -205,13 +210,10 @@ pub fn sync_set_device(app: AppHandle, name: String, group: String) -> AppResult
     {
         let mut guard = lock(&sh.engine);
         let e = guard.as_mut().ok_or_else(|| AppError::Other("Sync is still starting".into()))?;
-        let group = (!group.is_empty()).then_some(group);
-        if e.config.group != group {
-            // Another group's exceptions may apply now: look at every font again.
-            e.saved.applied.clear();
-        }
+        // Fonts whose on/off changes with the group are carried out again; the rest stay as
+        // they are here.
+        e.set_group((!group.is_empty()).then_some(group));
         e.config.name = name;
-        e.config.group = group;
         e.device_dirty = true;
         quietly(|| state.write(|conn| e.save_config(conn).and_then(|_| e.save_state(conn))))?;
     }

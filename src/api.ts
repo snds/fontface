@@ -253,6 +253,14 @@ export interface ReplaceResult {
 export type ThemeSetting = "system" | "light" | "dark";
 /** "persistent": fonts stay on after quitting and restarting. "temporary": on until logout or restart. */
 export type ActivationMode = "persistent" | "temporary";
+
+/**
+ * Why fonts are switched. "switch": the user's switch, their choice. "arrival": Fontface turning on
+ * fonts that just came into the library (a first download, an import); sync shares them only where
+ * nobody has chosen yet. "restore": an update or a replacement putting back what was on; sync
+ * records nothing.
+ */
+export type SwitchOrigin = "switch" | "arrival" | "restore";
 /** What launch does with fonts that were on last time but aren't on now. */
 export type RestorePolicy = "always" | "ask" | "never";
 
@@ -326,9 +334,12 @@ export const api = {
   cancelScan: (folderId: number) => invoke<void>("cancel_scan", { folderId }),
   listFonts: () => invoke<FontSummary[]>("list_fonts"),
   getFont: (fontId: number) => invoke<FontDetail>("get_font", { fontId }),
-  /** `scope` turns fonts on that way instead of the saved activation mode (null: the saved mode). */
-  setActivation: (fontIds: number[], active: boolean, scope: ActivationMode | null = null) =>
-    invoke<ActivationOutcome[]>("set_activation", { fontIds, active, scope }),
+  /**
+   * `scope` turns fonts on that way instead of the saved activation mode (null: the saved mode).
+   * `origin` says why: only the user's own switch is shared as their choice by sync.
+   */
+  setActivation: (fontIds: number[], active: boolean, scope: ActivationMode | null = null, origin: SwitchOrigin = "switch") =>
+    invoke<ActivationOutcome[]>("set_activation", { fontIds, active, scope, origin }),
   revealFont: (fontId: number) => invoke<void>("reveal_font", { fontId }),
   listServices: () => invoke<ServiceInfo[]>("list_services"),
   googleCatalog: (refresh = false) => invoke<GoogleCatalog>("google_catalog", { refresh }),

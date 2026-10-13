@@ -15,9 +15,11 @@
 //!
 //! **On/off** isn't compared like that, because the library also switches fonts off for reasons
 //! that aren't the user's choice (a drive that isn't mounted, "Leave them off" at launch). Only an
-//! on/off switch the user flips becomes a change (`choose`). A synced choice is applied once per
-//! change (`applied`), so a font switched off by hand here isn't switched back on until somebody
-//! changes that font's choice again.
+//! on/off switch the user flips becomes a change (`choose`). Fonts Fontface turns on by itself
+//! when they come into the library (a download, an import) are shared only if nobody has chosen
+//! for them yet (`arrived`). A synced choice is applied once per change (`applied`), so a font
+//! switched off by hand here isn't switched back on until somebody changes that font's choice
+//! again. A switch that fails isn't counted as applied, so the next sync tries it again.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -55,6 +57,55 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
 /// the tag tables. Idempotent; called once at launch.
 pub fn ensure_schema(conn: &Connection) -> AppResult<()> {
     conn.execute_batch(SCHEMA)?;
+    Ok(())
+}
+
+/// Fills in tag groups missing from sync's saved state, for one kind of tag. Called at launch
+/// right after `tags::ensure_schema`, before the window can change any tag.
+///
+/// A state saved without groups counts each tag as in the group its name gives
+/// (`BaseTag::was_builtin`): the one-time sort put it there. That's wrong for a top-level tag
+/// that an older sync (one that didn't know about groups) made in a library that already had
+/// them: it got the column's default, My tags, whatever its name. Counted by its name, it would
+/// look moved, and "My tags" would be sent for a tag nobody moved. So a tag like that (its name
+/// last written on another computer, in My tags here, with a name that gives Built-in) counts as
+/// having been in My tags, which sends nothing; this computer then takes the group the other
+/// computers give it. A tag named on this computer keeps counting by its name: a tag made in
+/// Fontface is in My tags, and stays there everywhere. (A tag from elsewhere that someone moved
+/// to My tags on such a build looks the same, and goes back to Built-in.)
+pub fn upgrade_saved_state(conn: &Connection) -> AppResult<()> {
+    let Some(text) = meta_get(conn, "state")? else { return Ok(()) };
+    // Only the base first: at most launches there's nothing to do, and the state can be large.
+    #[derive(Deserialize)]
+    struct BaseOnly {
+        #[serde(default)]
+        base: BTreeMap<i64, BaseTag>,
+    }
+    if serde_json::from_str::<BaseOnly>(&text).map_or(true, |s| s.base.values().all(|b| b.builtin.is_some())) {
+        return Ok(());
+    }
+    let Ok(mut saved) = serde_json::from_str::<Saved>(&text) else { return Ok(()) };
+    let Some(me) = meta_get(conn, "config")?.and_then(|s| serde_json::from_str::<Config>(&s).ok()).map(|c| c.device_id) else {
+        return Ok(());
+    };
+    let local = load_local_tags(conn)?;
+    let mut changed = false;
+    for (id, b) in saved.base.iter_mut() {
+        if b.builtin.is_some() || b.name.contains('/') || !tags::is_builtin_name(&b.name) || b.sids.is_empty() {
+            continue;
+        }
+        let in_mine = local.get(id).is_some_and(|lt| lt.name == b.name && !lt.builtin);
+        let made_elsewhere = b.sids.iter().all(|s| {
+            saved.merged.tags.get(s).and_then(|f| f.get(tag_field::NAME)).is_some_and(|r| r.hlc.device != me)
+        });
+        if in_mine && made_elsewhere {
+            b.builtin = Some(false);
+            changed = true;
+        }
+    }
+    if changed {
+        meta_set(conn, "state", &serde_json::to_string(&saved).map_err(|e| AppError::Other(e.to_string()))?)?;
+    }
     Ok(())
 }
 
@@ -104,7 +155,7 @@ pub struct BaseTag {
     pub name: String,
     pub color: String,
     /// In the Built-in group. `None` in a state saved before tag groups: then the tag's group was
-    /// the one the one-time sort gives it, by its name.
+    /// the one the one-time sort gives it, by its name (except as `upgrade_saved_state` fills in).
     #[serde(default)]
     pub builtin: Option<bool>,
     pub keys: BTreeSet<String>,
@@ -127,6 +178,10 @@ pub struct Saved {
     pub base: BTreeMap<i64, BaseTag>,
     /// Face key → the `Effective::stamp` last carried out on this device.
     pub applied: BTreeMap<String, Hlc>,
+    /// Fonts sync turned on whose files weren't there (on a drive that isn't connected, say).
+    /// They turn on after their folder's next scan; until their file is back, they're listed as
+    /// not on this computer.
+    pub waiting: BTreeSet<String>,
     pub peers: BTreeMap<String, Peer>,
     /// The last change file this device wrote.
     pub seq: u64,
@@ -153,6 +208,9 @@ pub struct Engine {
     prints: HashMap<(String, i64, i64), String>,
     /// `device.json` needs writing (name or group changed).
     pub device_dirty: bool,
+    /// Fonts whose `applied` stamp was dropped (`arrived`, `set_group`) since `apply` last
+    /// planned. A sync that planned before that mustn't count them as carried out.
+    replan: BTreeSet<String>,
 }
 
 fn meta_get(conn: &Connection, key: &str) -> AppResult<Option<String>> {
@@ -393,9 +451,11 @@ const NEWER_DEVICE: &str = "It uses a newer version of Fontface's sync format. U
 pub struct Applied {
     /// The local tag tables changed.
     pub tags_changed: bool,
-    pub turn_on: Vec<(String, Vec<i64>)>,
+    /// Fonts to turn on: each font's copies as (font id, path), best first. One copy is turned on.
+    pub turn_on: Vec<(String, Vec<(i64, String)>)>,
+    /// Fonts to turn off, with the font ids of every copy to turn off.
     pub turn_off: Vec<(String, Vec<i64>)>,
-    /// Face key → stamp to record once the switches above are done.
+    /// Face key → stamp to record once the switches above are done (see `Engine::switched`).
     pub stamps: BTreeMap<String, Hlc>,
 }
 
@@ -403,6 +463,51 @@ impl Applied {
     pub fn switches(&self) -> bool {
         !self.turn_on.is_empty() || !self.turn_off.is_empty()
     }
+}
+
+/// What carrying out a sync's switches did (`carry_out`).
+#[derive(Debug, Default)]
+pub struct Switched {
+    /// Fonts whose switch failed. They aren't counted as done, so the next sync tries again.
+    pub failed: BTreeSet<String>,
+    /// Fonts to turn on whose files aren't there (on a drive that isn't connected, say): recorded
+    /// as on, and turned on after their folder's next scan.
+    pub waiting: BTreeSet<String>,
+}
+
+/// Carries out the switches `apply` planned. `switch` turns fonts on or off (the window's own
+/// code) and says whether all of it worked. A font is turned on from the first of its copies
+/// whose file `exists`. If none does, `defer` records the first copy as on, for the retry that
+/// runs after its folder's next scan (as launch does with a file that's missing), and says
+/// whether that worked.
+pub fn carry_out(
+    applied: &Applied,
+    exists: impl Fn(&str) -> bool,
+    mut switch: impl FnMut(&[i64], bool) -> bool,
+    mut defer: impl FnMut(&str) -> bool,
+) -> Switched {
+    let mut out = Switched::default();
+    for (key, ids) in &applied.turn_off {
+        if !switch(ids, false) {
+            out.failed.insert(key.clone());
+        }
+    }
+    for (key, copies) in &applied.turn_on {
+        let done = match copies.iter().find(|(_, path)| exists(path)) {
+            Some((id, _)) => switch(&[*id], true),
+            None => {
+                let deferred = copies.first().is_some_and(|(_, path)| defer(path));
+                if deferred {
+                    out.waiting.insert(key.clone());
+                }
+                deferred
+            }
+        };
+        if !done {
+            out.failed.insert(key.clone());
+        }
+    }
+    out
 }
 
 /// "Follow sync", "Always on here" or "Never on here".
@@ -461,6 +566,7 @@ impl Engine {
             last_sync: None,
             prints: HashMap::new(),
             device_dirty: true,
+            replan: BTreeSet::new(),
         };
         let mut stmt = conn.prepare("SELECT id, line FROM sync_outbox ORDER BY id")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
@@ -847,6 +953,63 @@ impl Engine {
         Ok(made)
     }
 
+    /// Fonts that just came into the library and that Fontface turned on by itself (a download
+    /// or an import), not with the user's switch. A font nobody has chosen for yet is shared as
+    /// on, the way joining shares fonts already on. A font that has a choice keeps it: the next
+    /// `apply` carries it out again, so a style turned off on another computer goes off here
+    /// too. Returns whether anything changed.
+    pub fn arrived(&mut self, conn: &Connection, keys: &[String]) -> AppResult<bool> {
+        let faces = load_faces(conn)?;
+        let (me, group) = (self.config.device_id.clone(), self.config.group.clone());
+        let mut changed = false;
+        for key in keys.iter().filter(|k| syncable_key(k)) {
+            if self.saved.merged.effective(key, &me, group.as_deref()).is_some() {
+                self.saved.applied.remove(key);
+                self.replan.insert(key.clone());
+            } else {
+                let mut set = self.face_meta(faces.faces.get(key));
+                set.insert(face_field::ON.into(), json!(true));
+                self.new_op(conn, OpKind::Face { key: key.clone(), set })?;
+                if let Some(e) = self.saved.merged.effective(key, &me, group.as_deref()) {
+                    self.saved.applied.insert(key.clone(), e.stamp);
+                }
+            }
+            changed = true;
+        }
+        Ok(changed)
+    }
+
+    /// Puts this device in another device group (None: none). That group's exceptions apply
+    /// now, so a font whose on/off changes with the group is carried out again. Every other font
+    /// still counts as carried out: one turned off here (Turn Off All, "Leave them off", another
+    /// app) stays off, as it would have without the change.
+    pub fn set_group(&mut self, group: Option<String>) {
+        if self.config.group == group {
+            return;
+        }
+        let me = self.config.device_id.as_str();
+        for key in self.saved.merged.faces.keys() {
+            let old = self.saved.merged.effective(key, me, self.config.group.as_deref());
+            let new = self.saved.merged.effective(key, me, group.as_deref());
+            match (old, new) {
+                (Some(old), Some(new)) if old.on == new.on => {
+                    // Carried out under the old group: still carried out under the new one.
+                    if let Some(done) = self.saved.applied.get_mut(key) {
+                        if *done >= old.stamp && new.stamp > *done {
+                            *done = new.stamp;
+                        }
+                    }
+                }
+                (None, None) => {}
+                _ => {
+                    self.saved.applied.remove(key);
+                    self.replan.insert(key.clone());
+                }
+            }
+        }
+        self.config.group = group;
+    }
+
     /// Sets an exception for fonts: this device (or its group) always has them on, never has
     /// them on, or follows the shared choice. Carried out by the next `apply`.
     pub fn set_exception(&mut self, conn: &Connection, keys: &[String], value: Exception, target: ExceptionFor) -> AppResult<usize> {
@@ -891,6 +1054,7 @@ impl Engine {
             }
         }
         self.saved.base = base;
+        self.replan.clear();
         self.plan_switches(faces, mismatched, &mut out);
         Ok(out)
     }
@@ -915,9 +1079,11 @@ impl Engine {
                     out.stamps.insert(key.clone(), eff.stamp);
                     continue;
                 }
-                // One copy: a file with only this font in it, if there is one.
-                let pick = own.iter().min_by_key(|c| (faces.by_path.get(&c.path).map_or(1, Vec::len), c.path.clone())).map(|c| c.id);
-                out.turn_on.extend(pick.map(|id| (key.clone(), vec![id])));
+                // One copy: a file with only this font in it, if there is one. The others follow,
+                // for when that file isn't there.
+                let mut copies = own.clone();
+                copies.sort_by_key(|c| (faces.by_path.get(&c.path).map_or(1, Vec::len), c.path.clone()));
+                out.turn_on.push((key.clone(), copies.into_iter().map(|c| (c.id, c.path.clone())).collect()));
             } else {
                 // Every copy that's on, except files that also hold a font that should stay on.
                 let ids: Vec<i64> = own
@@ -934,24 +1100,47 @@ impl Engine {
         }
     }
 
-    /// Records switches as carried out.
-    pub fn mark_applied(&mut self, stamps: BTreeMap<String, Hlc>) {
-        self.saved.applied.extend(stamps);
+    /// Records what `carry_out` did with the switches `apply` planned. A switch that worked, or
+    /// that waits for its file, is carried out, and isn't done again until that font's choice
+    /// changes. One that failed isn't: the next sync tries it again, and the page says so until
+    /// it works. Nor is a font that's to be carried out again since `apply` planned (`replan`).
+    pub fn switched(&mut self, applied: &Applied, done: &Switched) {
+        for (key, stamp) in applied.stamps.iter().filter(|(k, _)| !done.failed.contains(*k) && !self.replan.contains(*k)) {
+            self.saved.applied.insert(key.clone(), stamp.clone());
+        }
+        self.saved.waiting.extend(done.waiting.iter().cloned());
+        let (me, group) = (self.config.device_id.as_str(), self.config.group.as_deref());
+        let merged = &self.saved.merged;
+        self.saved.waiting.retain(|k| merged.effective(k, me, group).is_some_and(|e| e.on));
+        match done.failed.len() {
+            0 => self.problems.remove("switch"),
+            n => self.problems.insert(
+                "switch".into(),
+                format!("{n} {} couldn't be switched on or off here. Fontface tries again each time it syncs.", if n == 1 { "font" } else { "fonts" }),
+            ),
+        };
     }
 
-    /// Fonts that should be on here but aren't on this device: (key, family, style).
-    pub fn missing(&self, faces: &LocalFaces) -> Vec<(String, String, String)> {
+    /// Fonts that should be on here but aren't on this device: (key, family, style). That
+    /// includes fonts sync turned on whose files aren't there (`waiting`); `exists` says whether
+    /// a file is.
+    pub fn missing(&self, faces: &LocalFaces, exists: impl Fn(&str) -> bool) -> Vec<(String, String, String)> {
         let (me, group) = (self.config.device_id.as_str(), self.config.group.as_deref());
         self.saved
             .merged
             .faces
             .keys()
-            .filter(|k| !faces.faces.contains_key(*k))
+            .filter(|k| match faces.faces.get(*k) {
+                None => true,
+                Some(face) => self.saved.waiting.contains(*k) && !face.copies.iter().any(|c| exists(&c.path)),
+            })
             .filter(|k| self.saved.merged.effective(k, me, group).is_some_and(|e| e.on))
             .map(|k| {
-                let family = self.saved.merged.face_str(k, face_field::FAMILY).unwrap_or_default().to_string();
-                let style = self.saved.merged.face_str(k, face_field::STYLE).unwrap_or_default().to_string();
-                (k.clone(), family, style)
+                let local = faces.faces.get(k);
+                let text = |field: &str, here: Option<&String>| {
+                    self.saved.merged.face_str(k, field).map(String::from).or_else(|| here.cloned()).unwrap_or_default()
+                };
+                (k.clone(), text(face_field::FAMILY, local.map(|f| &f.family)), text(face_field::STYLE, local.map(|f| &f.style)))
             })
             .collect()
     }

@@ -280,16 +280,38 @@ pub fn get_font(state: State<'_, AppState>, font_id: i64) -> AppResult<FontDetai
 /// `scope` ("persistent" or "temporary") turns fonts on that way instead of the saved
 /// activation mode: after an update or replacement, each font comes back the way it was (see
 /// `GoogleInstallResult::temporary_files` and `Replaced::temporary_faces`). None: the saved mode.
+///
+/// `origin` says why (None: the user's switch). Only the user's switch is their on/off choice,
+/// shared with their other computers by sync.
 #[tauri::command(async)]
 pub fn set_activation(
     state: State<'_, AppState>,
     font_ids: Vec<i64>,
     active: bool,
     scope: Option<ActivationMode>,
+    origin: Option<SwitchOrigin>,
 ) -> AppResult<Vec<ActivationOutcome>> {
     let outcomes = switch(&state, &font_ids, active, scope)?;
-    crate::sync::activation_chosen(&state, &font_ids, active, &outcomes);
+    match origin.unwrap_or_default() {
+        SwitchOrigin::Switch => crate::sync::activation_chosen(&state, &font_ids, active, &outcomes),
+        SwitchOrigin::Arrival => crate::sync::activation_arrived(&state, &font_ids, &outcomes),
+        SwitchOrigin::Restore => {}
+    }
     Ok(outcomes)
+}
+
+/// Why fonts are switched on or off (`set_activation`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SwitchOrigin {
+    /// The user's switch: their choice.
+    #[default]
+    Switch,
+    /// Fonts that just came into the library (a first download or an import), turned on by
+    /// Fontface. Shared only where nobody has chosen yet (`sync::activation_arrived`).
+    Arrival,
+    /// An update or a replacement putting back what was on. Nothing changed, so nothing is shared.
+    Restore,
 }
 
 /// The work behind `set_activation` (and Turn Off All). Turning on uses the scope of `mode`, or
@@ -978,7 +1000,9 @@ pub fn settings_update(app: AppHandle, state: State<'_, AppState>, patch: serde_
     Ok(next)
 }
 
-/// Puts every setting back to its default, and removes the login item.
+/// Puts every setting back to its default, and removes the login item. Sync's settings (its
+/// folder, this computer's name and group) and watching for purchases aren't app settings, and
+/// stay as they are.
 #[tauri::command(async)]
 pub fn settings_reset(app: AppHandle, state: State<'_, AppState>) -> AppResult<AppSettings> {
     let mut held = state.settings();

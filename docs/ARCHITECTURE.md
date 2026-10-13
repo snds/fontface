@@ -150,6 +150,8 @@ them and keeps their fonts' activation state. This guarantees each file belongs 
   version when everything that was on was temporary. The results list those names
   (`temporaryFiles`, `temporaryFaces`), and `set_activation` takes a `scope` ("persistent" or
   "temporary") that overrides the mode, so the rest come back to stay whatever the mode is now.
+  It also takes an `origin` ("arrival" for a first download or an import, "restore" for an
+  update or a Replace), so sync doesn't share these as the user's choice ([SYNC.md](SYNC.md)).
   If the swap fails, or a purchase can't be removed, each font is turned back on in the scope
   it had. A temporary font another app turns off is recorded as off and leaves the list, after
   Fontface removes its own session registration of it.
@@ -208,7 +210,12 @@ sync. Font files, settings and the database never sync. Full details: [SYNC.md](
   A top-level tag's group is written only when it differs from what its name gives
   (`tags::is_builtin_name`) or changes here, so the one-time sort into groups is never shared.
   On/off changes come only from the user's switch (`set_activation` calls
-  `sync::activation_chosen`); synced choices are switched through `commands::switch`, once each.
+  `sync::activation_chosen`). Its `origin` says when it isn't the user's switch: fonts a download
+  or an import turns on are shared only where nobody has chosen yet
+  (`sync::activation_arrived`), and an update or a Replace putting back what was on records
+  nothing. Synced choices are switched through `commands::switch`, once each; one that fails is
+  tried again next time, and one whose file is missing is recorded as on and retried after its
+  folder's next scan, like launch does.
 - **Hooks elsewhere are one line each:** `AppState::write` wakes sync after a UI write, and
   `set_activation` records the switch. Sync's own tables (`sync_meta`, `sync_outbox`) come from
   an idempotent `ensure_schema`, like the tag tables.
