@@ -246,9 +246,10 @@ tag; every tag inside it is in the same group, on every computer.
   hands over the files to check, then lets go): a file on a network drive that dropped can take
   seconds to check, and your switch waits for that lock.
 - **What wakes it:** any write the window makes to the database (it then compares tags, after
-  1.5 s of quiet), except saving preview profiles, which are a cache; an on/off switch, fonts a download, an import, an update or a Replace turned
+  1.5 s of quiet), an on/off switch, fonts a download, an import, an update or a Replace turned
   on, the window coming to the front, a file event in the folder (after 3 s of quiet; its own
-  writes are ignored), and every five minutes.
+  writes are ignored), and every five minutes. Saving preview profiles doesn't wake it: they're
+  a cache, not a choice.
 - **Stored locally**, outside the numbered migrations, like the tag tables: `sync_meta` (this
   computer's sync settings, and the merged state as JSON) and `sync_outbox` (changes not yet
   written to the folder, so nothing is lost if the folder is unreachable or Fontface quits).

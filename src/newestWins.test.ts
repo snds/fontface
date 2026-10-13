@@ -27,18 +27,42 @@ async function settled(p: Promise<unknown>): Promise<boolean> {
   return done;
 }
 
-test("a request overtaken by a newer one settles only once the newest list is shown", async () => {
+test("a request settles once its list is on screen, even when a newer one is on its way", async () => {
   // Launch loads the library; the preview backfill finishes and reloads before it answers.
   const h = harness();
   const launch = h.load();
   const reload = h.load();
   h.requests[0].answer("launch list");
-  assert.equal(await settled(launch), false, "launch must not think the library is loaded yet");
-  assert.deepEqual(h.shown, []);
-  h.requests[1].answer("newer list");
   await launch;
-  assert.deepEqual(h.shown, ["newer list"], "the list is on screen when launch goes on");
+  assert.deepEqual(h.shown, ["launch list"], "the list is on screen when launch goes on");
+  h.requests[1].answer("newer list");
   await reload;
+  assert.deepEqual(h.shown, ["launch list", "newer list"]);
+});
+
+test("a request never waits on requests made after it", async () => {
+  // A long scan reloads more often than a list takes to arrive.
+  const h = harness();
+  const first = h.load();
+  const loads = [first];
+  for (let i = 0; i < 5; i++) loads.push(h.load());
+  h.requests[0].answer("list 0");
+  assert.equal(await settled(first), true, "the first caller goes on with its own list");
+  for (let i = 1; i < 6; i++) h.requests[i].answer(`list ${i}`);
+  await Promise.all(loads);
+  assert.deepEqual(h.shown, ["list 0", "list 1", "list 2", "list 3", "list 4", "list 5"]);
+});
+
+test("a request whose answer comes after a newer list is shown settles without showing it", async () => {
+  const h = harness();
+  const first = h.load();
+  const second = h.load();
+  h.requests[1].answer("new");
+  await second;
+  assert.equal(await settled(first), false, "first still waits for its own answer");
+  h.requests[0].answer("old");
+  await first;
+  assert.deepEqual(h.shown, ["new"]);
 });
 
 test("an older answer that comes last is never shown", async () => {
@@ -76,15 +100,27 @@ test("an overtaken request that fails settles with the newest one", async () => 
   assert.deepEqual(h.shown, ["list"]);
 });
 
-test("the newest request's failure reaches every caller waiting on it", async () => {
+test("the newest request's failure reaches its caller and overtaken callers that failed too", async () => {
   const h = harness();
   const first = h.load();
   const second = h.load();
   const outcomes = Promise.all([assert.rejects(first, /no database/), assert.rejects(second, /no database/)]);
+  h.requests[0].fail(new Error("no database"));
   h.requests[1].fail(new Error("no database"));
-  h.requests[0].answer("old");
   await outcomes;
   assert.deepEqual(h.shown, []);
+});
+
+test("an older request's list is still shown when the newest one fails", async () => {
+  const h = harness();
+  const first = h.load();
+  const second = h.load();
+  const failed = assert.rejects(second, /no database/);
+  h.requests[1].fail(new Error("no database"));
+  await failed;
+  h.requests[0].answer("old");
+  await first;
+  assert.deepEqual(h.shown, ["old"], "better an older list than none");
 });
 
 test("a lone request shows its answer", async () => {
