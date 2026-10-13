@@ -109,7 +109,16 @@ const SIDEBAR_ROWS: { key: keyof SidebarSections; label: string; description: st
   { key: "adobe", label: "Adobe Fonts", description: "Fonts Creative Cloud has turned on.", keywords: "service creative cloud" },
   { key: "purchases", label: "Purchases", description: "Fonts you bought, found in your downloads.", keywords: "service store" },
   { key: "tags", label: "Tags", description: "Your tags, each with its own view.", keywords: "labels organize" },
+  {
+    key: "builtinTags",
+    label: "Built-in tags",
+    description: "Tags that came with Font Book and Typeface, such as Fixed Width and Style. When hidden, fonts still show them.",
+    keywords: "labels font book typeface style fixed width defaults automatic classification group",
+  },
 ];
+
+/** Rows that only matter while another row is on: Built-in tags sit inside Tags. */
+const SIDEBAR_NEEDS: Partial<Record<keyof SidebarSections, keyof SidebarSections>> = { builtinTags: "tags" };
 
 /** Every settings section, in order, with its rows and their controls. */
 export function useSections(props: SectionProps): SectionDef[] | null {
@@ -297,21 +306,26 @@ export function useSections(props: SectionProps): SectionDef[] | null {
     groups: [
       {
         id: "sidebar",
-        rows: SIDEBAR_ROWS.map((r) => ({
-          id: `sidebar-${r.key}`,
-          label: r.label,
-          description: r.description,
-          keywords: `sidebar show hide ${r.keywords ?? ""}`,
-          labelsControl: true,
-          control: (ids: RowIds) => (
-            <Switch
-              id={ids.control}
-              {...describe(ids)}
-              checked={s.sidebar[r.key]}
-              onCheckedChange={(on) => update({ sidebar: { [r.key]: on } })}
-            />
-          ),
-        })),
+        rows: SIDEBAR_ROWS.map((r) => {
+          const needs = SIDEBAR_NEEDS[r.key];
+          const off = !!needs && !s.sidebar[needs];
+          return {
+            id: `sidebar-${r.key}`,
+            label: r.label,
+            description: off ? `${r.description} Shown only while Tags is on.` : r.description,
+            keywords: `sidebar show hide ${r.keywords ?? ""}`,
+            labelsControl: true,
+            control: (ids: RowIds) => (
+              <Switch
+                id={ids.control}
+                {...describe(ids)}
+                checked={s.sidebar[r.key]}
+                disabled={off}
+                onCheckedChange={(on) => update({ sidebar: { [r.key]: on } })}
+              />
+            ),
+          };
+        }),
       },
     ],
   };

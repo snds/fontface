@@ -344,7 +344,7 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
             ))}
           </div>
 
-          {show.tags && <TagsSection families={families} view={view} onView={onView} />}
+          {show.tags && <TagsSection families={families} view={view} onView={onView} showBuiltin={show.builtinTags} />}
         </nav>
       </ScrollArea>
 

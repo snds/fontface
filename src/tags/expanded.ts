@@ -26,8 +26,10 @@ function save() {
 }
 
 export function toggleOpen(id: string, to?: boolean) {
+  const want = to ?? !open.has(id);
+  if (want === open.has(id)) return; // already so: nothing to save or redraw
   const next = new Set(open);
-  if (to ?? !next.has(id)) next.add(id);
+  if (want) next.add(id);
   else next.delete(id);
   open = next;
   save();
@@ -41,4 +43,16 @@ const subscribe = (l: () => void) => {
 
 export function useOpenRows(): Set<string> {
   return useSyncExternalStore(subscribe, () => open);
+}
+
+/**
+ * Whether a row is open, for rows that may start open (the tag group headings). The store
+ * remembers only rows that differ from how they start, so a row that starts open is remembered
+ * once it's closed.
+ */
+export const isOpen = (rows: Set<string>, id: string, startsOpen = false) => rows.has(id) !== startsOpen;
+
+/** Opens (`to`) or closes a row that may start open (see `isOpen`). */
+export function setOpen(id: string, to: boolean, startsOpen = false) {
+  toggleOpen(id, to !== startsOpen);
 }

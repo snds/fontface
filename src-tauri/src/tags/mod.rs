@@ -12,6 +12,13 @@
 //! **Nested tags.** A `/` in a name nests it: "Sci-Fi/Star Trek" sits under "Sci-Fi". Parents
 //! always exist as tags of their own, so every level can be colored, renamed and viewed.
 //!
+//! **Groups.** Every tag is in one of two groups: the user's own ("My tags") or "Built-in"
+//! (tags that came with Font Book and Typeface, such as "Fixed Width" or "Style/Sans"). A group
+//! belongs to a top-level tag and everything nested under it, so the `builtin` column of a
+//! nested tag always matches its top-level tag's. Every write keeps it that way: a new nested
+//! tag takes its parent's group, a tag moved under another takes the new parent's, and
+//! [`set_group`] changes a whole subtree at once. [`BUILTIN_NAMES`] decides where tags start.
+//!
 //! **Schema.** These tables live outside the numbered migrations in db.rs, and PRAGMA
 //! user_version is left alone, so other features can add tables without clashing.
 //! `ensure_schema` creates whatever is missing and is safe to run at every launch. Add new
@@ -65,17 +72,26 @@ CREATE TABLE IF NOT EXISTS folder_moves (
 );
 ";
 
-/// Creates the tag tables if they're missing. Idempotent; called once at launch, after db.rs
-/// has migrated the library.
+/// Creates the tag tables and columns if they're missing. Idempotent; called once at launch,
+/// after db.rs has migrated the library.
+///
+/// The first time the `builtin` column is added, existing tags are sorted into the two groups
+/// by [`BUILTIN_NAMES`], in the same transaction. That happens once only: later launches find
+/// the column and leave every tag where the user put it.
 pub fn ensure_schema(conn: &Connection) -> AppResult<()> {
     conn.execute_batch(SCHEMA)?;
+    let tx = conn.unchecked_transaction()?;
+    if ensure_column(&tx, "tags", "builtin", "builtin INTEGER NOT NULL DEFAULT 0")? {
+        sort_into_groups(&tx)?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
 /// Adds a column if the table doesn't have it yet. `decl` is the column definition, such as
 /// `"note TEXT"`. Use this for any later column, so libraries from either branch keep working.
-#[allow(dead_code)]
-pub fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> AppResult<()> {
+/// Returns true if it added the column (false if it was already there).
+pub fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> AppResult<bool> {
     let exists: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
         params![table, column],
@@ -84,7 +100,68 @@ pub fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -
     if !exists {
         conn.execute_batch(&format!("ALTER TABLE \"{table}\" ADD COLUMN {decl};"))?;
     }
-    Ok(())
+    Ok(!exists)
+}
+
+/// The one-time sort when groups arrive: tags under a name in [`BUILTIN_NAMES`] go to
+/// Built-in, every other tag stays the user's own. Returns how many tags moved.
+fn sort_into_groups(conn: &Connection) -> AppResult<usize> {
+    let mut moved = 0;
+    for tag in list_tags(conn)? {
+        if is_builtin_name(&tag.name) {
+            moved += conn.execute("UPDATE tags SET builtin = 1 WHERE id = ?1", [tag.id])?;
+        }
+    }
+    Ok(moved)
+}
+
+// ---------------------------------------------------------------------------------- groups
+
+/// Top-level tag names that came with other apps rather than from the user. A tag with one of
+/// these names, and every tag nested under it, starts in the Built-in group:
+///
+/// - when groups first arrive (the one-time sort in [`ensure_schema`]);
+/// - when an import creates it (Typeface backups, Font Book collections, Finder tags, and
+///   Fontface tags files that don't say which group a tag is in).
+///
+/// Tags made in Fontface itself always start as the user's own, whatever their name, and a tag
+/// that already exists keeps its group. Names match ignoring letter case (ASCII only, like the
+/// database).
+///
+/// - Font Book's starter collections, which macOS makes for every user: "Fixed Width", "Fun",
+///   "Modern", "PDF", "Traditional" and "Web".
+/// - Typeface's automatic classification, "Style" ("Style/Sans", "Style/Serif",
+///   "Style/Monospaced", "Style/Script", "Style/Ornamental", "Style/Symbolic").
+pub const BUILTIN_NAMES: &[&str] = &["Fixed Width", "Fun", "Modern", "PDF", "Traditional", "Web", "Style"];
+
+/// The top level of a name: "Sci-Fi" for "Sci-Fi/Star Trek".
+pub fn top_level(name: &str) -> &str {
+    name.split('/').next().unwrap_or(name)
+}
+
+/// True if a tag of this name starts in the Built-in group: its top level is in [`BUILTIN_NAMES`].
+pub fn is_builtin_name(name: &str) -> bool {
+    let top = top_level(name).trim();
+    BUILTIN_NAMES.iter().any(|b| b.eq_ignore_ascii_case(top))
+}
+
+/// Puts a tag's top-level tag, and every tag nested under it, in the Built-in group (`builtin`)
+/// or the user's own. A nested tag can't be in another group than its top-level tag, so this
+/// always acts on the top level. Returns the top-level tag.
+pub fn set_group(conn: &mut Connection, id: i64, builtin: bool) -> AppResult<Tag> {
+    let tag = get_tag(conn, id)?;
+    let top = match find_tag(conn, top_level(&tag.name))? {
+        Some(top) => top,
+        // Parents always exist; if one somehow doesn't, the tag itself is the top of what's there.
+        None => tag,
+    };
+    let ids: Vec<i64> = subtree(conn, &top)?.into_iter().map(|t| t.id).collect();
+    let tx = conn.transaction()?;
+    for id in &ids {
+        tx.execute("UPDATE tags SET builtin = ?1 WHERE id = ?2", params![builtin, id])?;
+    }
+    tx.commit()?;
+    get_tag(conn, top.id)
 }
 
 fn now() -> i64 {
@@ -193,6 +270,15 @@ pub struct Tag {
     pub id: i64,
     pub name: String,
     pub color: String,
+    /// In the Built-in group (tags from Font Book and Typeface), not the user's own. Always the
+    /// same as its top-level tag's.
+    pub builtin: bool,
+}
+
+const TAG_COLUMNS: &str = "id, name, color, builtin";
+
+fn tag_row(r: &rusqlite::Row) -> rusqlite::Result<Tag> {
+    Ok(Tag { id: r.get(0)?, name: r.get(1)?, color: r.get(2)?, builtin: r.get(3)? })
 }
 
 /// Everything the UI needs to show tags and location colors.
@@ -207,8 +293,8 @@ pub struct Organize {
 }
 
 pub fn list_tags(conn: &Connection) -> AppResult<Vec<Tag>> {
-    let mut stmt = conn.prepare("SELECT id, name, color FROM tags ORDER BY name COLLATE NOCASE")?;
-    let rows = stmt.query_map([], |r| Ok(Tag { id: r.get(0)?, name: r.get(1)?, color: r.get(2)? }))?;
+    let mut stmt = conn.prepare(&format!("SELECT {TAG_COLUMNS} FROM tags ORDER BY name COLLATE NOCASE"))?;
+    let rows = stmt.query_map([], tag_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
@@ -226,20 +312,14 @@ pub fn organize(conn: &Connection) -> AppResult<Organize> {
 }
 
 pub fn get_tag(conn: &Connection, id: i64) -> AppResult<Tag> {
-    conn.query_row("SELECT id, name, color FROM tags WHERE id = ?1", [id], |r| {
-        Ok(Tag { id: r.get(0)?, name: r.get(1)?, color: r.get(2)? })
-    })
-    .optional()?
-    .ok_or_else(|| AppError::NotFound(format!("tag {id}")))
+    conn.query_row(&format!("SELECT {TAG_COLUMNS} FROM tags WHERE id = ?1"), [id], tag_row)
+        .optional()?
+        .ok_or_else(|| AppError::NotFound(format!("tag {id}")))
 }
 
 /// Finds a tag by name, ignoring letter case.
 pub fn find_tag(conn: &Connection, name: &str) -> AppResult<Option<Tag>> {
-    Ok(conn
-        .query_row("SELECT id, name, color FROM tags WHERE name = ?1", [name], |r| {
-            Ok(Tag { id: r.get(0)?, name: r.get(1)?, color: r.get(2)? })
-        })
-        .optional()?)
+    Ok(conn.query_row(&format!("SELECT {TAG_COLUMNS} FROM tags WHERE name = ?1"), [name], tag_row).optional()?)
 }
 
 /// The tag and every tag nested under it.
@@ -271,9 +351,12 @@ fn check_color(color: &str) -> AppResult<()> {
 /// and how many tags were created. `color` is used for whatever is created; existing tags keep
 /// their colors. Levels that already exist keep their spelling, so "sci-fi/Aliens" lands under
 /// an existing "Sci-Fi".
-pub(crate) fn ensure_tag(tx: &Transaction, name: &str, color: &str) -> AppResult<(Tag, usize)> {
+///
+/// `builtin` is the group of the top-level tag, used only if that has to be created. Every
+/// level below it takes its parent's group, so a subtree is always in one group.
+pub(crate) fn ensure_tag(tx: &Transaction, name: &str, color: &str, builtin: bool) -> AppResult<(Tag, usize)> {
     let mut path = String::new();
-    let mut last = None;
+    let mut last: Option<Tag> = None;
     let mut created = 0;
     for level in name.split('/') {
         let wanted = if path.is_empty() { level.to_string() } else { format!("{path}/{level}") };
@@ -283,8 +366,12 @@ pub(crate) fn ensure_tag(tx: &Transaction, name: &str, color: &str) -> AppResult
                 last = Some(tag);
             }
             None => {
-                tx.execute("INSERT INTO tags (name, color, created_at) VALUES (?1, ?2, ?3)", params![wanted, color, now()])?;
-                last = Some(Tag { id: tx.last_insert_rowid(), name: wanted.clone(), color: color.to_string() });
+                let group = last.as_ref().map_or(builtin, |parent| parent.builtin);
+                tx.execute(
+                    "INSERT INTO tags (name, color, created_at, builtin) VALUES (?1, ?2, ?3, ?4)",
+                    params![wanted, color, now(), group],
+                )?;
+                last = Some(Tag { id: tx.last_insert_rowid(), name: wanted.clone(), color: color.to_string(), builtin: group });
                 created += 1;
                 path = wanted;
             }
@@ -293,6 +380,8 @@ pub(crate) fn ensure_tag(tx: &Transaction, name: &str, color: &str) -> AppResult
     last.map(|t| (t, created)).ok_or_else(|| AppError::Invalid("A tag needs a name".into()))
 }
 
+/// Makes a tag (and any missing parents). A new top-level tag is the user's own, whatever its
+/// name; a nested one joins its parent's group.
 pub fn create_tag(conn: &mut Connection, name: &str, color: Option<&str>) -> AppResult<Tag> {
     let name = with_existing_parents(conn, &normalize_name(name)?)?;
     if let Some(existing) = find_tag(conn, &name)? {
@@ -306,13 +395,17 @@ pub fn create_tag(conn: &mut Connection, name: &str, color: Option<&str>) -> App
         None => default_color(conn, &name)?,
     };
     let tx = conn.transaction()?;
-    let (tag, _) = ensure_tag(&tx, &name, &color)?;
+    let (tag, _) = ensure_tag(&tx, &name, &color, false)?;
     tx.commit()?;
     Ok(tag)
 }
 
 /// Renames a tag. Tags nested under it move with it, and missing parents of the new name are
 /// created. Refused if any resulting name is already taken by another tag.
+///
+/// Groups: moved under another tag, the tag and everything in it join that tag's group. At the
+/// top level (renamed in place, or taken out of its parent) it keeps the group it had. Parents
+/// created for the new name start in the tag's own group.
 pub fn rename_tag(conn: &mut Connection, id: i64, new_name: &str) -> AppResult<Tag> {
     let tag = get_tag(conn, id)?;
     let new_name = with_existing_parents(conn, &normalize_name(new_name)?)?;
@@ -338,16 +431,23 @@ pub fn rename_tag(conn: &mut Connection, id: i64, new_name: &str) -> AppResult<T
             }
         }
     }
+    // The group it ends up in: the new top-level tag's, if that's another tag that exists
+    // already; otherwise (it is the top level, or the top level is about to be created for it)
+    // its own.
+    let builtin = match parent_names(&new_name).first() {
+        Some(top) => find_tag(conn, top)?.filter(|t| !moving_ids.contains(&t.id)).map_or(tag.builtin, |t| t.builtin),
+        None => tag.builtin,
+    };
     let tx = conn.transaction()?;
     // Two steps, so names that swap within the subtree (only letter case can) never collide.
     for (id, _) in &renamed {
         tx.execute("UPDATE tags SET name = '\u{1}' || id WHERE id = ?1", [id])?;
     }
     for (id, name) in &renamed {
-        tx.execute("UPDATE tags SET name = ?1 WHERE id = ?2", params![name, id])?;
+        tx.execute("UPDATE tags SET name = ?1, builtin = ?2 WHERE id = ?3", params![name, builtin, id])?;
     }
     if let Some(parent) = parent_names(&new_name).pop() {
-        ensure_tag(&tx, &parent, &tag.color)?;
+        ensure_tag(&tx, &parent, &tag.color, builtin)?;
     }
     tx.commit()?;
     get_tag(conn, id)

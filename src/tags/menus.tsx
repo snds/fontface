@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { toast } from "sonner";
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuGroup,
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
   ContextMenuSeparator,
@@ -13,7 +15,9 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -22,17 +26,20 @@ import {
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
+import { useSettings } from "@/settings/useSettings";
 import { COLOR_NAMES, PALETTE, colorVar, type Tag, type TagColor } from "./api";
 import { openTagDialog } from "./dialogs";
-import { moveTag } from "./drag";
+import { moveTag, moveToGroup } from "./drag";
 import type { Locations } from "./locations";
-import { fold, isWithin, parentOf, useTagIndex } from "./model";
+import { fold, GROUP_LABELS, isWithin, parentOf, useTagIndex, type TagGroup, type TagNode } from "./model";
 import { recolorTag, setLocationColor } from "./store";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** The same menu items work in a right-click menu and in a "…" menu. */
 interface Kit {
   Item: React.ComponentType<any>;
+  Group: React.ComponentType<any>;
+  Label: React.ComponentType<any>;
   Separator: React.ComponentType<any>;
   Sub: React.ComponentType<any>;
   SubTrigger: React.ComponentType<any>;
@@ -44,6 +51,8 @@ interface Kit {
 
 export const DROPDOWN: Kit = {
   Item: DropdownMenuItem,
+  Group: DropdownMenuGroup,
+  Label: DropdownMenuLabel,
   Separator: DropdownMenuSeparator,
   Sub: DropdownMenuSub,
   SubTrigger: DropdownMenuSubTrigger,
@@ -54,6 +63,8 @@ export const DROPDOWN: Kit = {
 
 export const CONTEXT: Kit = {
   Item: ContextMenuItem,
+  Group: ContextMenuGroup,
+  Label: ContextMenuLabel,
   Separator: ContextMenuSeparator,
   Sub: ContextMenuSub,
   SubTrigger: ContextMenuSubTrigger,
@@ -104,13 +115,52 @@ export function openMenuFromKeyboard(e: React.KeyboardEvent): boolean {
   return true;
 }
 
+/**
+ * Tags listed the way the sidebar shows them: My tags first, then Built-in under a quiet label.
+ * The label only appears when both groups have something to list. `item` draws one tag.
+ */
+export function GroupedTags({
+  kit,
+  groups,
+  item,
+}: {
+  kit: Kit;
+  groups: { group: TagGroup; nodes: TagNode[] }[];
+  item: (node: TagNode) => React.ReactNode;
+}) {
+  const { Group, Label, Separator } = kit;
+  const shown = groups.filter((g) => g.nodes.length);
+  if (shown.length < 2) return <>{shown.flatMap((g) => g.nodes.map(item))}</>;
+  return (
+    <>
+      {shown.map((g, i) => (
+        <Fragment key={g.group}>
+          {i > 0 && <Separator />}
+          <Group>
+            <Label>{GROUP_LABELS[g.group]}</Label>
+            {g.nodes.map(item)}
+          </Group>
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+/** True while Settings › Sidebar hides the Built-in group, so a move into it can say so. */
+export function useBuiltinHidden(): boolean {
+  return useSettings().settings?.sidebar.builtinTags === false;
+}
+
 /** "Move to": the top level, or any tag that isn't this one, inside it, or its parent already. */
 function MoveSub({ kit, tag }: { kit: Kit; tag: Tag }) {
   const { Sub, SubTrigger, SubContent, Item, Separator } = kit;
   const index = useTagIndex();
+  const builtinHidden = useBuiltinHidden();
   const parent = parentOf(tag.name);
-  const places = index.ordered.filter((n) => !isWithin(n.tag.name, tag.name) && fold(n.tag.name) !== fold(parent ?? ""));
-  if (!parent && !places.length) return null;
+  const fits = (n: TagNode) => !isWithin(n.tag.name, tag.name) && fold(n.tag.name) !== fold(parent ?? "");
+  const groups = index.byGroup.map((g) => ({ group: g.group, nodes: g.nodes.filter(fits) }));
+  const places = groups.some((g) => g.nodes.length);
+  if (!parent && !places) return null;
   return (
     <Sub>
       <SubTrigger>
@@ -120,21 +170,43 @@ function MoveSub({ kit, tag }: { kit: Kit; tag: Tag }) {
       <SubContent className="max-h-[min(26rem,var(--available-height))] min-w-48 overflow-y-auto">
         {parent && (
           <>
-            <Item onClick={() => moveTag(tag, null)}>
+            <Item onClick={() => moveTag(tag, null, { builtinHidden, follow: true })}>
               <Icon name="vertical_align_top" size={16} />
               Top level
             </Item>
-            {places.length > 0 && <Separator />}
+            {places && <Separator />}
           </>
         )}
-        {places.map((n) => (
-          <Item key={n.tag.id} title={n.tag.name} style={{ paddingLeft: 6 + n.depth * 14 }} onClick={() => moveTag(tag, n.tag)}>
-            <Icon name="label" size={16} filled style={{ color: colorVar(n.tag.color) }} />
-            <span className="truncate">{n.label}</span>
-          </Item>
-        ))}
+        <GroupedTags
+          kit={kit}
+          groups={groups}
+          item={(n) => (
+            <Item key={n.tag.id} title={n.tag.name} style={{ paddingLeft: 6 + n.depth * 14 }} onClick={() => moveTag(tag, n.tag, { builtinHidden, follow: true })}>
+              <Icon name="label" size={16} filled style={{ color: colorVar(n.tag.color) }} />
+              <span className="truncate">{n.label}</span>
+            </Item>
+          )}
+        />
       </SubContent>
     </Sub>
+  );
+}
+
+/**
+ * "Move to Built-in" or "Move to My tags". A group belongs to a top-level tag and everything in
+ * it, so on a nested tag this moves the tag at the top of its branch, and says which.
+ */
+function GroupItem({ kit, tag }: { kit: Kit; tag: Tag }) {
+  const { Item } = kit;
+  const index = useTagIndex();
+  const builtinHidden = useBuiltinHidden();
+  const top = index.topTag(tag.id) ?? tag;
+  const to: TagGroup = top.builtin ? "mine" : "builtin";
+  return (
+    <Item onClick={() => moveToGroup(tag, to, { builtinHidden, follow: true })} title={top.id !== tag.id ? `Everything in “${top.name}” moves with it` : undefined}>
+      <Icon name={to === "builtin" ? "move_down" : "move_up"} size={16} />
+      {top.id === tag.id ? `Move to ${GROUP_LABELS[to]}` : `Move “${top.name}” to ${GROUP_LABELS[to]}`}
+    </Item>
   );
 }
 
@@ -152,6 +224,7 @@ export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
         New tag inside…
       </Item>
       <MoveSub kit={kit} tag={tag} />
+      <GroupItem kit={kit} tag={tag} />
       <Item onClick={() => openTagDialog({ kind: "export", tag })}>
         <Icon name="ios_share" size={16} />
         Export…

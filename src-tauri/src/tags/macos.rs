@@ -88,6 +88,7 @@ pub fn finder_source<'a>(paths: impl IntoIterator<Item = &'a String>) -> Source 
                 fonts: files.into_iter().map(SourceFont::File).collect(),
                 suggested: true,
                 note: None,
+                builtin: None,
             })
             .collect(),
         notes,
@@ -137,7 +138,15 @@ pub fn font_book_source() -> Source {
                 }
             }
             let display = if raw == FAVORITES { "Favorites".to_string() } else { raw.replace(LEVEL_SEPARATOR, "/") };
-            tags.push(SourceTag { name: display, color: None, fonts: fonts.into_iter().collect(), suggested: true, note: None });
+            // Font Book's starter collections ("Fixed Width", "Fun"…) land in Built-in by name.
+            tags.push(SourceTag {
+                name: display,
+                color: None,
+                fonts: fonts.into_iter().collect(),
+                suggested: true,
+                note: None,
+                builtin: None,
+            });
         }
         Source {
             label: "Font Book collections".into(),

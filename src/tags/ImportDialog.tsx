@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { colorVar, tagsApi, type ImportPreview, type ImportSource } from "./api";
-import { depthOf, leafOf } from "./model";
+import { depthOf, leafOf, parentOf } from "./model";
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
@@ -159,22 +159,40 @@ export function ImportDialog({
     const id = ++request.current;
     const picked = await pickSource(kind).catch(() => null);
     if (!picked || id !== request.current) return;
-    await load(picked, id);
+    await load(picked, { id });
   };
 
-  const load = async (picked: ImportSource, id = ++request.current) => {
+  /**
+   * Reads the preview: of adding, or with `asReplace`, of replacing (which starts from no tags,
+   * so names, colors and groups can differ). With `keep`, the tags ticked when it lands stay
+   * ticked (read then, so a change made while it loads isn't undone; names compared ignoring
+   * letter case, since a replace uses the backup's spelling).
+   */
+  const load = async (
+    picked: ImportSource,
+    { id = ++request.current, asReplace = false, keep }: { id?: number; asReplace?: boolean; keep?: Set<string> } = {},
+  ) => {
     setSource(picked);
     setLoading(true);
     setFailed(null);
     try {
-      const p = await tagsApi.importPreview(picked);
+      const p = await tagsApi.importPreview(picked, asReplace);
       if (id !== request.current) return;
       p.tags.sort((a, b) => byTree(a.name, b.name));
       setPreview(p);
-      setChosen(new Set(p.tags.filter((t) => t.suggested).map((t) => t.name)));
+      if (keep) {
+        setChosen((now) => {
+          const ticked = new Set([...now].map((name) => name.toLowerCase()));
+          return new Set(p.tags.filter((t) => ticked.has(t.name.toLowerCase())).map((t) => t.name));
+        });
+      } else {
+        setChosen(new Set(p.tags.filter((t) => t.suggested).map((t) => t.name)));
+      }
     } catch (e) {
       if (id !== request.current) return;
       if (restoring) {
+        // Not the preview of the other way of restoring, as if it were this one's.
+        setPreview(null);
         setFailed(String(e));
       } else {
         toast.error("Couldn't read that", { description: String(e) });
@@ -183,6 +201,12 @@ export function ImportDialog({
     } finally {
       if (id === request.current) setLoading(false);
     }
+  };
+
+  /** Restoring: adding and replacing plan differently, so the preview is read again. */
+  const changeMode = (next: RestoreMode) => {
+    setMode(next);
+    if (source) load(source, { asReplace: next === "replace", keep: chosen });
   };
 
   useEffect(() => {
@@ -217,6 +241,7 @@ export function ImportDialog({
   };
 
   const picked = useMemo(() => preview?.tags.filter((t) => chosen.has(t.name)) ?? [], [preview, chosen]);
+  const listed = useMemo(() => new Set(preview?.tags.map((t) => t.name.toLowerCase()) ?? []), [preview]);
   const pendingFonts = picked.reduce((sum, t) => sum + t.unmatched, 0);
   const toggle = (name: string, on: boolean) =>
     setChosen((s) => {
@@ -281,7 +306,7 @@ export function ImportDialog({
           // -m-1 p-1: room for focus rings inside the scrolling area.
           <div className="-m-1 flex min-h-0 flex-col gap-3 overflow-y-auto p-1">
             {restoring && preview.tags.length > 0 && (
-              <ChoiceGroup look="cards" label="How to restore" value={mode} options={RESTORE_MODES} onChange={setMode} />
+              <ChoiceGroup look="cards" label="How to restore" value={mode} options={RESTORE_MODES} onChange={changeMode} />
             )}
             <p className="text-sm">
               {preview.tags.length ? (
@@ -296,8 +321,11 @@ export function ImportDialog({
             {preview.tags.length > 0 && (
               // When space is short the table gives way first, down to about three rows; then
               // the whole middle scrolls. Two rows or fewer are smaller than that, so they keep
-              // their height.
-              <div className={cn("max-h-[50vh] overflow-y-auto rounded-lg border", preview.tags.length > 2 ? "min-h-32" : "shrink-0")}>
+              // their height. Dimmed while the other way of restoring is read.
+              <div
+                className={cn("max-h-[50vh] overflow-y-auto rounded-lg border", preview.tags.length > 2 ? "min-h-32" : "shrink-0", loading && "opacity-60")}
+                aria-busy={loading || undefined}
+              >
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-popover text-muted-foreground">
                     <tr className="border-b text-left">
@@ -331,6 +359,13 @@ export function ImportDialog({
                               <span className="flex items-center gap-1.5">
                                 <Icon name="label" size={14} filled style={{ color: colorVar(t.color) }} />
                                 <span className="truncate font-medium">{depthOf(t.name) ? leafOf(t.name) : t.name}</span>
+                                {/* Where it lands in the sidebar. Tags nested inside follow their top-level tag, so
+                                    it's said once per branch: on the top-most tag the list shows. */}
+                                {t.builtin && !listed.has(parentOf(t.name)?.toLowerCase() ?? "") && (
+                                  <span className="shrink-0 text-muted-foreground" title="Goes under Built-in in the sidebar (tags from Font Book and Typeface)">
+                                    Built-in
+                                  </span>
+                                )}
                                 {t.exists && !replace && <span className="text-muted-foreground">(you have this tag)</span>}
                               </span>
                               {t.note && <span className="text-muted-foreground italic">{t.note}</span>}
@@ -378,7 +413,7 @@ export function ImportDialog({
             Cancel
           </Button>
           {preview && (
-            <Button variant={replace ? "destructive" : "default"} onClick={apply} disabled={!chosen.size || applying}>
+            <Button variant={replace ? "destructive" : "default"} onClick={apply} disabled={!chosen.size || applying || loading}>
               {applying
                 ? restoring
                   ? "Restoring…"

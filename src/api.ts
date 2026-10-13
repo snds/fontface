@@ -262,6 +262,8 @@ export interface SidebarSections {
   adobe: boolean;
   purchases: boolean;
   tags: boolean;
+  /** The Built-in group under Tags (tags from Font Book and Typeface). Hidden, they still exist and still show on fonts. */
+  builtinTags: boolean;
 }
 
 export interface AppSettings {

@@ -202,6 +202,7 @@ pub fn run() {
             tags::commands::tags_create,
             tags::commands::tags_rename,
             tags::commands::tags_recolor,
+            tags::commands::tags_set_group,
             tags::commands::tags_delete,
             tags::commands::tags_assign,
             tags::commands::location_color_set,

@@ -46,6 +46,12 @@ pub struct ExportTag {
     pub name: String,
     pub color: String,
     pub fonts: Vec<ExportFont>,
+    /// The tag's group: Built-in (`true`) or the user's own (`false`). Fontface always writes it,
+    /// so a backup restores groups as they were. Files from before groups don't have it; their
+    /// new tags start where the name rule puts them (`BUILTIN_NAMES`). Optional, so the format
+    /// stays version 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -143,7 +149,7 @@ pub fn collect(conn: &Connection, only: Option<&[i64]>) -> AppResult<Vec<ExportT
         fonts.sort_by(|a, b| {
             (a.family.as_deref().unwrap_or("~"), a.style.as_deref(), &a.key).cmp(&(b.family.as_deref().unwrap_or("~"), b.style.as_deref(), &b.key))
         });
-        out.push(ExportTag { name: tag.name, color: tag.color, fonts });
+        out.push(ExportTag { name: tag.name, color: tag.color, fonts, builtin: Some(tag.builtin) });
     }
     Ok(out)
 }
@@ -192,6 +198,7 @@ pub fn parse_json(bytes: &[u8]) -> AppResult<Source> {
             fonts: t.fonts.into_iter().filter_map(source_font).collect(),
             suggested: true,
             note: None,
+            builtin: t.builtin,
         })
         .collect();
     Ok(Source {

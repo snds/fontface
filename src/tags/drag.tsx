@@ -4,12 +4,14 @@ import { toast } from "sonner";
 import type { Face } from "@/library";
 import { Icon } from "@/components/ui/icon";
 import { colorVar, type Tag } from "./api";
-import { buildIndex, fold, isWithin, leafOf, parentOf } from "./model";
-import { organizeNow, renameTag, setFaceTags } from "./store";
+import { buildIndex, fold, GROUP_LABELS, groupOfTag, isWithin, leafOf, parentOf, topOf, type TagGroup } from "./model";
+import { followTag } from "./reveal";
+import { organizeNow, renameTag, setFaceTags, setTagGroup } from "./store";
 
 /**
- * Dragging in the sidebar: fonts onto a tag to tag them, a tag onto another to nest it, or a
- * tag onto "Top level" to un-nest it.
+ * Dragging in the sidebar: fonts onto a tag to tag them, a tag onto another to nest it, a
+ * tag onto "Top level" to un-nest it, or a top-level tag onto the other group's heading (My
+ * tags, Built-in) to move it there.
  *
  * Built on pointer events rather than HTML drag and drop, which the Windows web view only
  * allows if the app gives up file drops. Every drag has a menu equivalent (Add to Tag, Move
@@ -19,7 +21,8 @@ export type DragPayload = { kind: "fonts"; faces: Face[]; label: string } | { ki
 
 interface Active {
   payload: DragPayload;
-  /** The drop target under the pointer, if it accepts this payload: "tag:<id>" or "top". */
+  /** The drop target under the pointer, if it accepts this payload: "tag:<id>", "top", or a
+   *  group heading ("group:mine", "group:builtin"). */
   over: string | null;
 }
 
@@ -75,9 +78,17 @@ function tagById(id: number): Tag | undefined {
   return organizeNow().tags.find((t) => t.id === id);
 }
 
+/** The group a "group:<name>" drop target stands for, if it is one. */
+const groupTarget = (target: string | null): TagGroup | null =>
+  target === "group:mine" ? "mine" : target === "group:builtin" ? "builtin" : null;
+
 /** Whether `target` takes this payload. */
 function accepts(payload: DragPayload, target: string): boolean {
   if (target === "top") return payload.kind === "tag" && parentOf(payload.tag.name) !== null;
+  // A group heading takes a top-level tag from the other group. A nested tag would have to leave
+  // its parent too; "Move to" and the right-click menu do that in clear steps.
+  const group = groupTarget(target);
+  if (group) return payload.kind === "tag" && parentOf(payload.tag.name) === null && groupOfTag(payload.tag) !== group;
   if (!target.startsWith("tag:")) return false;
   const tag = tagById(Number(target.slice(4)));
   if (!tag) return false;
@@ -95,21 +106,87 @@ function targetAt(x: number, y: number, payload: DragPayload): string | null {
 
 const failed = (what: string) => (e: unknown) => toast.error(`Couldn't ${what}`, { description: String(e) });
 
+/** Said when a tag moves into Built-in while the sidebar hides it, so it doesn't just vanish. */
+const HIDDEN_NOTE = "Built-in tags are hidden in the sidebar. Settings › Sidebar shows them.";
+
+/**
+ * Said when a tag joins the other group because it moved inside a tag there (whose top-level tag
+ * is `top`), since it leaves the group it was shown in: "It's in Built-in now, like “Fun”." A new
+ * tag (`created`) wasn't anywhere before: "It's in Built-in, like “Fun”."
+ */
+export function joinedGroupNote(group: TagGroup, top: string, builtinHidden: boolean, created = false): string {
+  const hidden = group === "builtin" && builtinHidden ? ` ${HIDDEN_NOTE}` : "";
+  return `It's in ${GROUP_LABELS[group]}${created ? "" : " now"}, like “${top}”.${hidden}`;
+}
+
+/** How a move was asked for. */
+interface MoveOptions {
+  /** Settings › Sidebar hides Built-in, so a move into it says so. */
+  builtinHidden?: boolean;
+  /** From a menu: focus follows the tag to its new place (see followTag). */
+  follow?: boolean;
+}
+
 /** Toasts with Undo stay long enough to reach the button. */
 const UNDO_MS = 10_000;
 
-/** Moves a tag to `parent` (null: top level), with Undo. */
-export function moveTag(tag: Tag, parent: Tag | null) {
+/**
+ * Moves a tag to `parent` (null: top level), with Undo. Inside a tag of the other group, it
+ * joins that group (a nested tag is always in its top-level tag's group); at the top level it
+ * keeps its own.
+ */
+export function moveTag(tag: Tag, parent: Tag | null, { builtinHidden = false, follow = false }: MoveOptions = {}) {
   const name = parent ? `${parent.name}/${leafOf(tag.name)}` : leafOf(tag.name);
   const before = tag.name;
+  // Into a tag of the other group: say so, since the tag leaves the group it was shown in.
+  const switched = parent && parent.builtin !== tag.builtin ? joinedGroupNote(groupOfTag(parent), topOf(parent.name), builtinHidden) : undefined;
+  // Undo renames it back. Back under its old parent it takes that parent's group again; a tag
+  // that was at the top level keeps the group it has, so Undo also puts that back.
+  const undo = (moved: Tag) =>
+    renameTag(moved.id, before)
+      .then(() => (switched && !parentOf(before) ? setTagGroup(moved.id, tag.builtin) : undefined))
+      .then(() => followTag(moved.id, builtinHidden))
+      .catch(failed("undo the move"));
   renameTag(tag.id, name)
-    .then((moved) =>
+    .then((moved) => {
+      // The rename is saved before the row moves, so by now the menu has long put focus back on
+      // the row; it follows only if the move took the row from under it.
+      if (follow) followTag(moved.id, builtinHidden);
       toast.success(parent ? `Moved “${leafOf(before)}” into “${parent.name}”` : `Moved “${leafOf(before)}” to the top level`, {
+        description: switched,
         duration: UNDO_MS,
-        action: { label: "Undo", onClick: () => renameTag(moved.id, before).catch(failed("undo the move")) },
+        action: { label: "Undo", onClick: () => undo(moved) },
+      });
+    })
+    .catch(failed("move the tag"));
+}
+
+/**
+ * Moves a tag's top-level tag, and everything in it, to Built-in or to My tags, with Undo. For
+ * a nested tag that's the tag at the top of its branch: a group belongs to a whole branch.
+ */
+export function moveToGroup(tag: Tag, to: TagGroup, { builtinHidden = false, follow = false }: MoveOptions = {}) {
+  const builtin = to === "builtin";
+  // Back where it was, and focus with it if it was on the row or the toast.
+  const undo = (top: Tag) => {
+    const back = setTagGroup(top.id, !builtin);
+    followTag(tag.id, builtinHidden);
+    back.catch(failed("undo the move"));
+  };
+  setTagGroup(tag.id, builtin)
+    .then((top) =>
+      toast.success(`Moved “${top.name}” to ${GROUP_LABELS[to]}`, {
+        description:
+          [top.id !== tag.id && `“${leafOf(tag.name)}” is inside it, so it moved too.`, builtin && builtinHidden && HIDDEN_NOTE].filter(Boolean).join(" ") ||
+          undefined,
+        duration: UNDO_MS,
+        action: { label: "Undo", onClick: () => undo(top) },
       }),
     )
     .catch(failed("move the tag"));
+  // The group shows at once (setTagGroup doesn't wait for the save), so the row has already
+  // left the list, taking the menu it was chosen from: focus goes with it.
+  if (follow) followTag(tag.id, builtinHidden, true);
 }
 
 /** Adds a tag to fonts, with Undo for the ones that didn't have it. */
@@ -132,6 +209,8 @@ export function tagFonts(tag: Tag, faces: Face[], label: string) {
 
 function drop(payload: DragPayload, target: string) {
   if (target === "top" && payload.kind === "tag") return moveTag(payload.tag, null);
+  const group = groupTarget(target);
+  if (group) return payload.kind === "tag" ? moveToGroup(payload.tag, group) : undefined;
   const tag = tagById(Number(target.slice(4)));
   if (!tag) return;
   if (payload.kind === "fonts") tagFonts(tag, payload.faces, payload.label);
@@ -221,6 +300,7 @@ export function DragLayer() {
   if (!drag) return null;
   const { payload, over } = drag;
   const overTag = over?.startsWith("tag:") ? tagById(Number(over.slice(4))) : undefined;
+  const overGroup = groupTarget(over);
   const hint =
     payload.kind === "fonts"
       ? overTag
@@ -228,9 +308,11 @@ export function DragLayer() {
         : "Drop on a tag to add it"
       : over === "top"
         ? "Move to the top level"
-        : overTag
-          ? `Move into “${overTag.name}”`
-          : "Drop on a tag to nest it";
+        : overGroup
+          ? `Move to ${GROUP_LABELS[overGroup]}`
+          : overTag
+            ? `Move into “${overTag.name}”`
+            : "Drop on a tag to nest it";
   return createPortal(
     <div
       ref={(el) => {

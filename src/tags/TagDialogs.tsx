@@ -17,10 +17,13 @@ import { Input } from "@/components/ui/input";
 import type { Tag, TagColor } from "./api";
 import { ColorSwatches } from "./ColorSwatches";
 import { openTagDialog, useTagDialog } from "./dialogs";
+import { joinedGroupNote } from "./drag";
 import { ExportDialog } from "./ExportDialog";
 import { describeFaces } from "./FontMenu";
 import { ImportDialog } from "./ImportDialog";
-import { countByTag, useTagIndex } from "./model";
+import { useBuiltinHidden } from "./menus";
+import { countByTag, groupOfTag, isWithin, topOf, useTagIndex } from "./model";
+import { revealTag } from "./reveal";
 import { createTag, deleteTag, reload, renameTag, setFaceTags } from "./store";
 import { TagPicker } from "./TagPicker";
 
@@ -79,6 +82,7 @@ function NameDialog({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const errorId = useId();
+  const builtinHidden = useBuiltinHidden();
 
   useEffect(() => {
     if (!dialog) return;
@@ -93,16 +97,33 @@ function NameDialog({
     }
   }, [dialog]);
 
+  /**
+   * The tag in sight in the sidebar. A "/" in the name can put it inside a tag of the other group,
+   * which it then joins (`expected`: the group it was in, or would be in): say so, as a move does,
+   * so it doesn't just seem to vanish.
+   */
+  const landed = (tag: Tag, expected: boolean, title: string, created: boolean) => {
+    revealTag(tag.id, builtinHidden);
+    if (tag.builtin !== expected) {
+      toast.success(title, { description: joinedGroupNote(groupOfTag(tag), topOf(tag.name), builtinHidden, created) });
+    }
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!dialog || saving) return;
     setSaving(true);
     try {
       if (dialog.kind === "rename") {
-        await renameTag(dialog.tag.id, name);
+        const renamed = await renameTag(dialog.tag.id, name);
+        landed(renamed, dialog.tag.builtin, `Renamed “${dialog.tag.name}” to “${renamed.name}”`, false);
       } else {
         const tag = await createTag(name, color ?? undefined);
         if (dialog.faces?.length) await setFaceTags([tag.id], dialog.faces, true);
+        // A new top-level tag is the user's own; "New tag inside…" a tag goes in that tag's group
+        // (unless the name was changed to put it somewhere else).
+        const insideParent = dialog.parent && isWithin(tag.name, dialog.parent.name);
+        landed(tag, insideParent ? dialog.parent!.builtin : false, `Created “${tag.name}”`, true);
       }
       close();
     } catch (err) {

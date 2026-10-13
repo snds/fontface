@@ -68,7 +68,7 @@ search results from all of them, and every change saves at once. Not yet checked
 | Keep running when the window is closed | 🟡 | n/a | Click the Dock icon to bring the window back |
 | Check folders for changes when Fontface opens | 🟡 | ⬜ | When off, only folders with no fonts yet are scanned |
 | Show installed fonts in All Fonts | 🟡 | ⬜ | When off, All Fonts leaves out fonts that are only in the OS font folders (including ones the user installed); a font with a copy in one of their folders stays. Font Book still lists them; the All Fonts count follows |
-| Show or hide sidebar sections | 🟡 | ⬜ | Font Book (with its folders), Google Fonts, Adobe Fonts, Purchases, Tags. All Fonts and folders always show. A view whose section is hidden goes to All Fonts |
+| Show or hide sidebar sections | 🟡 | ⬜ | Font Book (with its folders), Google Fonts, Adobe Fonts, Purchases, Tags, and Built-in tags (inside Tags; off while Tags is off). All Fonts and folders always show. A view whose section is hidden goes to All Fonts. Hidden built-in tags still exist, still show on fonts and still appear in tag menus |
 | Turn fonts on until logout or restart (temporary) | 🟡 | ⬜ | Applies to fonts turned on afterwards; optional "turn them off when Fontface quits". Updating a Google family or replacing a purchase keeps each font on the way it was |
 | Fonts turned off while Fontface was closed: turn back on / ask / leave off | 🟡 | ⬜ | "Ask me" shows a toast at launch with "Turn back on" and "Keep off". Swiping it away asks again next launch |
 | Turn off all fonts Fontface turned on | 🟡 | ⬜ | Asks first, with the number of font files on now, and how many more are set to come back on (e.g. on a drive that isn't connected) |
@@ -101,6 +101,7 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Tag a style, a whole family, or many selected rows at once | ✅ | ⬜ |
 | Tags survive rescans and duplicates (kept by PostScript name, not by file) | ✅ | ⬜ |
 | Tag views in the sidebar, with counts; combine with All / Active / Inactive | ✅ | ⬜ |
+| Tag groups: My tags, and Built-in (Font Book's starter collections, Typeface's "Style" tags), each under a heading that opens and closes; move tags between them from the menu or by dragging onto a heading; groups kept in exports and backups. Not yet checked in the running app | 🟡 | ⬜ |
 | Search matches tag names | ✅ | ⬜ |
 | Location colors (Font Book, services, folders, subfolders), with defaults by source | ✅ | ⬜ |
 | Subfolder tree under each folder, each subfolder a view | ✅ | ⬜ |

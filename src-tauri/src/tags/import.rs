@@ -6,6 +6,10 @@
 //! preview. Applying the same source again adds nothing new: tags merge by name (ignoring
 //! letter case) and each font gets a tag at most once.
 //!
+//! Tags an import creates start in the group the source gives (a Fontface tags file says), else
+//! where [`super::BUILTIN_NAMES`] puts them: Font Book's starter collections and Typeface's
+//! "Style" go to Built-in. A tag that already exists keeps its group.
+//!
 //! A source made before a folder was moved with Locate… names that folder by its old path.
 //! Preview and import both point those paths at the folder's current place first
 //! ([`follow_moves`]), so they agree and the colors and fonts land where the folder is now.
@@ -48,6 +52,10 @@ pub struct SourceTag {
     /// which fonts it had turned on.
     pub suggested: bool,
     pub note: Option<String>,
+    /// The group the source puts it in (Built-in, or the user's own), if it says. Only Fontface
+    /// tags files do; for the rest, a tag the import creates starts where
+    /// [`super::BUILTIN_NAMES`] puts it.
+    pub builtin: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -69,8 +77,12 @@ pub struct PlannedTag {
     pub name: String,
     /// The color it has, or will get.
     pub color: String,
-    /// A tag with this name already exists; fonts are added to it.
+    /// A tag with this name already exists; fonts are added to it. Never when replacing, since
+    /// every tag is deleted first.
     pub exists: bool,
+    /// In the Built-in group, or will be once imported. An existing tag keeps its group (when
+    /// adding; a replace creates every tag again, with the group the source or the name gives).
+    pub builtin: bool,
     /// Fonts the source lists for it.
     pub fonts: usize,
     /// Library styles it will be on.
@@ -355,7 +367,9 @@ fn follow_moves<'a>(conn: &Connection, matcher: &Matcher, source: &'a Source) ->
 }
 
 /// Matches a source against the library. Writes nothing. The source has followed any moves.
-fn resolve(conn: &Connection, matcher: &Matcher, source: &Source) -> AppResult<(Vec<Resolved>, ImportPreview)> {
+/// With `replace`, it plans the way a replace runs: against no tags, since they're all deleted
+/// first. So a replace's preview shows the names, colors and groups the restore will create.
+fn resolve(conn: &Connection, matcher: &Matcher, source: &Source, replace: bool) -> AppResult<(Vec<Resolved>, ImportPreview)> {
     // Merge tags whose names differ only in letter case (ASCII, like SQLite's NOCASE).
     let mut order: Vec<String> = Vec::new();
     let mut merged: HashMap<String, (String, Vec<&SourceTag>)> = HashMap::new();
@@ -380,16 +394,36 @@ fn resolve(conn: &Connection, matcher: &Matcher, source: &Source) -> AppResult<(
 
     // Colors for tags that will be created: the source's, else the parent's, else the
     // least-used color among top-level tags (counting ones this import creates).
-    let existing = list_tags(conn)?;
+    let existing = if replace { Vec::new() } else { list_tags(conn)? };
     let mut top_colors: Vec<String> = existing.iter().filter(|t| !t.name.contains('/')).map(|t| t.color.clone()).collect();
     let mut planned_colors: HashMap<String, String> = HashMap::new();
+
+    // Groups. A whole subtree is in its top-level tag's group, so only the top level decides:
+    // an existing top-level tag keeps its own; one this import creates takes the group the source
+    // gives it (the top-level entry's, else the shallowest entry under it that says), else the
+    // name rule (`BUILTIN_NAMES`).
+    let mut source_groups: HashMap<String, bool> = HashMap::new();
+    for folded in &order {
+        let (name, parts) = &merged[folded];
+        if let Some(builtin) = parts.iter().find_map(|p| p.builtin) {
+            // Parents come first in `order`, so the shallowest entry wins.
+            source_groups.entry(super::top_level(name).to_ascii_lowercase()).or_insert(builtin);
+        }
+    }
+    let group_of = |name: &str| -> bool {
+        let top = super::top_level(name);
+        match existing.iter().find(|t| t.name.eq_ignore_ascii_case(top)) {
+            Some(t) => t.builtin,
+            None => source_groups.get(&top.to_ascii_lowercase()).copied().unwrap_or_else(|| super::is_builtin_name(top)),
+        }
+    };
 
     let mut matches: HashMap<&SourceFont, Match> = HashMap::new();
     let mut missing: BTreeMap<&SourceFont, BTreeSet<String>> = BTreeMap::new();
     let mut out = Vec::new();
     for folded in &order {
         let (name, parts) = &merged[folded];
-        let found = find_tag(conn, name)?;
+        let found = if replace { None } else { find_tag(conn, name)? };
         let display = found.as_ref().map(|t| t.name.clone()).unwrap_or_else(|| name.clone());
         let color = match &found {
             Some(t) => t.color.clone(),
@@ -440,6 +474,7 @@ fn resolve(conn: &Connection, matcher: &Matcher, source: &Source) -> AppResult<(
         spellings.retain(|s| *s != display);
         out.push(Resolved {
             tag: PlannedTag {
+                builtin: group_of(&display),
                 name: display,
                 color,
                 exists: found.is_some(),
@@ -540,18 +575,26 @@ fn has_loose(have: &BTreeSet<String>, key: &str) -> bool {
     !is_loose(key) && key_postscript_name(key).is_some_and(|ps| have.contains(&loose_key(ps)))
 }
 
-/// Builds the matcher and previews in one step, holding `conn` throughout (tests use this).
+/// Builds the matcher and previews adding, in one step, holding `conn` throughout (tests use this).
 #[cfg(test)]
 pub fn preview(conn: &Connection, source: &Source) -> AppResult<ImportPreview> {
     let matcher = Matcher::load(conn)?.with_named_styles(source);
-    preview_with(conn, &matcher, source)
+    preview_with(conn, &matcher, source, false)
 }
 
-/// What an import would do, without changing anything. The commands build the matcher
-/// without holding the lock (see [`Matcher`]).
-pub fn preview_with(conn: &Connection, matcher: &Matcher, source: &Source) -> AppResult<ImportPreview> {
+/// [`preview`] for a replace (see [`replace`]).
+#[cfg(test)]
+pub fn preview_replace(conn: &Connection, source: &Source) -> AppResult<ImportPreview> {
+    let matcher = Matcher::load(conn)?.with_named_styles(source);
+    preview_with(conn, &matcher, source, true)
+}
+
+/// What an import would do, without changing anything: added to the tags there now, or with
+/// `replace`, in place of them (see [`replace_with`]). The commands build the matcher without
+/// holding the lock (see [`Matcher`]).
+pub fn preview_with(conn: &Connection, matcher: &Matcher, source: &Source, replace: bool) -> AppResult<ImportPreview> {
     let source = follow_moves(conn, matcher, source)?;
-    Ok(resolve(conn, matcher, &source)?.1)
+    Ok(resolve(conn, matcher, &source, replace)?.1)
 }
 
 /// [`apply_with`] in one step, holding `conn` throughout (tests use this).
@@ -614,12 +657,14 @@ fn write(
         result.tags_removed = tx.execute("DELETE FROM tags", [])?;
         tx.execute("DELETE FROM location_colors", [])?;
     }
-    // Planned inside the transaction, so a replace plans against no tags: each one is created
-    // again with the source's color. (The matcher only knows the library's fonts, not its tags.)
-    let (resolved, _) = resolve(&tx, matcher, source)?;
+    // Planned inside the transaction, and the way the preview planned it: a replace plans against
+    // no tags, so each one is created again with the source's color and group. (The matcher only
+    // knows the library's fonts, not its tags.)
+    let (resolved, _) = resolve(&tx, matcher, source, replace)?;
     let mut touched = BTreeSet::new();
     for r in resolved.iter().filter(|r| chosen.contains(&r.tag.name.to_ascii_lowercase())) {
-        let (tag, created) = ensure_tag(&tx, &r.tag.name, &r.tag.color)?;
+        // The group only applies if the top-level tag is created; existing ones keep theirs.
+        let (tag, created) = ensure_tag(&tx, &r.tag.name, &r.tag.color, r.tag.builtin)?;
         // Styles that already have the tag through a key kept from an earlier import are left
         // alone, so the preview's "new" count is exactly what gets added.
         let have = assigned_keys(&tx, tag.id)?;

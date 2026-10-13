@@ -37,6 +37,13 @@ pub fn tags_recolor(state: State<'_, AppState>, tag_id: i64, color: String) -> A
     state.write(|conn| super::set_tag_color(conn, tag_id, &color))
 }
 
+/// Moves a tag's top-level tag, and everything nested under it, to Built-in (`builtin`) or to
+/// the user's own tags. Returns the top-level tag, so the UI can say which tag moved.
+#[tauri::command(async)]
+pub fn tags_set_group(state: State<'_, AppState>, tag_id: i64, builtin: bool) -> AppResult<Tag> {
+    state.write(|conn| super::set_group(conn, tag_id, builtin))
+}
+
 /// Deletes a tag and the tags nested under it. Returns the ids deleted.
 #[tauri::command(async)]
 pub fn tags_delete(state: State<'_, AppState>, tag_id: i64) -> AppResult<Vec<i64>> {
@@ -153,11 +160,22 @@ fn matcher_for(state: &AppState, source: &Source) -> AppResult<import::Matcher> 
     Ok(matcher.with_named_styles(source))
 }
 
+/// Only a Fontface tags file (a backup) can replace the tags.
+fn check_replace(source: &ImportRequest, replace: bool) -> AppResult<()> {
+    if replace && !matches!(source, ImportRequest::Fontface { .. }) {
+        return Err(AppError::Invalid("Only a Fontface tags file can replace your tags".into()));
+    }
+    Ok(())
+}
+
+/// What an import would do. With `replace`, as the restore that replaces the tags will do it:
+/// the names, colors and groups it creates (see [`import::replace_with`]).
 #[tauri::command(async)]
-pub fn tags_import_preview(app: AppHandle, state: State<'_, AppState>, source: ImportRequest) -> AppResult<ImportPreview> {
+pub fn tags_import_preview(app: AppHandle, state: State<'_, AppState>, source: ImportRequest, replace: bool) -> AppResult<ImportPreview> {
+    check_replace(&source, replace)?;
     let source = load_source(&app, &state, &source)?;
     let matcher = matcher_for(&state, &source)?;
-    import::preview_with(&*state.conn()?, &matcher, &source)
+    import::preview_with(&*state.conn()?, &matcher, &source, replace)
 }
 
 /// Applies the tags the user ticked in the preview (by name). With `replace` (restoring a
@@ -172,9 +190,7 @@ pub fn tags_import_apply(
     keep_unmatched: bool,
     replace: bool,
 ) -> AppResult<ImportResult> {
-    if replace && !matches!(source, ImportRequest::Fontface { .. }) {
-        return Err(AppError::Invalid("Only a Fontface tags file can replace your tags".into()));
-    }
+    check_replace(&source, replace)?;
     let source = load_source(&app, &state, &source)?;
     let matcher = matcher_for(&state, &source)?;
     if replace {

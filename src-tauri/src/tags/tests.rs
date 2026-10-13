@@ -10,7 +10,7 @@ use super::{
     import::{self, Source, SourceFont, SourceTag},
     is_loose, key_postscript_name, loose_key, organize, typeface, LibraryIndex,
 };
-use crate::db;
+use crate::{db, error::AppResult};
 
 struct Library {
     dir: PathBuf,
@@ -77,6 +77,7 @@ fn tag(name: &str, fonts: &[&str]) -> SourceTag {
         fonts: fonts.iter().map(|f| SourceFont::PostScript(f.to_string())).collect(),
         suggested: true,
         note: None,
+        builtin: None,
     }
 }
 
@@ -380,6 +381,7 @@ fn a_fontface_key_falls_back_to_the_postscript_name() {
             fonts: vec![SourceFont::Key("ps:Inter-Regular|static|r".into())],
             suggested: true,
             note: None,
+            builtin: None,
         }],
         ..Default::default()
     };
@@ -456,6 +458,7 @@ fn imports_by_file_and_family() {
             fonts: vec![SourceFont::File("/fonts/Okuda.otf".into()), SourceFont::Family("mono".into())],
             suggested: true,
             note: None,
+            builtin: None,
         }],
         ..Default::default()
     };
@@ -565,10 +568,11 @@ fn csv_quotes_and_defuses_formulas() {
             italic: Some(true),
             files: vec!["/fonts/x.otf".into()],
         }],
+        builtin: None,
     }];
     let csv = export::to_csv(&tags);
     let mut lines = csv.split("\r\n");
-    assert!(export::to_csv(&[export::ExportTag { name: "a;=1".into(), color: "red".into(), fonts: tags[0].fonts.clone() }]).contains("\"a;=1\""), "semicolons are quoted");
+    assert!(export::to_csv(&[export::ExportTag { name: "a;=1".into(), color: "red".into(), fonts: tags[0].fonts.clone(), builtin: None }]).contains("\"a;=1\""), "semicolons are quoted");
     assert_eq!(lines.next(), Some("tag,color,postscript_name,family,style,variable,italic,file"));
     assert_eq!(
         lines.next(),
@@ -610,6 +614,367 @@ fn exporting_one_tag_includes_its_children() {
     assert_eq!(tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["Sci-Fi", "Sci-Fi/Trek"]);
     let only = export::collect(&lib.conn, Some(&[parent.id])).unwrap();
     assert_eq!(only.len(), 1);
+}
+
+// ------------------------------------------------------------------------------------ groups
+
+impl Library {
+    /// Each tag's name and group, in name order.
+    fn groups(&self) -> Vec<(String, bool)> {
+        super::list_tags(&self.conn).unwrap().into_iter().map(|t| (t.name, t.builtin)).collect()
+    }
+
+    fn builtin(&self, name: &str) -> bool {
+        super::find_tag(&self.conn, name).unwrap().unwrap_or_else(|| panic!("no tag {name}")).builtin
+    }
+
+    fn id(&self, name: &str) -> i64 {
+        super::find_tag(&self.conn, name).unwrap().unwrap_or_else(|| panic!("no tag {name}")).id
+    }
+
+    fn set_group(&mut self, name: &str, builtin: bool) -> AppResult<super::Tag> {
+        let id = self.id(name);
+        super::set_group(&mut self.conn, id, builtin)
+    }
+
+    fn rename(&mut self, name: &str, to: &str) -> AppResult<super::Tag> {
+        let id = self.id(name);
+        super::rename_tag(&mut self.conn, id, to)
+    }
+}
+
+fn groups(list: &[(&str, bool)]) -> Vec<(String, bool)> {
+    list.iter().map(|(n, b)| (n.to_string(), *b)).collect()
+}
+
+/// A library from before groups: the tags table without its `builtin` column.
+fn library_before_groups(name: &str, tags: &[&str]) -> Library {
+    let dir = std::env::temp_dir().join(format!("fontface-tags-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let conn = db::open(&dir.join("library.sqlite3")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE tags (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            color       TEXT NOT NULL,
+            created_at  INTEGER NOT NULL
+        );",
+    )
+    .unwrap();
+    for tag in tags {
+        conn.execute("INSERT INTO tags (name, color, created_at) VALUES (?1, 'blue', 0)", [tag]).unwrap();
+    }
+    Library { dir, conn, user_folder: 0, system_folder: 0 }
+}
+
+#[test]
+fn groups_arrive_once_and_sort_existing_tags_by_name() {
+    let mut lib = library_before_groups(
+        "groups-sort",
+        &[
+            "Designer", "Favorites", "fixed width", "Fun", "Global", "Modern", "PDF", "Sci-Fi", "Sci-Fi/Star Trek", "Style",
+            "Style/Monospaced", "Style/Sans", "Styles", "Traditional", "Web", "Web Fonts",
+        ],
+    );
+    super::ensure_schema(&lib.conn).unwrap();
+    let sorted = groups(&[
+        ("Designer", false),
+        ("Favorites", false),
+        ("fixed width", true),
+        ("Fun", true),
+        ("Global", false),
+        ("Modern", true),
+        ("PDF", true),
+        ("Sci-Fi", false),
+        ("Sci-Fi/Star Trek", false),
+        ("Style", true),
+        ("Style/Monospaced", true),
+        ("Style/Sans", true),
+        ("Styles", false), // only starts the same way
+        ("Traditional", true),
+        ("Web", true),
+        ("Web Fonts", false),
+    ]);
+    assert_eq!(lib.groups(), sorted);
+
+    // A second run changes nothing.
+    super::ensure_schema(&lib.conn).unwrap();
+    assert_eq!(lib.groups(), sorted);
+
+    // Tags the user moved stay where they put them, launch after launch.
+    lib.set_group("Style/Sans", false).unwrap();
+    lib.set_group("Designer", true).unwrap();
+    super::ensure_schema(&lib.conn).unwrap();
+    super::ensure_schema(&lib.conn).unwrap();
+    assert!(!lib.builtin("Style") && !lib.builtin("Style/Monospaced") && !lib.builtin("Style/Sans"));
+    assert!(lib.builtin("Designer"));
+    let columns: i64 =
+        lib.conn.query_row("SELECT COUNT(*) FROM pragma_table_info('tags') WHERE name = 'builtin'", [], |r| r.get(0)).unwrap();
+    assert_eq!(columns, 1);
+
+    // A new library gets the column, and nothing to sort.
+    let fresh = Library::new("groups-fresh");
+    super::ensure_schema(&fresh.conn).unwrap();
+    assert!(fresh.groups().is_empty());
+}
+
+#[test]
+fn the_name_rule_looks_at_the_top_level_only() {
+    for name in ["Fixed Width", "fixed width", "FUN", "pdf", "Style", "Style/Sans", "style/Serif/Old", "Web/Thing"] {
+        assert!(super::is_builtin_name(name), "{name}");
+    }
+    for name in ["Styles", "Sci-Fi/Style", "Fun Stuff", "Website", "Designer", "Favorites", "Fixed", ""] {
+        assert!(!super::is_builtin_name(name), "{name}");
+    }
+}
+
+#[test]
+fn nested_tags_follow_their_top_level_group() {
+    let mut lib = Library::new("groups-nesting");
+    // Made in Fontface: the user's own, even with a built-in name.
+    let fun = super::create_tag(&mut lib.conn, "Fun", None).unwrap();
+    assert!(!fun.builtin);
+
+    // Moving a top-level tag moves its whole subtree; a nested tag acts on its top level.
+    super::create_tag(&mut lib.conn, "Fun/Party", None).unwrap();
+    let top = lib.set_group("Fun/Party", true).unwrap();
+    assert_eq!((top.name.as_str(), top.builtin), ("Fun", true));
+    assert!(lib.builtin("Fun/Party"));
+
+    // Created inside a built-in tag: built-in, at every new level.
+    let night = super::create_tag(&mut lib.conn, "fun/Party/Night/Late", None).unwrap();
+    assert_eq!(night.name, "Fun/Party/Night/Late");
+    assert!(night.builtin && lib.builtin("Fun/Party/Night"));
+
+    // Moved under a built-in tag: it and its children become built-in.
+    let trek = super::create_tag(&mut lib.conn, "Sci-Fi/Trek", None).unwrap();
+    super::create_tag(&mut lib.conn, "Sci-Fi/Trek/TNG", None).unwrap();
+    let moved = super::rename_tag(&mut lib.conn, trek.id, "Fun/Trek").unwrap();
+    assert!(moved.builtin && lib.builtin("Fun/Trek/TNG"));
+    assert!(!lib.builtin("Sci-Fi"), "the old parent stays where it was");
+
+    // To the top level, or renamed there: it keeps its group.
+    super::rename_tag(&mut lib.conn, trek.id, "Trek").unwrap();
+    assert!(lib.builtin("Trek") && lib.builtin("Trek/TNG"));
+    super::rename_tag(&mut lib.conn, trek.id, "Star Trek").unwrap();
+    assert!(lib.builtin("Star Trek") && lib.builtin("Star Trek/TNG"));
+
+    // Under a parent that doesn't exist yet: the new parent starts in the tag's own group.
+    super::rename_tag(&mut lib.conn, trek.id, "Shows/Star Trek").unwrap();
+    assert!(lib.builtin("Shows") && lib.builtin("Shows/Star Trek/TNG"));
+
+    // Under one of the user's own tags: it becomes theirs.
+    lib.rename("Shows", "Sci-Fi/Shows").unwrap();
+    assert!(!lib.builtin("Sci-Fi/Shows") && !lib.builtin("Sci-Fi/Shows/Star Trek/TNG"));
+
+    // Back to the user's own, from a nested tag: the whole of "Fun".
+    lib.set_group("Fun/Party/Night", false).unwrap();
+    assert!(lib.groups().iter().all(|(_, b)| !b));
+    assert!(super::set_group(&mut lib.conn, 9999, true).is_err());
+
+    // The UI's list says which group each tag is in.
+    lib.set_group("Fun", true).unwrap();
+    let org = serde_json::to_value(organize(&lib.conn).unwrap()).unwrap();
+    let party = org["tags"].as_array().unwrap().iter().find(|t| t["name"] == "Fun/Party").unwrap();
+    assert_eq!(party["builtin"], true);
+}
+
+#[test]
+fn typeface_and_font_book_imports_sort_new_tags_by_name() {
+    let mut lib = typeface_library("groups-typeface");
+    let source = typeface::parse(TYPEFACE_V4.as_bytes()).unwrap();
+    let preview = import::preview(&lib.conn, &source).unwrap();
+    let planned = |n: &str| preview.tags.iter().find(|t| t.name == n).unwrap().builtin;
+    assert!(planned("Fixed Width") && planned("Style/Sans"));
+    assert!(!planned("Sci-Fi") && !planned("Sci-Fi/Star Trek/TNG"));
+    let chosen: Vec<String> = preview.tags.iter().filter(|t| t.suggested).map(|t| t.name.clone()).collect();
+    import::apply(&mut lib.conn, &source, &chosen, true).unwrap();
+    assert_eq!(
+        lib.groups(),
+        groups(&[
+            ("Fixed Width", true),
+            ("Sci-Fi", false),
+            ("Sci-Fi/Star Trek", false),
+            ("Sci-Fi/Star Trek/TNG", false),
+            ("Style", true), // created as the parent of "Style/Sans"
+            ("Style/Sans", true),
+        ])
+    );
+
+    // A tag that already exists keeps its group, and so do new tags inside it.
+    let mut mine = typeface_library("groups-typeface-existing");
+    super::create_tag(&mut mine.conn, "Style", None).unwrap();
+    super::create_tag(&mut mine.conn, "Fixed Width", None).unwrap();
+    super::create_tag(&mut mine.conn, "Sci-Fi", None).unwrap();
+    mine.set_group("Sci-Fi", true).unwrap();
+    let preview = import::preview(&mine.conn, &source).unwrap();
+    assert!(!preview.tags.iter().find(|t| t.name == "Style/Sans").unwrap().builtin);
+    import::apply(&mut mine.conn, &source, &chosen, true).unwrap();
+    assert!(!mine.builtin("Fixed Width") && !mine.builtin("Style") && !mine.builtin("Style/Sans"));
+    assert!(mine.builtin("Sci-Fi/Star Trek/TNG"), "joins the group of the Sci-Fi it lands in");
+
+    // Font Book's collections: its starter ones are built-in, the user's own are theirs.
+    let mut fb = Library::new("groups-font-book");
+    let source = Source {
+        label: "Font Book collections".into(),
+        tags: ["Fixed Width", "Fun", "Modern", "PDF", "Traditional", "web", "Favorites", "Client › Logos"]
+            .iter()
+            .map(|n| tag(&n.replace(" › ", "/"), &[]))
+            .collect(),
+        ..Default::default()
+    };
+    let all: Vec<String> = import::preview(&fb.conn, &source).unwrap().tags.into_iter().map(|t| t.name).collect();
+    import::apply(&mut fb.conn, &source, &all, true).unwrap();
+    assert_eq!(
+        fb.groups(),
+        groups(&[
+            ("Client", false),
+            ("Client/Logos", false),
+            ("Favorites", false),
+            ("Fixed Width", true),
+            ("Fun", true),
+            ("Modern", true),
+            ("PDF", true),
+            ("Traditional", true),
+            ("web", true),
+        ])
+    );
+}
+
+#[test]
+fn a_fontface_file_carries_groups_and_older_files_use_the_name_rule() {
+    // With groups: the file wins over the name rule, and a parent the file doesn't list takes
+    // the group of the shallowest tag under it.
+    let mut lib = Library::new("groups-file");
+    let with = br#"{"format":"fontface-tags","version":1,"tags":[
+        {"name":"Fun","color":"red","fonts":[],"builtin":false},
+        {"name":"Designer","color":"blue","fonts":[],"builtin":true},
+        {"name":"Style/Sans","color":"teal","fonts":[],"builtin":false},
+        {"name":"Style/Sans/Grotesque","color":"teal","fonts":[],"builtin":true},
+        {"name":"Pixel","color":"green","fonts":[]}]}"#;
+    let source = export::parse_json(with).unwrap();
+    let all: Vec<String> = import::preview(&lib.conn, &source).unwrap().tags.into_iter().map(|t| t.name).collect();
+    import::apply(&mut lib.conn, &source, &all, true).unwrap();
+    assert_eq!(
+        lib.groups(),
+        groups(&[
+            ("Designer", true),
+            ("Fun", false),
+            ("Pixel", false),
+            ("Style", false),
+            ("Style/Sans", false),
+            ("Style/Sans/Grotesque", false), // a nested tag is always in its top level's group
+        ])
+    );
+
+    // Without (a file from before groups): new tags go by name.
+    let mut old = Library::new("groups-file-old");
+    let without = br#"{"format":"fontface-tags","version":1,"tags":[
+        {"name":"Fun","color":"red","fonts":[]},
+        {"name":"Designer","color":"blue","fonts":[]},
+        {"name":"Style/Sans","color":"teal","fonts":[]}]}"#;
+    let source = export::parse_json(without).unwrap();
+    let all: Vec<String> = import::preview(&old.conn, &source).unwrap().tags.into_iter().map(|t| t.name).collect();
+    import::apply(&mut old.conn, &source, &all, true).unwrap();
+    assert_eq!(old.groups(), groups(&[("Designer", false), ("Fun", true), ("Style", true), ("Style/Sans", true)]));
+}
+
+#[test]
+fn exports_and_backups_bring_groups_back() {
+    let mut lib = typeface_library("groups-round-trip");
+    let okuda = face_key(Some("Okuda"), false, false, "", 0);
+    for name in ["Designer", "Fixed Width", "Fun", "Style/Sans"] {
+        let tag = super::create_tag(&mut lib.conn, name, None).unwrap();
+        super::assign(&mut lib.conn, &[tag.id], &[okuda.clone()], true).unwrap();
+    }
+    // The user's choices: their own "Designer" is built-in; "Fun" is theirs although its name
+    // says built-in; Font Book's "Fixed Width" and Typeface's "Style" are built-in.
+    for (name, builtin) in [("Designer", true), ("Fixed Width", true), ("Style", true)] {
+        lib.set_group(name, builtin).unwrap();
+    }
+    let before = lib.groups();
+    assert_eq!(
+        before,
+        groups(&[("Designer", true), ("Fixed Width", true), ("Fun", false), ("Style", true), ("Style/Sans", true)])
+    );
+
+    // Every tag in the file says its group.
+    let json = export::to_json(&lib.conn, export::collect(&lib.conn, None).unwrap(), 1_760_000_000).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["version"], 1, "the field is optional, so the format stays version 1");
+    for tag in value["tags"].as_array().unwrap() {
+        let name = tag["name"].as_str().unwrap();
+        assert_eq!(tag["builtin"].as_bool(), Some(before.iter().find(|(n, _)| n == name).unwrap().1), "{name}");
+    }
+
+    // Into a fresh library.
+    let mut other = typeface_library("groups-round-trip-other");
+    let source = export::parse_json(json.as_bytes()).unwrap();
+    let all: Vec<String> = before.iter().map(|(n, _)| n.clone()).collect();
+    import::apply(&mut other.conn, &source, &all, true).unwrap();
+    assert_eq!(other.groups(), before);
+
+    // A launch backup, restored: added next to tags that moved since, they keep where they are
+    // now; replacing puts every group back as it was.
+    let (backup, _) = crate::backups::snapshot(&lib.conn, 1_760_000_000).unwrap();
+    let backup = export::parse_json(backup.as_bytes()).unwrap();
+    lib.set_group("Fun", true).unwrap();
+    lib.set_group("Style", false).unwrap();
+    super::create_tag(&mut lib.conn, "Made Later", None).unwrap();
+    import::apply(&mut lib.conn, &backup, &all, true).unwrap();
+    assert!(lib.builtin("Fun") && !lib.builtin("Style/Sans"), "adding never moves a tag you have");
+    import::replace(&mut lib.conn, &backup, &all, true).unwrap();
+    assert_eq!(lib.groups(), before);
+}
+
+#[test]
+fn a_replace_preview_shows_the_groups_the_restore_creates() {
+    let mut lib = typeface_library("groups-replace-preview");
+    let okuda = face_key(Some("Okuda"), false, false, "", 0);
+    for name in ["Designer", "Fun", "Style/Sans"] {
+        let tag = super::create_tag(&mut lib.conn, name, None).unwrap();
+        super::assign(&mut lib.conn, &[tag.id], &[okuda.clone()], true).unwrap();
+    }
+    // A backup that says each tag's group ("Style" built-in, the rest the user's), and one from
+    // before groups, which go by name ("Fun" and "Style" built-in).
+    lib.set_group("Style", true).unwrap();
+    let json = export::to_json(&lib.conn, export::collect(&lib.conn, None).unwrap(), 1_760_000_000).unwrap();
+    let with_groups = export::parse_json(json.as_bytes()).unwrap();
+    let mut before_groups = with_groups.clone();
+    for tag in &mut before_groups.tags {
+        tag.builtin = None;
+    }
+    let all: Vec<String> = lib.tag_names();
+
+    for (backup, want) in [
+        (&with_groups, groups(&[("Designer", false), ("Fun", false), ("Style", true), ("Style/Sans", true)])),
+        (&before_groups, groups(&[("Designer", false), ("Fun", true), ("Style", true), ("Style/Sans", true)])),
+    ] {
+        // Since the backup: every top-level tag moved to the other group, and a new tag.
+        for (name, builtin) in want.iter().filter(|(n, _)| !n.contains('/')) {
+            lib.set_group(name, !builtin).unwrap();
+        }
+        super::create_tag(&mut lib.conn, "Made Later", None).unwrap();
+
+        // Adding plans against the tags there now, so they keep the groups they have.
+        let adding = import::preview(&lib.conn, backup).unwrap();
+        for (name, builtin) in &want {
+            assert_eq!(adding.tags.iter().find(|t| &t.name == name).unwrap().builtin, !builtin, "{name}");
+        }
+        // A replace deletes them first, so its preview plans against none: it shows the names,
+        // groups and colors the restore creates.
+        let replacing = import::preview_replace(&lib.conn, backup).unwrap();
+        assert!(replacing.tags.iter().all(|t| !t.exists), "every tag is created again");
+        import::replace(&mut lib.conn, backup, &all, true).unwrap();
+        assert_eq!(lib.groups(), want);
+        let mut shown: Vec<(String, bool, String)> = replacing.tags.iter().map(|t| (t.name.clone(), t.builtin, t.color.clone())).collect();
+        let mut made: Vec<(String, bool, String)> =
+            super::list_tags(&lib.conn).unwrap().into_iter().map(|t| (t.name, t.builtin, t.color)).collect();
+        shown.sort();
+        made.sort();
+        assert_eq!(shown, made);
+    }
 }
 
 #[test]
@@ -743,7 +1108,7 @@ fn import_typeface_backups() {
     for backup in backups.split('|').map(str::trim).filter(|b| !b.is_empty()) {
         let source = typeface::parse(&std::fs::read(backup).unwrap()).unwrap();
         let matcher = import::Matcher::load(&conn).unwrap().with_named_styles(&source);
-        let p = import::preview_with(&conn, &matcher, &source).unwrap();
+        let p = import::preview_with(&conn, &matcher, &source, false).unwrap();
         println!("\n{backup}\n{}: {} tags, {} fonts named, {} matched ({} named styles of variable fonts, {} tidied names), {} not in the library",
             p.label, p.tags.len(), p.fonts, p.matched_fonts, p.named_style_matches, p.tidied_matches, p.unmatched_fonts);
         for t in &p.tags {

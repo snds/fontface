@@ -41,7 +41,10 @@ fn defaults_match_the_spec() {
     assert!(!d.keep_running_in_background);
     assert!(d.scan_at_launch);
     assert!(d.show_installed_in_all);
-    assert_eq!(d.sidebar, SidebarSections { font_book: true, google: true, adobe: true, purchases: true, tags: true });
+    assert_eq!(
+        d.sidebar,
+        SidebarSections { font_book: true, google: true, adobe: true, purchases: true, tags: true, builtin_tags: true }
+    );
     assert_eq!(d.activation_mode, ActivationMode::Persistent);
     assert!(!d.clear_temporary_on_quit);
     assert_eq!(d.restore_on_launch, RestorePolicy::Always);
@@ -63,7 +66,7 @@ fn serializes_in_the_shape_the_ui_expects() {
             "keepRunningInBackground": false,
             "scanAtLaunch": true,
             "showInstalledInAll": true,
-            "sidebar": { "fontBook": true, "google": true, "adobe": true, "purchases": true, "tags": true },
+            "sidebar": { "fontBook": true, "google": true, "adobe": true, "purchases": true, "tags": true, "builtinTags": true },
             "activationMode": "persistent",
             "clearTemporaryOnQuit": false,
             "restoreOnLaunch": "always",
@@ -107,7 +110,40 @@ fn sidebar_merges_key_by_key() {
     let after = settings::apply_patch(&before, &json!({ "sidebar": { "adobe": false } })).unwrap();
     assert!(!after.sidebar.google, "keys the patch doesn't name keep their value");
     assert!(!after.sidebar.adobe);
-    assert!(after.sidebar.font_book && after.sidebar.purchases && after.sidebar.tags);
+    assert!(after.sidebar.font_book && after.sidebar.purchases && after.sidebar.tags && after.sidebar.builtin_tags);
+}
+
+#[test]
+fn builtin_tags_show_by_default_and_merge_on_their_own() {
+    // Settings saved before the Built-in group existed have no "builtinTags": it's on.
+    let old: AppSettings = serde_json::from_str(r#"{"sidebar": {"tags": true, "adobe": false}}"#).unwrap();
+    assert!(old.sidebar.builtin_tags);
+    assert!(!old.sidebar.adobe);
+
+    // Turning it off changes nothing else, and Tags itself stays on.
+    let off = settings::apply_patch(&AppSettings::default(), &json!({ "sidebar": { "builtinTags": false } })).unwrap();
+    assert!(!off.sidebar.builtin_tags);
+    assert_eq!(off, AppSettings { sidebar: SidebarSections { builtin_tags: false, ..SidebarSections::default() }, ..AppSettings::default() });
+    // Hiding Tags keeps the Built-in choice for when Tags comes back.
+    let hidden = settings::apply_patch(&off, &json!({ "sidebar": { "tags": false } })).unwrap();
+    assert!(!hidden.sidebar.tags && !hidden.sidebar.builtin_tags);
+    assert!(settings::apply_patch(&off, &json!({ "sidebar": { "builtinTags": "no" } })).is_err());
+
+    // Stored, and a stored sidebar from before keeps the default.
+    let dir = temp("builtin-tags");
+    let mut conn = db::open(&dir.join("library.sqlite3")).unwrap();
+    settings::ensure_schema(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('sidebar', '{\"fontBook\":true,\"google\":false,\"adobe\":true,\"purchases\":true,\"tags\":true}')",
+        [],
+    )
+    .unwrap();
+    let loaded = settings::load(&conn).unwrap();
+    assert!(loaded.sidebar.builtin_tags && !loaded.sidebar.google);
+    settings::save(&mut conn, &off).unwrap();
+    assert!(!settings::load(&conn).unwrap().sidebar.builtin_tags);
+    drop(conn);
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -174,7 +210,7 @@ fn every_setting_can_be_changed_by_a_patch() {
         keep_running_in_background: true,
         scan_at_launch: false,
         show_installed_in_all: false,
-        sidebar: SidebarSections { font_book: false, google: false, adobe: false, purchases: false, tags: false },
+        sidebar: SidebarSections { font_book: false, google: false, adobe: false, purchases: false, tags: false, builtin_tags: false },
         activation_mode: ActivationMode::Temporary,
         clear_temporary_on_quit: true,
         restore_on_launch: RestorePolicy::Never,

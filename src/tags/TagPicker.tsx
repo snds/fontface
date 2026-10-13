@@ -5,7 +5,7 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { colorVar } from "./api";
-import { fold, tagCoverage, useTagIndex } from "./model";
+import { fold, GROUP_LABELS, tagCoverage, useTagIndex, type TagNode } from "./model";
 import { createTag, setFaceTags } from "./store";
 
 const tidy = (s: string) =>
@@ -36,7 +36,13 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
   const coverage = useMemo(() => tagCoverage(faces, index), [faces, index]);
 
   const q = tidy(query);
-  const shown = q ? index.ordered.filter((n) => n.tag.name.toLowerCase().includes(q.toLowerCase())) : index.ordered;
+  // My tags first, then Built-in, as the sidebar lists them. The group is named only when both
+  // have tags to show.
+  const groups = index.byGroup
+    .map((g) => ({ group: g.group, nodes: q ? g.nodes.filter((n) => n.tag.name.toLowerCase().includes(q.toLowerCase())) : g.nodes }))
+    .filter((g) => g.nodes.length);
+  const shown = groups.flatMap((g) => g.nodes);
+  const labelled = groups.length > 1;
   const canCreate = !!q && !index.tags.some((t) => fold(t.name) === fold(q));
   const count = shown.length + (canCreate ? 1 : 0);
   const at = Math.min(active, Math.max(0, count - 1));
@@ -84,6 +90,44 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
   }, [at]);
   const what = faces.length === 1 ? "this style" : `${faces.length.toLocaleString()} styles`;
 
+  /** One tag in the list. `pos` is its place among all the options, for the keyboard highlight. */
+  const option = (node: TagNode, pos: number) => {
+    const n = coverage.get(node.tag.id) ?? 0;
+    const state = n === 0 ? false : n === faces.length ? true : "mixed";
+    // In a multi-select list "selected" means the fonts have the tag; the highlight is
+    // conveyed by aria-activedescendant on the input.
+    return (
+      <div
+        key={node.tag.id}
+        id={optionId(pos)}
+        role="option"
+        aria-selected={state === true}
+        title={node.tag.name}
+        className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", pos === at && "bg-accent")}
+        style={{ paddingLeft: q ? undefined : 8 + node.depth * 14 }}
+        onMouseEnter={() => setActive(pos)}
+        onClick={() => toggle(node.tag.id)}
+      >
+        <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
+        <span className="flex-1 truncate">
+          {q ? node.tag.name : node.label}
+          {state === "mixed" && <span className="sr-only">, on {n} of {faces.length} styles</span>}
+        </span>
+        {state === "mixed" && (
+          <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={`${n} of ${faces.length} styles`}>
+            {n}/{faces.length}
+          </span>
+        )}
+        <Icon
+          name={state === true ? "check_box" : state === "mixed" ? "indeterminate_check_box" : "check_box_outline_blank"}
+          size={18}
+          filled={state !== false}
+          className={state === false ? "text-muted-foreground" : "text-foreground"}
+        />
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col gap-2">
       <Input
@@ -102,40 +146,17 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
         onKeyDown={onKeyDown}
       />
       <div id={listId} role="listbox" aria-multiselectable aria-label="Tags" className="-mx-1 max-h-72 overflow-y-auto">
-        {shown.map((node, i) => {
-          const pos = i;
-          const n = coverage.get(node.tag.id) ?? 0;
-          const state = n === 0 ? false : n === faces.length ? true : "mixed";
-          // In a multi-select list "selected" means the fonts have the tag; the highlight is
-          // conveyed by aria-activedescendant on the input.
+        {groups.map((g) => {
+          const first = shown.indexOf(g.nodes[0]);
+          const rows = g.nodes.map((node, i) => option(node, first + i));
+          if (!labelled) return rows;
+          const labelId = `${listId}-${g.group}`;
           return (
-            <div
-              key={node.tag.id}
-              id={optionId(pos)}
-              role="option"
-              aria-selected={state === true}
-              title={node.tag.name}
-              className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", pos === at && "bg-accent")}
-              style={{ paddingLeft: q ? undefined : 8 + node.depth * 14 }}
-              onMouseEnter={() => setActive(pos)}
-              onClick={() => toggle(node.tag.id)}
-            >
-              <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
-              <span className="flex-1 truncate">
-                {q ? node.tag.name : node.label}
-                {state === "mixed" && <span className="sr-only">, on {n} of {faces.length} styles</span>}
-              </span>
-              {state === "mixed" && (
-                <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={`${n} of ${faces.length} styles`}>
-                  {n}/{faces.length}
-                </span>
-              )}
-              <Icon
-                name={state === true ? "check_box" : state === "mixed" ? "indeterminate_check_box" : "check_box_outline_blank"}
-                size={18}
-                filled={state !== false}
-                className={state === false ? "text-muted-foreground" : "text-foreground"}
-              />
+            <div key={g.group} role="group" aria-labelledby={labelId}>
+              <div id={labelId} className="px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">
+                {GROUP_LABELS[g.group]}
+              </div>
+              {rows}
             </div>
           );
         })}

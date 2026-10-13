@@ -20,6 +20,8 @@ export const fold = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
 export const depthOf = (name: string) => name.split("/").length - 1;
 export const leafOf = (name: string) => name.slice(name.lastIndexOf("/") + 1);
 export const parentOf = (name: string) => (name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : null);
+/** The top level of a name: "Sci-Fi" for "Sci-Fi/Star Trek". */
+export const topOf = (name: string) => name.split("/")[0];
 /** `name` is `ancestor` or nested somewhere under it (ignoring letter case, like the database). */
 export const isWithin = (name: string, ancestor: string) => fold(name) === fold(ancestor) || fold(name).startsWith(`${fold(ancestor)}/`);
 
@@ -50,12 +52,25 @@ export function flatten(nodes: TagNode[], out: TagNode[] = []): TagNode[] {
   return out;
 }
 
+/** The two groups of tags. A group belongs to a top-level tag and everything nested under it. */
+export type TagGroup = "mine" | "builtin";
+export const GROUP_LABELS: Record<TagGroup, string> = { mine: "My tags", builtin: "Built-in" };
+export const groupOfTag = (tag: Tag): TagGroup => (tag.builtin ? "builtin" : "mine");
+
 export interface TagIndex {
   tags: Tag[];
   byId: Map<number, Tag>;
   tree: TagNode[];
-  /** Every tag in tree order. */
+  /** Every tag in tree order (names A to Z, whatever their group). */
   ordered: TagNode[];
+  /** Top-level tags in each group, in name order. */
+  roots: Record<TagGroup, TagNode[]>;
+  /** Every tag, My tags first and then Built-in, each in tree order. Only groups that have tags. */
+  byGroup: { group: TagGroup; nodes: TagNode[] }[];
+  /** The group a tag is in: its top-level tag's. */
+  groupOf: (id: number) => TagGroup;
+  /** The top-level tag a tag sits in (the tag itself at the top level). */
+  topTag: (id: number) => Tag | undefined;
   /** Tag id → itself and every tag above it. */
   lineage: Map<number, number[]>;
   /** Tag id → itself and every tag nested under it. */
@@ -82,6 +97,19 @@ export function buildIndex(tags: Tag[], byKey: Map<string, number[]>): TagIndex 
   };
   for (const root of tree) walk(root, []);
 
+  // Grouped by the top-level tag, so a nested tag can never show in another group than its parent.
+  const roots: Record<TagGroup, TagNode[]> = { mine: [], builtin: [] };
+  for (const root of tree) roots[groupOfTag(root.tag)].push(root);
+  const byGroup = (["mine", "builtin"] as const).filter((g) => roots[g].length).map((group) => ({ group, nodes: flatten(roots[group]) }));
+  const topTag = (id: number) => {
+    const line = lineage.get(id);
+    return line ? byId.get(line[line.length - 1]) : undefined;
+  };
+  const groupOf = (id: number): TagGroup => {
+    const top = topTag(id);
+    return top ? groupOfTag(top) : "mine";
+  };
+
   const order = new Map(ordered.map((n, i) => [n.tag.id, i]));
   const cache = new WeakMap<Face, number[]>();
   const tagsOf = (face: Face) => {
@@ -95,7 +123,7 @@ export function buildIndex(tags: Tag[], byKey: Map<string, number[]>): TagIndex 
     }
     return ids;
   };
-  return { tags, byId, tree, ordered, lineage, subtree, tagsOf };
+  return { tags, byId, tree, ordered, roots, byGroup, groupOf, topTag, lineage, subtree, tagsOf };
 }
 
 export function useTagIndex(): TagIndex {

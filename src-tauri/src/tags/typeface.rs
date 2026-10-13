@@ -100,6 +100,8 @@ pub fn parse(bytes: &[u8]) -> AppResult<Source> {
             fonts,
             suggested: note.is_none(),
             note: note.map(str::to_string),
+            // New tags start where the name rule puts them ("Style/Sans" in Built-in).
+            builtin: None,
         });
     }
     if too_long > 0 {

@@ -36,6 +36,25 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 - **Rename, recolor, nest, export or delete** a tag from its "…" button or by right-clicking it.
   Renaming moves the tags inside it too. Deleting removes the tags inside it as well; the fonts
   themselves are never touched.
+- **My tags and Built-in.** Tags come in two groups, each under a small heading in the sidebar
+  that opens and closes it (click it, or Right and Left with it focused) and shows how many tags
+  it holds. **My tags** comes first and starts open. **Built-in** holds tags that came with other
+  apps: Font Book's starter collections (Fixed Width, Fun, Modern, PDF, Traditional, Web) and
+  Typeface's automatic "Style" tags (Style/Sans, Style/Serif…). It starts closed. Whether each is
+  open is remembered. A group with no tags has no heading, and when only one group has tags there
+  are no headings at all. To move a tag to the other group, right-click it and choose **Move to
+  Built-in** or **Move to My tags**, or drag it onto the other group's heading. A group belongs
+  to a top-level tag and everything inside it, so on a nested tag the menu moves its top-level tag
+  and says so ("Move “Style” to My tags"); dragging only takes top-level tags. A tag moved inside
+  a tag of the other group joins that group; one moved to the top level keeps its group. The same
+  goes for a "/" in Rename or New tag, and a message says which group it joined. After a move
+  from a menu, its group and the tags above it open and keyboard focus follows the tag. The tag
+  you're viewing is kept in sight the same way: if it's in a closed group (say, restored at
+  launch inside Built-in), the group opens for it once, and can be closed again. Tag
+  menus (Add to tag, Find a tag…, Move to) list My tags first, then Built-in under a quiet label
+  when both have tags. Chips on font rows show every tag, as before. Settings › Sidebar ›
+  **Built-in tags** hides the Built-in group from the sidebar only: the tags still exist, still
+  show on fonts and still appear in tag menus.
 - **Search** matches tag names, so typing "sci-fi" finds every font tagged with it.
 - Tag views work with the All / Active / Inactive filter like any other view.
 
@@ -97,10 +116,10 @@ background (WCAG 1.4.11). Measured against the background, sidebar and highlight
 
 ## Data model
 
-Three tables, created by `tags::ensure_schema` at launch:
+Three tables, created by `tags::ensure_schema` at launch (which also adds any column a table is missing):
 
 ```sql
-tags            (id, name UNIQUE COLLATE NOCASE, color, created_at)
+tags            (id, name UNIQUE COLLATE NOCASE, color, created_at, builtin)  -- builtin: 1 = Built-in, 0 = My tags
 tag_fonts       (tag_id → tags.id ON DELETE CASCADE, face_key, added_at)   -- one row per font and tag
 location_colors (location PRIMARY KEY, color)                              -- only colors you picked
 ```
@@ -126,6 +145,24 @@ its key with font `X` (variable, italic). No real font does this; Fontface doesn
 the same tag). Each level is trimmed, so " Sci-Fi / Star Trek " becomes "Sci-Fi/Star Trek".
 Parents always exist as tags of their own. At most 200 characters.
 
+**Groups.** `builtin` says which group a tag is in. A group belongs to a top-level tag and
+everything nested under it, so a nested tag's `builtin` always matches its top-level tag's.
+Every write keeps it that way: a new nested tag takes its parent's group, a tag moved under
+another takes the new parent's (with everything inside it), a tag moved to the top level or
+renamed there keeps its own, and `tags_set_group` changes a top-level tag and its whole subtree
+in one transaction (given a nested tag, it acts on its top-level tag). Tags you make in Fontface
+start in My tags, whatever their name.
+
+Where tags start is decided by one list, `tags::BUILTIN_NAMES`: a top-level name of Font Book's
+starter collections ("Fixed Width", "Fun", "Modern", "PDF", "Traditional", "Web") or Typeface's
+classification root ("Style"), ignoring letter case, puts the tag and everything under it in
+Built-in. "Styles" or "Sci-Fi/Style" don't count. The list is used:
+
+- once, when the `builtin` column is first added (`ensure_schema`, in the same transaction):
+  existing tags are sorted by it. Later launches find the column and never sort again, so a tag
+  you moved stays where you put it;
+- by imports, for the tags they create (see **Importing**).
+
 **Locations** are keyed by folder path, or `fontbook` and `service:adobe`.
 
 **Schema rule.** These tables live outside the numbered migrations in `db.rs`, and
@@ -139,6 +176,16 @@ Import tags… (the "…" button next to Tags) opens a preview first. It lists e
 styles in your library it will be on, how many are new, and how many of its fonts aren't in
 the library. Nothing changes until you press Import. Running the same import again adds
 nothing: tags merge by name and each font gets a tag once.
+
+**Groups.** A tag an import creates starts in the group the source gives it (only a Fontface
+tags file says), else where `BUILTIN_NAMES` puts it: Font Book's starter collections and
+Typeface's "Style" tags go to Built-in, everything else to My tags. This holds for every source:
+Typeface backups, Font Book collections, Finder tags, and Fontface tags files without groups. A
+tag that already exists keeps its group, and a new tag inside it joins that group. The preview
+marks the top-most tag of each branch that lands in Built-in with a quiet "Built-in". Restoring
+a backup with "Replace my tags" reads the preview again for that choice: every tag is created
+again, so it shows the names, colors and groups the backup gives them, not the ones your tags
+have now.
 
 | Source | What's read | How fonts are matched | Built |
 |---|---|---|---|
@@ -256,6 +303,7 @@ Export tags… exports every tag, or (from a tag's menu) one tag and the tags in
     {
       "name": "Sci-Fi/Star Trek",
       "color": "blue",
+      "builtin": false,
       "fonts": [
         {
           "key": "ps:Okuda|static|r",
@@ -283,11 +331,18 @@ Export tags… exports every tag, or (from a tag's menu) one tag and the tags in
 - Malformed entries (bad keys, names over 200 characters, unknown location keys) are skipped,
   and the preview says how many; they never stop the rest of the import.
 - `files` lists every copy. They're for people; matching never needs them.
+- `builtin` is the tag's group: `true` for Built-in, `false` for My tags. Fontface writes it on
+  every tag, so a backup brings groups back. It's optional: files from before groups don't have
+  it, and their new tags start where `BUILTIN_NAMES` puts them. A tag the import creates takes
+  the group of its top-level tag's entry, else of the shallowest entry under that top-level tag
+  that has one (a parent the file doesn't list follows the tags inside it). Being optional, it
+  doesn't change the format version.
 - An import only sets location colors that aren't set yet, and never changes existing tags' colors.
   The exception is restoring a backup with "Replace my tags" (Settings › Backups › Restore…,
   `tags_import_apply` with `replace`, accepted only for a Fontface tags file). It deletes every
   tag, tag link and location color first, then brings back the ticked tags with the backup's
-  colors and the backup's location colors, in one transaction.
+  colors, groups and location colors, in one transaction. Adding a backup's tags to yours leaves
+  the groups of tags you have alone.
 - Paths in a file made before a folder was moved with **Locate…** (location colors and `file:`
   keys) are pointed at the folder's current place before matching (see **A folder that moved**).
   If a color is listed for both the old and the current path, the current one wins.
@@ -352,6 +407,13 @@ export says how many. Typeface hasn't been tried with it yet.
 rescans, imports (Typeface formats 2–4 from synthetic files, merging, re-runs, unmatched fonts,
 files and families), JSON round trips, CSV quoting, Typeface export, the Finder plan and Finder
 tags on a temporary file.
+
+`cargo test tags::` also covers groups: adding the column and the one-time sort (a second run
+changes nothing, and a tag you moved stays put), the name rule, groups following the top-level
+tag on create, rename and move, moving a whole subtree, imports from Typeface and Font Book
+(new tags by name, existing tags keep theirs), Fontface tags files with and without `builtin`,
+and export, backup and restore round trips, including that a replace's preview shows the groups
+the restore creates. `cargo test settings` covers the Built-in tags setting.
 
 `cargo test tags::` also covers reading named styles from `fvar` (single files and collections),
 matching them and tidied names, Typeface format 5, and moving a folder with `Locate…`: fonts on

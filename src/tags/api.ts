@@ -17,6 +17,9 @@ export interface Tag {
   /** Full name; `/` nests ("Sci-Fi/Star Trek"). */
   name: string;
   color: TagColor;
+  /** In the Built-in group (tags from Font Book and Typeface) rather than the user's own. Always
+   *  the same as its top-level tag's: a group belongs to a top-level tag and everything in it. */
+  builtin: boolean;
 }
 
 export interface Organize {
@@ -37,6 +40,9 @@ export interface PlannedTag {
   name: string;
   color: TagColor;
   exists: boolean;
+  /** In Built-in, or will be once imported. When adding, an existing tag keeps its group; a
+   *  replace's preview gives the group the restore creates it in. */
+  builtin: boolean;
   fonts: number;
   matched: number;
   unmatched: number;
@@ -123,11 +129,15 @@ export const tagsApi = {
   create: (name: string, color?: TagColor) => invoke<Tag>("tags_create", { name, color: color ?? null }),
   rename: (tagId: number, name: string) => invoke<Tag>("tags_rename", { tagId, name }),
   recolor: (tagId: number, color: TagColor) => invoke<void>("tags_recolor", { tagId, color }),
+  /** Moves the tag's top-level tag and everything in it to Built-in or to My tags. Returns that top-level tag. */
+  setGroup: (tagId: number, builtin: boolean) => invoke<Tag>("tags_set_group", { tagId, builtin }),
   remove: (tagId: number) => invoke<number[]>("tags_delete", { tagId }),
   assign: (tagIds: number[], keys: string[], on: boolean) => invoke<number>("tags_assign", { tagIds, keys, on }),
   setLocationColor: (location: string, color: TagColor | null) => invoke<void>("location_color_set", { location, color }),
   relocateFolder: (folderId: number, path: string, force: boolean) => invoke<Relocated>("folder_relocate", { folderId, path, force }),
-  importPreview: (source: ImportSource) => invoke<ImportPreview>("tags_import_preview", { source }),
+  /** `replace`: what a replace (see importApply) would do, with the names, colors and groups it
+   *  creates, rather than what adding would. */
+  importPreview: (source: ImportSource, replace = false) => invoke<ImportPreview>("tags_import_preview", { source, replace }),
   /** `replace`: delete every tag and location color first, so they end up as in the file (a
    *  Fontface tags file only, e.g. a backup). Otherwise the tags are added to the ones there. */
   importApply: (source: ImportSource, tags: string[], keepUnmatched: boolean, replace = false) =>

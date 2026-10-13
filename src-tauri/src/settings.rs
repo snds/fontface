@@ -63,11 +63,14 @@ pub struct SidebarSections {
     pub adobe: bool,
     pub purchases: bool,
     pub tags: bool,
+    /// The Built-in group under Tags (tags from Font Book and Typeface). Hidden, they still exist
+    /// and still show on fonts.
+    pub builtin_tags: bool,
 }
 
 impl Default for SidebarSections {
     fn default() -> Self {
-        SidebarSections { font_book: true, google: true, adobe: true, purchases: true, tags: true }
+        SidebarSections { font_book: true, google: true, adobe: true, purchases: true, tags: true, builtin_tags: true }
     }
 }
 
@@ -159,6 +162,7 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
                     "adobe" => &mut s.sidebar.adobe,
                     "purchases" => &mut s.sidebar.purchases,
                     "tags" => &mut s.sidebar.tags,
+                    "builtinTags" => &mut s.sidebar.builtin_tags,
                     _ => continue,
                 };
                 *slot = flag(on, "Each sidebar section")?;

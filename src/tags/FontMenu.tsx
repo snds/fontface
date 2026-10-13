@@ -14,7 +14,7 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
-import { openMenuFromKeyboard } from "./menus";
+import { CONTEXT, GroupedTags, openMenuFromKeyboard } from "./menus";
 import { tagCoverage, useTagIndex, type TagIndex } from "./model";
 import { applyTags } from "./TagPicker";
 
@@ -60,22 +60,27 @@ export function FontTagMenuItems({ faces, index }: { faces: Face[]; index: TagIn
             New tag…
           </ContextMenuItem>
           {index.ordered.length > 0 && <ContextMenuSeparator />}
-          {index.ordered.map((node) => {
-            const all = count(node.tag.id) === faces.length;
-            return (
-              <ContextMenuItem
-                key={node.tag.id}
-                disabled={all}
-                title={all ? `${node.tag.name}: already on ${faces.length === 1 ? "this style" : "all of them"}` : node.tag.name}
-                style={{ paddingLeft: 6 + node.depth * 14 }}
-                onClick={() => applyTags([node.tag.id], faces, true)}
-              >
-                <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
-                <span className="flex-1 truncate">{node.label}</span>
-                {all && <Icon name="check" size={16} aria-label="already added" />}
-              </ContextMenuItem>
-            );
-          })}
+          {/* My tags first, then Built-in, as the sidebar lists them. */}
+          <GroupedTags
+            kit={CONTEXT}
+            groups={index.byGroup}
+            item={(node) => {
+              const all = count(node.tag.id) === faces.length;
+              return (
+                <ContextMenuItem
+                  key={node.tag.id}
+                  disabled={all}
+                  title={all ? `${node.tag.name}: already on ${faces.length === 1 ? "this style" : "all of them"}` : node.tag.name}
+                  style={{ paddingLeft: 6 + node.depth * 14 }}
+                  onClick={() => applyTags([node.tag.id], faces, true)}
+                >
+                  <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
+                  <span className="flex-1 truncate">{node.label}</span>
+                  {all && <Icon name="check" size={16} aria-label="already added" />}
+                </ContextMenuItem>
+              );
+            }}
+          />
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSub>

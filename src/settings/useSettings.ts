@@ -23,7 +23,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   keepRunningInBackground: false,
   scanAtLaunch: true,
   showInstalledInAll: true,
-  sidebar: { fontBook: true, google: true, adobe: true, purchases: true, tags: true },
+  sidebar: { fontBook: true, google: true, adobe: true, purchases: true, tags: true, builtinTags: true },
   activationMode: "persistent",
   clearTemporaryOnQuit: false,
   restoreOnLaunch: "always",

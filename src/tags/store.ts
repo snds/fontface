@@ -79,6 +79,22 @@ export function recolorTag(id: number, color: TagColor) {
   return change(() => tagsApi.recolor(id, color));
 }
 
+/**
+ * Moves a tag's top-level tag, and everything nested under it, to Built-in or to My tags. Shows
+ * the change at once, then saves it. Resolves to the top-level tag that moved.
+ */
+export function setTagGroup(id: number, builtin: boolean): Promise<Tag> {
+  const tag = state.tags.find((t) => t.id === id);
+  if (tag) {
+    // Letter case folded like SQLite's NOCASE (as `fold` in model.ts, which imports this file).
+    const fold = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+    const top = fold(tag.name.split("/")[0]);
+    const inside = (name: string) => fold(name) === top || fold(name).startsWith(`${top}/`);
+    set({ tags: state.tags.map((t) => (inside(t.name) ? { ...t, builtin } : t)) });
+  }
+  return change(() => tagsApi.setGroup(id, builtin));
+}
+
 export function setLocationColor(location: string, color: TagColor | null) {
   const next = new Map(state.locationColors);
   if (color) next.set(location, color);
