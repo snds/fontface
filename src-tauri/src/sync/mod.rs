@@ -112,10 +112,11 @@ pub fn start(app: &AppHandle) {
 fn worker() {
     let Some(sh) = shared() else { return };
     // Reading the hardware id runs a small tool, so it happens here rather than at launch.
+    let (machine, name) = (device::machine_hash(), device::default_name());
     let loaded = {
         let state = sh.app.state::<AppState>();
         let conn = state.conn();
-        conn.and_then(|c| Engine::load(&c, &device::machine_hash(), &device::default_name()))
+        conn.and_then(|c| Engine::load(&c, &machine, &name))
     };
     match loaded {
         Ok(e) => {
@@ -316,7 +317,7 @@ pub fn run_cycle(remote: bool) -> AppResult<()> {
     let mut failed = 0;
     for (on, list) in [(false, &applied.turn_off), (true, &applied.turn_on)] {
         for (_, ids) in list {
-            match crate::commands::switch(&state, ids, on, None) {
+            match quietly(|| crate::commands::switch(&state, ids, on, None)) {
                 Ok(outcomes) => failed += outcomes.iter().filter(|o| o.error.is_some()).count(),
                 Err(e) => {
                     eprintln!("fontface: sync couldn't switch a font: {e}");
