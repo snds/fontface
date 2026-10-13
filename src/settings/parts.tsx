@@ -42,7 +42,7 @@ export interface GroupDef {
   rows: RowDef[];
 }
 
-export type SectionId = "general" | "library" | "sidebar" | "activation" | "purchases" | "backups" | "about";
+export type SectionId = "general" | "library" | "sidebar" | "activation" | "sync" | "purchases" | "backups" | "about";
 
 /** The sections, in order, as the settings sidebar lists them. */
 export const SECTION_LIST: { id: SectionId; label: string; icon: string }[] = [
@@ -50,6 +50,7 @@ export const SECTION_LIST: { id: SectionId; label: string; icon: string }[] = [
   { id: "library", label: "Library", icon: "folder_open" },
   { id: "sidebar", label: "Sidebar", icon: "side_navigation" },
   { id: "activation", label: "Activation", icon: "toggle_on" },
+  { id: "sync", label: "Sync", icon: "sync" },
   { id: "purchases", label: "Purchases", icon: "shopping_bag" },
   { id: "backups", label: "Backups", icon: "backup" },
   { id: "about", label: "About", icon: "info" },

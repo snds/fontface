@@ -290,7 +290,7 @@ struct Candidate {
 
 /// A stable fingerprint of a file's bytes: its length and a 64-bit hash (FxHash-style mixing,
 /// eight bytes at a time). For recognising files again, not for security.
-fn fingerprint(bytes: &[u8]) -> String {
+pub(crate) fn fingerprint(bytes: &[u8]) -> String {
     const K: u64 = 0x517c_c1b7_2722_0a95;
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut words = bytes.chunks_exact(8);

@@ -287,13 +287,15 @@ pub fn set_activation(
     active: bool,
     scope: Option<ActivationMode>,
 ) -> AppResult<Vec<ActivationOutcome>> {
-    switch(&state, &font_ids, active, scope)
+    let outcomes = switch(&state, &font_ids, active, scope)?;
+    crate::sync::activation_chosen(&state, &font_ids, active, &outcomes);
+    Ok(outcomes)
 }
 
 /// The work behind `set_activation` (and Turn Off All). Turning on uses the scope of `mode`, or
 /// of the saved activation mode, except that a file that's already on keeps the scope it has
 /// (`activation::turn_on_plan`). Turning off removes both of Fontface's registrations.
-fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Option<ActivationMode>) -> AppResult<Vec<ActivationOutcome>> {
+pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Option<ActivationMode>) -> AppResult<Vec<ActivationOutcome>> {
     // (path, installed, every face id in that file)
     let files: Vec<(String, bool, Vec<i64>)> = {
         let conn = state.conn()?;
