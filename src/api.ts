@@ -42,15 +42,18 @@ export interface FontSummary {
 
 /** A face's preview profile. Must match PreviewInfo in src-tauri/src/preview/mod.rs. */
 export interface PreviewInfo {
-  /** "name" (draw the name as is), "trim", "case", "sample19" (the font's own sample text),
-   *  or a sample of its real characters: "script", "symbols", "expert", "partial". "none":
-   *  nothing real to draw. */
+  /** What the family row draws: "name" (the name as is), "trim", "case", "sample19" (the
+   *  font's own sample text), or a sample of its real characters: "script", "symbols",
+   *  "expert", "partial". "none": nothing real to draw. */
   kind: PreviewKind;
+  /** What a style row draws, when it differs from `kind` (the full name can't be drawn though
+   *  the family name can). */
+  fullKind?: PreviewKind;
   /** What a family row draws instead of the family name. */
   familyText?: string;
   /** What a style row draws instead of the full name. */
   fullText?: string;
-  /** "Symbols", "Expert set", a script name or "Partial set". */
+  /** "Symbols", "Expert set", a script name or "Partial set", when either row draws a sample. */
   label?: string;
   /** Printable ASCII characters the face can't draw. */
   asciiMissing?: string;
@@ -77,6 +80,8 @@ export interface PreviewBatch {
   profiles: { id: number; mtime: number; fileSize: number; preview: PreviewInfo }[];
   /** The last batch: the backfill is finished. */
   done: boolean;
+  /** Profiles saved by this run so far. 0 on the last batch: nothing changed. */
+  written: number;
 }
 
 /** Every real character of a face (`fontCharacters`). Must match FontCharacters in
@@ -89,6 +94,8 @@ export interface FontCharacters {
   empty: number;
   lookup: "unicode" | "symbol" | "macRoman" | "none";
   expert: boolean;
+  /** A work limit cut the check short: some characters may be missing from the grid. */
+  limited: boolean;
   ascent: number;
   descent: number;
   /** The ink most characters stay within, in em, for sizing the grid's cells. */

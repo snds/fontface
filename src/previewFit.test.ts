@@ -97,18 +97,30 @@ test("fitStyle gives pixels", () => {
   assert.deepEqual(style, { fontSize: 20, lineHeight: "48px", height: 52 });
 });
 
-test("canvas line metrics are trusted only when they match the font file", () => {
-  const measured = { ink: { top: 0.7, bottom: 0.2 }, line: { ascent: 0.9, descent: 0.141 } };
-  const file = { ascent: 0.9, descent: 0.141 };
-  assert.deepEqual(chooseMetrics(file, measured), { line: measured.line, ink: measured.ink });
-  const off = { ink: measured.ink, line: { ascent: 0.8, descent: 0.2 } };
-  assert.deepEqual(chooseMetrics(file, off), { line: file, ink: measured.ink }, "the file's metrics, the canvas's ink");
-  assert.deepEqual(chooseMetrics(undefined, off), { line: off.line, ink: off.ink });
-  assert.deepEqual(chooseMetrics(file, undefined), { line: file, ink: null });
+test("the canvas's line metrics win; the file's are the fallback", () => {
+  const file = { ascent: 0.891, descent: 0.216 };
+  // Installed Times: WebKit lays it out with 15% more ascent than the file has.
+  const times = { ink: { top: 0.7, bottom: 0.2 }, line: { ascent: 1.057, descent: 0.216 } };
+  assert.deepEqual(chooseMetrics({ line: file }, times), { line: times.line, ink: times.ink });
+  assert.deepEqual(chooseMetrics(undefined, times), { line: times.line, ink: times.ink });
+  assert.deepEqual(chooseMetrics({ line: file }, undefined), { line: file, ink: null }, "no canvas: the file's, no ink");
   assert.equal(chooseMetrics(undefined, undefined), undefined);
   // An engine that doesn't report line metrics: the file's, or no fit at all.
-  assert.deepEqual(chooseMetrics(file, { ink: measured.ink }), { line: file, ink: measured.ink });
-  assert.equal(chooseMetrics(undefined, { ink: measured.ink }), undefined);
+  assert.deepEqual(chooseMetrics({ line: file }, { ink: times.ink }), { line: file, ink: times.ink });
+  assert.equal(chooseMetrics(undefined, { ink: times.ink }), undefined);
+});
+
+test("the profile's own text fits the larger of the drawn and the stored ink", () => {
+  const line = { ascent: 1.0, descent: 0.5 };
+  // Voluta Script: joined letters reach lower than any one glyph does on its own.
+  const drawn = { ink: { top: 0.8, bottom: 0.57 }, line };
+  const stored = { line, ink: { top: 0.9, bottom: 0.43 } };
+  assert.deepEqual(chooseMetrics(stored, drawn), { line, ink: { top: 0.9, bottom: 0.57 } });
+  assert.deepEqual(chooseMetrics(stored, undefined), { line, ink: stored.ink }, "no canvas: the stored ink");
+  assert.deepEqual(chooseMetrics({ line }, drawn), { line, ink: drawn.ink }, "typed text: the canvas only");
+  // Fitted to the deeper ink, the joins no longer clip.
+  const fit = fitRow(line, chooseMetrics(stored, drawn)!.ink, SIZE);
+  assert.ok(inkSpan(fit, { top: 0.9, bottom: 0.57 })[1] <= 1.3 - padding(SIZE) + 1e-9);
 });
 
 test("the cache forgets the least recently used entry", () => {

@@ -1,9 +1,11 @@
 //! Small synthetic fonts for tests, built byte by byte so tests need no fixture files.
 //!
-//! A font has TrueType outlines (`glyf`): each glyph is a rectangle, empty, or deliberately
-//! broken. Character maps can be Unicode (format 4, plus format 12 when a code point is past
-//! U+FFFF), Microsoft Symbol (3,0) or Mac Roman (1,0) format 0. Optional tables: `name`, `post`
-//! (format 2 with glyph names, or 3 without), `OS/2`, `meta` and any raw table (`sbix`).
+//! A font has TrueType outlines (`glyf`): each glyph is a rectangle, empty, a single point, a
+//! long zigzag, a composite of another glyph, or deliberately broken. Character maps can be
+//! Unicode (format 4, plus format 12 when a code point is past U+FFFF), Microsoft Symbol (3,0)
+//! or Mac Roman (1,0) format 0. Optional tables: `name`, `post` (format 2 with glyph names, or
+//! 3 without), `OS/2`, `meta` and any raw table (`sbix`, `GSUB`, or one that replaces a built
+//! table, such as a hand-made `cmap`).
 
 /// A glyph's outline.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -14,6 +16,12 @@ pub enum Shape {
     Rect { x0: i16, y0: i16, x1: i16, y1: i16 },
     /// Outline data that can't be read: as if a variable glyph failed to outline.
     Broken,
+    /// One contour of a single point: valid, but it draws nothing (Material Icons' letters).
+    Point,
+    /// One contour of `points` points zigzagging along the baseline.
+    Zigzag { points: u16 },
+    /// A composite: `glyph`, placed `times` times.
+    Composite { glyph: u16, times: u16 },
 }
 
 impl Shape {
@@ -161,6 +169,8 @@ impl FontBuilder {
         if !self.meta.is_empty() {
             t.push((*b"meta", meta_table(&self.meta)));
         }
+        // A raw table replaces a built one with the same tag.
+        t.retain(|(tag, _)| !self.raw.iter().any(|(r, _)| r == tag));
         t.extend(self.raw.iter().cloned());
         t.sort_by(|a, b| a.0.cmp(&b.0));
         t
@@ -229,6 +239,39 @@ impl FontBuilder {
                     glyf.extend([0u8; 8]);
                     glyf.extend(40u16.to_be_bytes());
                     glyf.extend([0u8; 2]);
+                }
+                Shape::Point => {
+                    glyf.extend(1i16.to_be_bytes());
+                    glyf.extend([0u8; 8]);
+                    glyf.extend(0u16.to_be_bytes()); // endPtsOfContours: one point
+                    glyf.extend(0u16.to_be_bytes()); // instructionLength
+                    glyf.push(1); // on curve, 16-bit deltas
+                    glyf.extend(100i16.to_be_bytes());
+                    glyf.extend(100i16.to_be_bytes());
+                }
+                Shape::Zigzag { points } => {
+                    glyf.extend(1i16.to_be_bytes());
+                    glyf.extend([0u8; 8]);
+                    glyf.extend((points - 1).to_be_bytes());
+                    glyf.extend(0u16.to_be_bytes());
+                    glyf.extend(std::iter::repeat(1u8).take(points as usize));
+                    for i in 0..points {
+                        glyf.extend((i as i16 % 2).to_be_bytes()); // x creeps right, within i16
+                    }
+                    for i in 0..points {
+                        glyf.extend((if i % 2 == 0 { 300i16 } else { -300 }).to_be_bytes());
+                    }
+                }
+                Shape::Composite { glyph, times } => {
+                    glyf.extend((-1i16).to_be_bytes());
+                    glyf.extend([0u8; 8]);
+                    for k in 0..times {
+                        // Word arguments that are x/y offsets, then MORE_COMPONENTS but for the last.
+                        let flags: u16 = 0x0001 | 0x0002 | if k + 1 < times { 0x0020 } else { 0 };
+                        glyf.extend(flags.to_be_bytes());
+                        glyf.extend(glyph.to_be_bytes());
+                        glyf.extend([0u8; 4]);
+                    }
                 }
                 Shape::Rect { x0, y0, x1, y1 } => {
                     glyf.extend(1i16.to_be_bytes()); // numberOfContours
@@ -430,6 +473,71 @@ fn meta_table(entries: &[([u8; 4], String)]) -> Vec<u8> {
     for (_, value) in entries {
         t.extend(value.as_bytes());
     }
+    t
+}
+
+/// A `GSUB` table with one ligature lookup: each run of `components` becomes `ligature`.
+/// No scripts or features point at it; only its coverage (the first glyphs) matters here.
+pub fn ligature_gsub(ligatures: &[(&[u16], u16)]) -> Vec<u8> {
+    let mut firsts: Vec<u16> = ligatures.iter().map(|(c, _)| c[0]).collect();
+    firsts.sort();
+    firsts.dedup();
+    // LigatureSubst format 1: coverage, then one LigatureSet per covered glyph.
+    let mut sets: Vec<Vec<u8>> = Vec::new();
+    for first in &firsts {
+        let ligs: Vec<&(&[u16], u16)> = ligatures.iter().filter(|(c, _)| c[0] == *first).collect();
+        let mut set = Vec::new();
+        set.extend((ligs.len() as u16).to_be_bytes());
+        let mut body = Vec::new();
+        let mut at = 2 + 2 * ligs.len();
+        for (components, lig) in ligs {
+            set.extend((at as u16).to_be_bytes());
+            let mut l = Vec::new();
+            l.extend(lig.to_be_bytes());
+            l.extend((components.len() as u16).to_be_bytes());
+            for c in &components[1..] {
+                l.extend(c.to_be_bytes());
+            }
+            at += l.len();
+            body.extend(l);
+        }
+        set.extend(body);
+        sets.push(set);
+    }
+    let mut coverage = Vec::new();
+    coverage.extend(1u16.to_be_bytes());
+    coverage.extend((firsts.len() as u16).to_be_bytes());
+    for g in &firsts {
+        coverage.extend(g.to_be_bytes());
+    }
+    let mut subtable = Vec::new();
+    let header = 6 + 2 * sets.len();
+    subtable.extend(1u16.to_be_bytes()); // format
+    subtable.extend((header as u16).to_be_bytes()); // coverage offset
+    subtable.extend((sets.len() as u16).to_be_bytes());
+    let mut at = header + coverage.len();
+    for set in &sets {
+        subtable.extend((at as u16).to_be_bytes());
+        at += set.len();
+    }
+    subtable.extend(coverage);
+    for set in sets {
+        subtable.extend(set);
+    }
+    let mut t = Vec::new();
+    t.extend(0x0001_0000u32.to_be_bytes());
+    t.extend(10u16.to_be_bytes()); // ScriptList
+    t.extend(12u16.to_be_bytes()); // FeatureList
+    t.extend(14u16.to_be_bytes()); // LookupList
+    t.extend(0u16.to_be_bytes()); // no scripts
+    t.extend(0u16.to_be_bytes()); // no features
+    t.extend(1u16.to_be_bytes()); // one lookup, 4 bytes in
+    t.extend(4u16.to_be_bytes());
+    t.extend(4u16.to_be_bytes()); // type 4: ligature substitution
+    t.extend(0u16.to_be_bytes()); // flags
+    t.extend(1u16.to_be_bytes()); // one subtable, 8 bytes in
+    t.extend(8u16.to_be_bytes());
+    t.extend(subtable);
     t
 }
 

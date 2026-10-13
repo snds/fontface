@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FontSummary, PreviewInfo } from "@/api";
 import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
-import { isSampleKind, missingCharacters, usePreviewProfile, type ProfileState } from "@/previewProfiles";
+import { isSampleKind, kindFor, missingCharacters, usePreviewProfile, type ProfileState } from "@/previewProfiles";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -319,13 +319,15 @@ const PROFILE_WAIT_MS = 300;
 function Preview({ font, preview, typed, own, size }: { font: FontSummary; preview: ProfileState; typed: string; own: "family" | "full"; size: number }) {
   const state = useFontFace(font);
   const { profile, pending } = preview;
-  const [waited, setWaited] = useState(false);
+  const face = faceName(font);
+  // The wait belongs to one face: a row that starts showing another font waits afresh.
+  const [waitedFor, setWaitedFor] = useState<string>();
   useEffect(() => {
     if (!pending) return;
-    setWaited(false);
-    const timer = setTimeout(() => setWaited(true), PROFILE_WAIT_MS);
+    const timer = setTimeout(() => setWaitedFor(face), PROFILE_WAIT_MS);
     return () => clearTimeout(timer);
-  }, [pending, font.id]);
+  }, [pending, face]);
+  const waited = waitedFor === face;
   const unavailable = UNAVAILABLE[state];
   if (unavailable) {
     return (
@@ -339,22 +341,24 @@ function Preview({ font, preview, typed, own, size }: { font: FontSummary; previ
   const profileText = own === "family" ? profile?.familyText : profile?.fullText;
   return (
     <PreviewText
-      fontFamily={`"${faceName(font)}"`}
+      fontFamily={`"${face}"`}
+      face={face}
       text={typed || profileText || name}
       size={size}
       ready={state === "ready" && (!pending || waited)}
       profile={profile}
       ownText={!typed && !!profile}
-      sample={!typed && isSampleKind(profile)}
+      sample={!typed && isSampleKind(profile, own)}
     />
   );
 }
 
-/** "Symbols", "Expert set", a script name or "Partial set", for faces previewed by a sample. */
-function SampleBadge({ profile }: { profile: PreviewInfo | undefined }) {
-  if (!isSampleKind(profile) || !profile?.label) return null;
+/** "Symbols", "Expert set", a script name or "Partial set", for rows previewed by a sample.
+ *  `row`: a family row goes by the family name, a style row by its full name. */
+function SampleBadge({ profile, row }: { profile: PreviewInfo | undefined; row: "family" | "full" }) {
+  if (!isSampleKind(profile, row) || !profile?.label) return null;
   const why =
-    profile.kind === "expert"
+    kindFor(profile, row) === "expert"
       ? "An expert set: extra characters (fractions, ligatures, small capitals and the like) that go with another font. This shows the characters it has."
       : "This font can't draw its name, so this shows characters it does have.";
   return (
@@ -456,7 +460,7 @@ function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, sele
           {family.faces.some((f) => f.primary.variable) && <Badge variant="outline">Variable</Badge>}
           {family.faces.some((f) => f.primary.monospace) && <Badge variant="outline">Mono</Badge>}
           {duplicates && <Badge variant="outline">Duplicates</Badge>}
-          <SampleBadge profile={preview.profile} />
+          <SampleBadge profile={preview.profile} row="family" />
           <MissingHint text={previewText} profile={preview.profile} />
           <TagChips faces={family.faces} index={actions.index} />
         </span>
@@ -505,7 +509,7 @@ function FaceRow({ face, previewText, size, selectedId, busy, locations, onActiv
           </span>
           <CopiesBadge face={face} />
           <span className="flex items-center gap-1.5 font-sans">
-            <SampleBadge profile={preview.profile} />
+            <SampleBadge profile={preview.profile} row="full" />
             <MissingHint text={previewText} profile={preview.profile} />
           </span>
           <span className="font-sans">

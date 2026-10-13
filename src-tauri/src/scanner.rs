@@ -126,7 +126,7 @@ fn parse_face(face: &Face, in_collection: bool, previews: Option<&str>) -> Parse
         .collect();
 
     let (full_name, postscript_name) = (name(4), name(6));
-    let preview = previews.and_then(|file_stem| {
+    let preview = previews.map(|file_stem| {
         let names = preview::Names {
             family: &family,
             subfamily: &subfamily,

@@ -4,7 +4,7 @@
 use serde::Serialize;
 
 use super::{
-    font::FontView,
+    font::{limits, FontView},
     profile::{self, Names},
 };
 
@@ -20,6 +20,9 @@ pub struct FontCharacters {
     /// How CoreText looks characters up: "unicode", "symbol", "macRoman" or "none".
     pub lookup: &'static str,
     pub expert: bool,
+    /// A work limit cut the check short (see `font::limits`): some characters may be missing,
+    /// or shown although they draw nothing.
+    pub limited: bool,
     /// Line ascent and descent in em, as in the preview profile.
     pub ascent: f32,
     pub descent: f32,
@@ -49,7 +52,7 @@ impl CharacterBlock {
 }
 
 pub fn characters(face: &ttf_parser::Face, names: &Names) -> FontCharacters {
-    let f = FontView::new(face);
+    let f = FontView::with_time(face, limits::CHARACTERS_TIME);
     let expert = profile::expertise(&f, names).expert;
     let (ascent, descent) = f.line_metrics();
     let (mut placeholders, mut empty, mut total) = (0, 0, 0);
@@ -81,7 +84,7 @@ pub fn characters(face: &ttf_parser::Face, names: &Names) -> FontCharacters {
             Some(run) if run[1] + 1 == cp => run[1] = cp,
             _ => block.runs.push([cp, cp]),
         }
-        block.glyph_names.push(face.glyph_name(g).unwrap_or_default().to_string());
+        block.glyph_names.push(f.glyph_name(g).unwrap_or_default().to_string());
     }
     let p98 = |v: &mut Vec<f32>| -> f32 {
         if v.is_empty() {
@@ -96,6 +99,7 @@ pub fn characters(face: &ttf_parser::Face, names: &Names) -> FontCharacters {
         empty,
         lookup: f.lookup.as_str(),
         expert,
+        limited: f.limited(),
         ascent,
         descent,
         ink_top: p98(&mut tops),

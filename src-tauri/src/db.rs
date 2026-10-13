@@ -382,7 +382,7 @@ pub fn other_roots(conn: &Connection, except: i64) -> AppResult<Vec<PathBuf>> {
     Ok(rows.map(|r| r.map(PathBuf::from)).collect::<Result<_, _>>()?)
 }
 
-/// The list columns: the font's own (18), then its preview profile's (`preview::COLUMNS`, 9).
+/// The list columns: the font's own (18), then its preview profile's (`preview::COLUMNS`).
 fn summary_columns() -> String {
     format!(
         "fonts.id, fonts.folder_id, fonts.path, fonts.face_index, fonts.family, \
@@ -394,7 +394,7 @@ fn summary_columns() -> String {
 }
 
 /// How many columns `summary_columns` lists.
-const SUMMARY_LEN: usize = 27;
+const SUMMARY_LEN: usize = 18 + crate::preview::COLUMN_COUNT;
 
 /// Fonts with their folder, and their preview profile if it's current (a stale one reads as none).
 fn summary_from() -> String {

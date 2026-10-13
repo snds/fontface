@@ -9,7 +9,9 @@
 //! 4. **Name ID 19**, the font's own sample text, when it's all real glyphs.
 //! 5. **A sample of the font's real characters** (see `sample`).
 //!
-//! Expert sets and symbol-only fonts go straight to step 5.
+//! Expert sets and symbol-only fonts whose letter keys hold pictures go straight to step 5.
+//! The two strings are worked out separately, so a style row can draw a sample while its
+//! family row draws the name (`kind` and `full_kind`).
 
 use std::{cell::OnceCell, collections::{BTreeMap, HashSet}};
 
@@ -74,6 +76,14 @@ pub mod flags {
     pub const EXPERT_NAME: u32 = 32;
     pub const ICON_WORD: u32 = 64;
     pub const EXPERT: u32 = 128;
+    /// Most letter slots have glyph names that name pictures ("handv", "town").
+    pub const PICTURE_NAMES: u32 = 256;
+    /// At least 3 of A–Z/a–z aren't real glyphs.
+    pub const MISSING_LETTERS: u32 = 512;
+    /// A work limit cut something short (see `font::limits`): the profile may be partial.
+    pub const LIMITED: u32 = 1024;
+    /// The profile couldn't be worked out (the font made it fail): the name is drawn as is.
+    pub const FAILED: u32 = 2048;
 }
 
 /// The names a profile is worked out from.
@@ -100,14 +110,20 @@ impl Names<'_> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
+    /// What the family row draws (the family name, or what replaces it).
     pub kind: Kind,
+    /// What a style row draws (the full name, or what replaces it). Usually the same as `kind`;
+    /// it differs when one name can be drawn and the other can't (Magdelena's family draws in
+    /// capitals, but its full name has a colon the font lacks, so the style row draws a sample).
+    pub full_kind: Kind,
     /// What a family row draws; None = the family name as is.
     pub family_text: Option<String>,
     /// What a style row draws; None = the full name as is.
     pub full_text: Option<String>,
     /// The sample of real characters, when one was needed.
     pub sample: Option<String>,
-    /// A short label for sample kinds: "Symbols", "Expert set", a script name, "Partial set".
+    /// A short label when either row draws a sample: "Symbols", "Expert set", a script name,
+    /// "Partial set".
     pub label: Option<String>,
     /// Printable ASCII characters the face can't draw.
     pub ascii_missing: String,
@@ -120,11 +136,31 @@ pub struct Profile {
     pub ink: Option<(f32, f32)>,
 }
 
+impl Profile {
+    /// What a face gets when its profile can't be worked out: the names drawn as they are, as
+    /// before profiles existed. Stored like any other, so the font isn't retried every launch.
+    pub fn fallback(flags: u32) -> Profile {
+        Profile {
+            kind: Kind::Name,
+            full_kind: Kind::Name,
+            family_text: None,
+            full_text: None,
+            sample: None,
+            label: None,
+            ascii_missing: String::new(),
+            flags,
+            ascent: 0.8,
+            descent: 0.2,
+            ink: None,
+        }
+    }
+}
+
 /// Words in a name that mark an icon or symbol font, whose letter keys hold pictures.
 const ICON_WORDS: &[&str] = &[
     "glyph", "glyphs", "icon", "icons", "symbol", "symbols", "dingbat", "dingbats", "ornament", "ornaments", "pi", "bats",
     "emoji", "border", "borders", "frame", "frames", "fleuron", "fleurons", "flourish", "flourishes", "awesome",
-    "wingdings", "webdings", "pictogram", "pictograms", "pictos", "icomoon", "entypo", "fontawesome",
+    "wingdings", "webdings", "pictogram", "pictograms", "pictos", "icomoon", "entypo", "fontawesome", "signs",
 ];
 
 /// Splits a name into lowercase words: at punctuation and spaces, lower→Upper changes, between
@@ -177,27 +213,52 @@ fn expert_glyph_name(n: &str) -> bool {
             ))
 }
 
-/// The signals behind the Expert decision, kept for the character grid's summary too.
+/// A glyph name that names a picture rather than the letter in its slot: "handv", "town",
+/// "zero". Letter names ("A", "A.alt"), code names ("uniF041") and numbered names ("glyph36")
+/// don't count.
+fn picture_name(name: &str) -> bool {
+    let base = name.split(['.', '_']).next().unwrap_or(name);
+    base.len() >= 2 && base.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// The signals behind the Expert and picture decisions, kept for the character grid too.
 pub struct Expertise {
     pub expert: bool,
     pub flags: u32,
     pub icon_word: bool,
+    /// A symbol-only font whose letter keys draw pictures: an icon word in its name (Wingdings)
+    /// or glyph names that name pictures (Webdings' "town"). A symbol-only font with plain
+    /// letters (Monica, Jedi Solid) draws its name like any other font.
+    pub pictures: bool,
 }
 
 /// Is this face an Expert set (or a similar custom-encoded companion font)?
 /// - Its names say so ("Expert", "Exp", "AltExp" …) and it has an anomaly (a placeholder shape,
-///   empty letter slots, Expert glyph names) or can't draw its family name; or
+///   empty letter slots, Expert glyph names), lacks at least 3 of A–Z/a–z, or can't draw its
+///   family name; or
 /// - at least 10 letter slots carry old Expert glyph names.
 pub fn expertise(f: &FontView, names: &Names) -> Expertise {
     let mut flags = 0;
-    let (mut empty_letters, mut expert_named) = (0, 0);
+    let (mut empty_letters, mut expert_named, mut missing_letters) = (0, 0, 0);
+    let (mut mapped_letters, mut picture_named) = (0, 0);
     for c in ('A'..='Z').chain('a'..='z').chain('0'..='9') {
+        let letter = c.is_ascii_alphabetic();
+        if letter && !f.real_char(c) {
+            missing_letters += 1;
+        }
         if let Some(g) = f.glyph(c as u32) {
             if !f.inked(g) {
                 empty_letters += 1;
             }
-            if c.is_alphabetic() && f.face.glyph_name(g).is_some_and(expert_glyph_name) {
-                expert_named += 1;
+            if letter {
+                mapped_letters += 1;
+                let name = f.glyph_name(g);
+                if name.is_some_and(expert_glyph_name) {
+                    expert_named += 1;
+                }
+                if name.is_some_and(picture_name) {
+                    picture_named += 1;
+                }
             }
         }
     }
@@ -209,6 +270,12 @@ pub fn expertise(f: &FontView, names: &Names) -> Expertise {
     }
     if expert_named >= 5 {
         flags |= flags::EXPERT_GLYPH_NAMES;
+    }
+    if missing_letters >= 3 {
+        flags |= flags::MISSING_LETTERS;
+    }
+    if picture_named >= 10 && picture_named * 2 >= mapped_letters {
+        flags |= flags::PICTURE_NAMES;
     }
     match f.lookup {
         Lookup::Symbol => flags |= flags::SYMBOL_CMAP,
@@ -228,11 +295,14 @@ pub fn expertise(f: &FontView, names: &Names) -> Expertise {
     if icon_word {
         flags |= flags::ICON_WORD;
     }
-    let expert = (expert_name && (anomaly || !f.draws(names.family))) || expert_named >= 10;
+    // BigCaslonExp has no placeholder and few empty slots, but six letters are missing and the
+    // rest are small capitals: "BigCaslon" comes out as "ᵇIG¢ASLON".
+    let expert = (expert_name && (anomaly || missing_letters >= 3 || !f.draws(names.family))) || expert_named >= 10;
     if expert {
         flags |= flags::EXPERT;
     }
-    Expertise { expert, flags, icon_word }
+    let pictures = f.lookup == Lookup::Symbol && (icon_word || flags & flags::PICTURE_NAMES != 0);
+    Expertise { expert, flags, icon_word, pictures }
 }
 
 /// The profile of a parsed face.
@@ -242,13 +312,13 @@ pub fn profile(face: &Face, names: &Names) -> Profile {
 }
 
 pub fn profile_of(f: &FontView, names: &Names) -> Profile {
-    let Expertise { expert, flags, icon_word } = expertise(f, names);
-    let force_sample = expert || f.lookup == Lookup::Symbol;
+    let Expertise { expert, mut flags, icon_word, pictures } = expertise(f, names);
+    let force_sample = expert || pictures;
     let full = names.full_or_default();
 
     // Worked out only when a name fails, which most faces never do.
     let sample_cell: OnceCell<Option<Sample>> = OnceCell::new();
-    let sample = || sample_cell.get_or_init(|| make_sample(f, expert, icon_word)).as_ref();
+    let sample = || sample_cell.get_or_init(|| make_sample(f, expert, icon_word || pictures)).as_ref();
     let id19_cell = OnceCell::new();
     let id19 = || id19_cell.get_or_init(|| sample_text(f)).clone();
 
@@ -278,9 +348,14 @@ pub fn profile_of(f: &FontView, names: &Names) -> Profile {
         }
     };
     let (kind, family_text) = choose(names.family);
-    let (_, full_text) = choose(&full);
-    let label = if kind.is_sample() { sample().map(|s| s.label.clone()) } else { None };
-    let ascii_missing: String = (0x21u8..0x7F).map(char::from).filter(|c| !f.real_char(*c)).collect();
+    let (full_kind, full_text) = choose(&full);
+    let label = if kind.is_sample() || full_kind.is_sample() { sample().map(|s| s.label.clone()) } else { None };
+    // A letter that draws nothing alone but starts a ligature isn't missing: Material Icons
+    // draws "home" as a house.
+    let ascii_missing: String = (0x21u8..0x7F)
+        .map(char::from)
+        .filter(|c| !f.real_char(*c) && !f.glyph(*c as u32).is_some_and(|g| !f.inked(g) && f.starts_ligature(g)))
+        .collect();
     let (ascent, descent) = f.line_metrics();
     let shown_family = family_text.as_deref().unwrap_or(names.family);
     let shown_full = full_text.as_deref().unwrap_or(&full);
@@ -288,8 +363,12 @@ pub fn profile_of(f: &FontView, names: &Names) -> Profile {
         (Some(a), Some(b)) => Some((a.0.max(b.0), a.1.max(b.1))),
         (a, b) => a.or(b),
     };
+    if f.limited() {
+        flags |= flags::LIMITED;
+    }
     Profile {
         kind,
+        full_kind,
         family_text,
         full_text,
         sample: sample_cell.get().and_then(|s| s.as_ref().map(|s| s.text.clone())),
@@ -532,14 +611,15 @@ struct Candidate {
 
 /// A run of the font's real characters, and what kind of font that makes it:
 /// 1. **Expert:** 12 characters spread evenly across all of them.
-/// 2. **Symbols** (symbol-only map, an icon word in the name, mostly private-use and symbol
-///    characters, or no letters, digits or script at all): 12 spread evenly, preferring
+/// 2. **Symbols** (`pictures`: an icon word in the name, or a symbol-only font whose letter keys
+///    hold pictures; mostly private-use and symbol characters; or no letters, digits or script
+///    at all): 12 spread evenly, preferring
 ///    glyphs within normal height and code points above U+00FF (which skips emoji keycap
 ///    digits), never regional-indicator letters.
 /// 3. **Script:** the script `meta` names (5+ characters), else the biggest one (10+, and at
 ///    least as many as Latin letters): its first 10 letters, or 10 spread evenly across 300+.
 /// 4. **Partial:** the first 12 Latin letters and digits, or 12 spread evenly when fewer than 4.
-fn make_sample(f: &FontView, expert: bool, icon_word: bool) -> Option<Sample> {
+fn make_sample(f: &FontView, expert: bool, pictures: bool) -> Option<Sample> {
     let mut seen_glyphs = HashSet::new();
     let mut seen_shapes = HashSet::new();
     let dedupe_shapes = f.map.len() <= 4000;
@@ -574,7 +654,7 @@ fn make_sample(f: &FontView, expert: bool, icon_word: bool) -> Option<Sample> {
     }
     let symbolish = cands.iter().filter(|c| matches!(c.group, Group::Pua | Group::Symbol)).count();
     let no_letters = !cands.iter().any(|c| matches!(c.group, Group::Latin | Group::Digit | Group::Script(_)));
-    if f.lookup == Lookup::Symbol || icon_word || symbolish * 2 >= cands.len() || (no_letters && symbolish > 0) {
+    if pictures || symbolish * 2 >= cands.len() || (no_letters && symbolish > 0) {
         let pool: Vec<Candidate> = cands.iter().filter(|c| c.cp > 0xFF && !(0x1F1E6..=0x1F1FF).contains(&c.cp)).cloned().collect();
         let pool = if pool.len() >= 6 { pool } else { cands.clone() };
         return Some(Sample { kind: Kind::Symbols, text: text(&spread(&normal(&pool), 12), " "), label: "Symbols".into() });

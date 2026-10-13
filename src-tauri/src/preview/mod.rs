@@ -17,7 +17,9 @@
 //!
 //! **Safety.** Creative Cloud's font files are never read (Adobe's terms), online-only files
 //! are never downloaded for a profile (reads fail fast instead), and files over 96 MB are
-//! skipped, the same rules as `protocol.rs`.
+//! skipped, the same rules as `protocol.rs`. Each face gets a bounded amount of work
+//! (`font::limits`), so a damaged file can't stall a scan. Commands read files on two reader
+//! threads (`on_reader`), never on Tauri's async workers.
 
 pub mod characters;
 pub mod font;
@@ -29,11 +31,12 @@ mod tests;
 
 use std::{
     collections::HashMap,
+    panic::{catch_unwind, AssertUnwindSafe},
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering::Relaxed},
         mpsc::{self, RecvTimeoutError},
-        Arc,
+        Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -49,7 +52,9 @@ use crate::{
 pub use profile::{Names, Profile};
 
 /// Bump after changing how profiles are worked out: every profile is recomputed at next launch.
-pub const PREVIEW_REV: i64 = 1;
+/// 2: symbol-only fonts with plain letters draw their names, empty one-point glyphs count as
+/// empty, more Expert sets are found, and the full name keeps its own kind.
+pub const PREVIEW_REV: i64 = 2;
 
 /// At most this many ids per `preview_profiles` call.
 pub const MAX_ON_DEMAND: usize = 64;
@@ -61,6 +66,7 @@ CREATE TABLE IF NOT EXISTS face_previews (
     mtime          INTEGER NOT NULL,
     rev            INTEGER NOT NULL,
     kind           TEXT NOT NULL,
+    full_kind      TEXT,
     family_text    TEXT,
     full_text      TEXT,
     sample         TEXT,
@@ -78,6 +84,12 @@ CREATE TABLE IF NOT EXISTS face_previews (
 /// its own connection since it writes the table.
 pub fn ensure_schema(conn: &Connection) -> AppResult<()> {
     conn.execute_batch(SCHEMA)?;
+    // Added in PREVIEW_REV 2; a table made before has rev 1 rows only, which no longer count.
+    let has_full_kind: bool =
+        conn.query_row("SELECT COUNT(*) > 0 FROM pragma_table_info('face_previews') WHERE name = 'full_kind'", [], |r| r.get(0))?;
+    if !has_full_kind {
+        conn.execute_batch("ALTER TABLE face_previews ADD COLUMN full_kind TEXT")?;
+    }
     Ok(())
 }
 
@@ -91,22 +103,29 @@ pub fn join_clause() -> String {
 
 /// The profile columns, in the order `info_from_row` reads them.
 pub const COLUMNS: &str =
-    "p.kind, p.family_text, p.full_text, p.label, p.ascii_missing, p.ascent, p.descent, p.ink_top, p.ink_bottom";
+    "p.kind, p.family_text, p.full_text, p.label, p.ascii_missing, p.ascent, p.descent, p.ink_top, p.ink_bottom, p.full_kind";
+
+/// How many columns `COLUMNS` lists.
+pub const COLUMN_COUNT: usize = 10;
 
 /// What the list needs from a profile (`FontSummary.preview`). Ordinary fonts send only
 /// `kind` and the four metrics.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewInfo {
-    /// name, trim, case, sample19, script, symbols, expert, partial or none.
+    /// What the family row draws: name, trim, case, sample19, script, symbols, expert, partial
+    /// or none.
     pub kind: String,
+    /// What a style row draws, when it isn't the same as `kind`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_kind: Option<String>,
     /// What a family row draws instead of the family name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub family_text: Option<String>,
     /// What a style row draws instead of the full name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub full_text: Option<String>,
-    /// "Symbols", "Expert set", a script name or "Partial set".
+    /// "Symbols", "Expert set", a script name or "Partial set", when either row draws a sample.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Printable ASCII characters the face can't draw.
@@ -132,6 +151,7 @@ impl PreviewInfo {
     pub fn from_profile(p: &Profile) -> Self {
         PreviewInfo {
             kind: p.kind.as_str().to_string(),
+            full_kind: (p.full_kind != p.kind).then(|| p.full_kind.as_str().to_string()),
             family_text: p.family_text.clone(),
             full_text: p.full_text.clone(),
             label: p.label.clone(),
@@ -157,6 +177,7 @@ pub fn info_from_row(r: &Row, at: usize) -> rusqlite::Result<Option<PreviewInfo>
         descent: r.get::<_, Option<f64>>(at + 6)?.unwrap_or(0.2),
         ink_top: r.get(at + 7)?,
         ink_bottom: r.get(at + 8)?,
+        full_kind: r.get(at + 9)?,
     }))
 }
 
@@ -166,11 +187,11 @@ pub fn info_from_row(r: &Row, at: usize) -> rusqlite::Result<Option<PreviewInfo>
 pub fn store(conn: &Connection, font_id: i64, file_size: i64, mtime: i64, p: &Profile) -> AppResult<bool> {
     let mut stmt = conn.prepare_cached(
         "INSERT INTO face_previews (font_id, file_size, mtime, rev, kind, family_text, full_text, sample, label,
-            ascii_missing, flags, ascent, descent, ink_top, ink_bottom)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+            ascii_missing, flags, ascent, descent, ink_top, ink_bottom, full_kind)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
          WHERE EXISTS (SELECT 1 FROM fonts WHERE id = ?1 AND file_size = ?2 AND mtime = ?3)
          ON CONFLICT (font_id) DO UPDATE SET file_size = excluded.file_size, mtime = excluded.mtime,
-            rev = excluded.rev, kind = excluded.kind, family_text = excluded.family_text,
+            rev = excluded.rev, kind = excluded.kind, full_kind = excluded.full_kind, family_text = excluded.family_text,
             full_text = excluded.full_text, sample = excluded.sample, label = excluded.label,
             ascii_missing = excluded.ascii_missing, flags = excluded.flags, ascent = excluded.ascent,
             descent = excluded.descent, ink_top = excluded.ink_top, ink_bottom = excluded.ink_bottom",
@@ -191,6 +212,7 @@ pub fn store(conn: &Connection, font_id: i64, file_size: i64, mtime: i64, p: &Pr
         round(p.descent),
         p.ink.map(|i| round(i.0)),
         p.ink.map(|i| round(i.1)),
+        (p.full_kind != p.kind).then(|| p.full_kind.as_str()),
     ])?;
     Ok(written > 0)
 }
@@ -319,12 +341,14 @@ impl FaceRow {
 }
 
 /// Works out a profile, catching a panic from a damaged font so a scan or backfill never stops.
-pub fn profile_safely(face: &ttf_parser::Face, names: &Names) -> Option<Profile> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| profile::profile(face, names))) {
-        Ok(p) => Some(p),
+/// A face whose profile fails gets `Profile::fallback` (its names, as before profiles), which
+/// is stored like any other, so it isn't tried again at every launch.
+pub fn profile_safely(face: &ttf_parser::Face, names: &Names) -> Profile {
+    match catch_unwind(AssertUnwindSafe(|| profile::profile(face, names))) {
+        Ok(p) => p,
         Err(_) => {
             eprintln!("fontface: couldn't work out a preview profile for {}", names.family);
-            None
+            Profile::fallback(profile::flags::FAILED)
         }
     }
 }
@@ -336,9 +360,7 @@ pub fn profiles_for_file(rows: &[FaceRow]) -> Result<Vec<(i64, Profile)>, Unread
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let face = ttf_parser::Face::parse(&data, row.face_index).map_err(|e| Unreadable::Broken(e.to_string()))?;
-        if let Some(p) = row.with_names(|names| profile_safely(&face, names)) {
-            out.push((row.id, p));
-        }
+        out.push((row.id, row.with_names(|names| profile_safely(&face, names))));
     }
     Ok(out)
 }
@@ -360,15 +382,56 @@ fn by_file(rows: Vec<FaceRow>) -> Vec<Vec<FaceRow>> {
     groups
 }
 
-/// Runs `f` on a new thread that fails fast on online-only files, so callers on shared thread
-/// pools keep their normal I/O policy.
-fn on_fail_fast_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> AppResult<T> {
-    std::thread::spawn(move || {
-        cloud::fail_fast_on_this_thread();
-        f()
+// ----------------------------------------------------------------------------- reader threads
+
+/// How many files commands read at once for previews and the character grid.
+const READER_THREADS: usize = 2;
+
+type Job = Box<dyn FnOnce() + Send>;
+
+/// The reader threads' queue. They're started on first use, fail fast on online-only files
+/// (so a read never starts a download), and take jobs in the order they were sent.
+fn readers() -> &'static Mutex<Option<mpsc::Sender<Job>>> {
+    static READERS: OnceLock<Mutex<Option<mpsc::Sender<Job>>>> = OnceLock::new();
+    READERS.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let rx = Arc::new(Mutex::new(rx));
+        let mut started = 0;
+        for i in 0..READER_THREADS {
+            let rx = rx.clone();
+            let spawned = std::thread::Builder::new().name(format!("fontface-preview-reader-{i}")).spawn(move || {
+                cloud::fail_fast_on_this_thread();
+                loop {
+                    // The queue is locked only while waiting for the next job.
+                    let job = match rx.lock() {
+                        Ok(rx) => rx.recv(),
+                        Err(_) => return,
+                    };
+                    let Ok(job) = job else { return };
+                    // A job that panics drops its answer channel (its caller gets an error);
+                    // the thread carries on.
+                    let _ = catch_unwind(AssertUnwindSafe(job));
+                }
+            });
+            started += spawned.is_ok() as usize;
+        }
+        // No thread to run them: callers get an error instead of waiting forever.
+        Mutex::new((started > 0).then_some(tx))
     })
-    .join()
-    .map_err(|_| AppError::Other("reading font files for previews failed".into()))
+}
+
+/// Runs `f` on one of the reader threads and waits for its answer without holding the calling
+/// thread: commands that read font files use this, so a slow disk or a stalled network share
+/// never ties up Tauri's async workers (and with them the switches and the list). At most
+/// `READER_THREADS` jobs run at once; the rest wait their turn.
+pub async fn on_reader<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> AppResult<T> {
+    let failed = || AppError::Other("reading font files for previews failed".into());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let job: Job = Box::new(move || {
+        let _ = tx.send(f());
+    });
+    readers().lock().map_err(|_| failed())?.as_ref().ok_or_else(failed)?.send(job).map_err(|_| failed())?;
+    rx.await.map_err(|_| failed())
 }
 
 // ---------------------------------------------------------------------------------- on demand
@@ -384,7 +447,8 @@ pub struct OnDemand {
 }
 
 /// Profiles for the given font ids (at most `MAX_ON_DEMAND`): current stored ones as they are,
-/// the rest worked out from their files and saved with `write`.
+/// the rest worked out from their files and saved with `write`. Reads files, so run it on a
+/// thread that fails fast on online-only files (`on_reader`).
 pub fn on_demand(
     conn: impl FnOnce() -> AppResult<Vec<(FaceRow, Option<PreviewInfo>)>>,
     write: impl FnOnce(&[(FaceRow, Profile)]) -> AppResult<()>,
@@ -401,10 +465,7 @@ pub fn on_demand(
     if todo.is_empty() {
         return Ok(out);
     }
-    let groups = by_file(todo);
-    let results = on_fail_fast_thread(move || {
-        groups.into_iter().map(|rows| (profiles_for_file(&rows), rows)).collect::<Vec<_>>()
-    })?;
+    let results = by_file(todo).into_iter().map(|rows| (profiles_for_file(&rows), rows));
     let mut fresh = Vec::new();
     for (result, rows) in results {
         match result {
@@ -454,6 +515,10 @@ pub struct Batch {
     pub profiles: Vec<Fresh>,
     /// The last batch: the backfill is finished.
     pub done: bool,
+    /// Profiles saved by this run so far. On the last batch, 0 means nothing changed (files
+    /// that are missing or online-only are looked at again every launch), so the list doesn't
+    /// need reloading.
+    pub written: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -504,6 +569,50 @@ fn write_turn() -> db::ScanWriteTurn {
     db::scan_write_turn()
 }
 
+/// The backfill's connection, inside a write transaction or not. A transaction holds the scan
+/// write turn from BEGIN until its COMMIT or ROLLBACK has run, never longer: the turn is
+/// released only after the transaction has ended, on success and on error alike.
+struct Writer {
+    conn: Connection,
+    turn: Option<db::ScanWriteTurn>,
+}
+
+impl Writer {
+    fn begin(&mut self) -> AppResult<()> {
+        if self.turn.is_none() {
+            let turn = write_turn();
+            self.conn.execute_batch("BEGIN")?;
+            self.turn = Some(turn);
+        }
+        Ok(())
+    }
+
+    fn in_transaction(&self) -> bool {
+        self.turn.is_some()
+    }
+
+    fn commit(&mut self) -> AppResult<()> {
+        if self.turn.is_some() {
+            let committed = self.conn.execute_batch("COMMIT");
+            if committed.is_err() {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+            self.turn = None;
+            committed?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        // Left mid-transaction by an error: roll back before the turn goes (with the fields).
+        if self.turn.is_some() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
 /// Works out the missing profiles once, at launch: `threads` readers (failing fast on
 /// online-only files, which are skipped), one writer committing about every 400 ms through the
 /// scan write turn, stepping aside for UI writes like the scanner does. `emit` gets each
@@ -517,6 +626,7 @@ pub fn backfill(db_path: &Path, threads: usize, mut emit: impl FnMut(Batch)) -> 
         report.orphans_removed = conn.execute("DELETE FROM face_previews WHERE font_id NOT IN (SELECT id FROM fonts)", [])?;
     }
     let jobs = Arc::new(stale_files(&conn)?);
+    let mut writer = Writer { conn, turn: None };
     report.files = jobs.len();
     if jobs.is_empty() {
         return Ok(report);
@@ -539,14 +649,12 @@ pub fn backfill(db_path: &Path, threads: usize, mut emit: impl FnMut(Batch)) -> 
     drop(tx);
 
     let mut pending: Vec<Fresh> = Vec::new();
-    let mut in_tx: Option<db::ScanWriteTurn> = None;
     let mut last_commit = Instant::now();
-    let mut commit = |turn: &mut Option<db::ScanWriteTurn>, pending: &mut Vec<Fresh>, conn: &Connection| -> AppResult<()> {
-        if turn.take().is_some() {
-            conn.execute_batch("COMMIT")?;
-        }
+    // Commits, then tells the UI what was saved.
+    let mut commit = |writer: &mut Writer, pending: &mut Vec<Fresh>, written: usize| -> AppResult<()> {
+        writer.commit()?;
         if !pending.is_empty() {
-            emit(Batch { profiles: std::mem::take(pending), done: false });
+            emit(Batch { profiles: std::mem::take(pending), done: false, written });
         }
         Ok(())
     };
@@ -554,13 +662,10 @@ pub fn backfill(db_path: &Path, threads: usize, mut emit: impl FnMut(Batch)) -> 
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok((i, result)) => match result {
                 Ok(profiles) => {
-                    if in_tx.is_none() {
-                        in_tx = Some(write_turn());
-                        conn.execute_batch("BEGIN")?;
-                    }
+                    writer.begin()?;
                     let stamp = jobs[i][0].stamp();
                     for (id, p) in profiles {
-                        if store(&conn, id, stamp.0, stamp.1, &p)? {
+                        if store(&writer.conn, id, stamp.0, stamp.1, &p)? {
                             report.written += 1;
                             pending.push(Fresh { id, file_size: stamp.0, mtime: stamp.1, preview: PreviewInfo::from_profile(&p) });
                         }
@@ -572,12 +677,12 @@ pub fn backfill(db_path: &Path, threads: usize, mut emit: impl FnMut(Batch)) -> 
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        if in_tx.is_some() && (last_commit.elapsed() >= COMMIT_EVERY || db::ui_write_waiting() || db::scan_writer_waiting()) {
-            commit(&mut in_tx, &mut pending, &conn)?;
+        if writer.in_transaction() && (last_commit.elapsed() >= COMMIT_EVERY || db::ui_write_waiting() || db::scan_writer_waiting()) {
+            commit(&mut writer, &mut pending, report.written)?;
             last_commit = Instant::now();
         }
     }
-    commit(&mut in_tx, &mut pending, &conn)?;
-    emit(Batch { profiles: vec![], done: true });
+    commit(&mut writer, &mut pending, report.written)?;
+    emit(Batch { profiles: vec![], done: true, written: report.written });
     Ok(report)
 }

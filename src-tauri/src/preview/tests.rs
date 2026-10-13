@@ -2,13 +2,16 @@
 //! fonts from `test_fonts`), the stored table (temporary databases), and an ignored pass over
 //! the real library (read-only).
 
-use ttf_parser::Face;
+use std::time::{Duration, Instant};
+
+use ttf_parser::{Face, GlyphId};
 
 use super::{
-    font::{mac_roman_to_unicode, FontView, Lookup},
+    font::{limits, mac_roman_to_unicode, FontView, Ink, Lookup},
     profile::{self, flags, group, tokens, Group, Kind, Names, Profile},
+    PreviewInfo,
 };
-use crate::test_fonts::{collection, sbix_table, Cmap, FontBuilder, Shape};
+use crate::test_fonts::{collection, ligature_gsub, sbix_table, Cmap, FontBuilder, Shape};
 
 fn names(family: &str) -> Names<'_> {
     Names { family, subfamily: "Regular", full: "", postscript: "", file_stem: "" }
@@ -189,6 +192,42 @@ fn symbol_map_with_a_unicode_map_uses_unicode_only() {
     assert!(chars_of(p.family_text.as_deref().unwrap()).iter().all(|cp| (0xF021..0xF07F).contains(cp)));
 }
 
+/// A symbol-only font whose U+F0xx slots hold ordinary letters, with the given glyph names.
+fn symbol_letters(name: fn(char) -> String) -> FontBuilder {
+    let mut font = FontBuilder::new();
+    for code in 0x20u32..0x7F {
+        let shape = if code == 0x20 { Shape::Empty } else { Shape::bar(100 + code as i16, 650) };
+        let gid = font.glyph(shape, None);
+        font.map(Cmap::Symbol, 0xF000 + code, gid);
+        let c = char::from_u32(code).unwrap();
+        if c.is_ascii_alphabetic() {
+            font.set_glyph_name(gid, &name(c));
+        }
+    }
+    font
+}
+
+#[test]
+fn symbol_only_fonts_with_plain_letters_draw_their_names() {
+    // Monica, Sidewalker and Eco name their letters uniF041…; Jedi Solid and Berette A, B, C.
+    let namings: [fn(char) -> String; 2] = [|c| format!("uniF0{:02X}", c as u32), |c| c.to_string()];
+    for naming in namings {
+        let p = profile_of(&symbol_letters(naming), "Monica");
+        assert_eq!(p.kind, Kind::Name, "CoreText draws the name in the font's own letters");
+        assert_eq!((p.label, p.family_text), (None, None));
+        assert!(p.flags & flags::SYMBOL_CMAP != 0 && p.flags & flags::PICTURE_NAMES == 0);
+    }
+}
+
+#[test]
+fn symbol_only_fonts_with_picture_glyph_names_show_symbols() {
+    // Webdings names its letter slots for what they draw ("town", "city"); no icon word needed.
+    let p = profile_of(&symbol_letters(|c| format!("town{}", c.to_ascii_lowercase())), "Trek Street");
+    assert!(p.flags & flags::PICTURE_NAMES != 0);
+    assert_eq!(p.kind, Kind::Symbols);
+    assert_eq!(p.label.as_deref(), Some("Symbols"));
+}
+
 #[test]
 fn mac_roman_only_font_draws_its_name() {
     let mut font = FontBuilder::new();
@@ -242,6 +281,24 @@ fn the_name_signal_can_be_only_in_the_file_name() {
     assert_eq!(profile::profile(&face, &names).kind, Kind::Expert);
     let names = Names { file_stem: "EurekaSansExpanded", ..names };
     assert_ne!(profile::profile(&face, &names).kind, Kind::Expert, "Expanded isn't Expert");
+}
+
+#[test]
+fn an_expert_name_and_missing_letters_make_an_expert_set() {
+    // BigCaslonExp: small capitals in the letter slots, six letters missing, no placeholder and
+    // no empty slots. Its family name draws, as "ᵇIG¢ASLON".
+    let mut font = FontBuilder::new().chars(" 0123456789").chars(EXPERT_REAL);
+    for c in ('A'..='Z').chain('a'..='z').filter(|c| !"FGJKPQ".contains(*c)) {
+        font.char(c as u32, None);
+    }
+    let data = font.build();
+    let face = Face::parse(&data, 0).unwrap();
+    let names = Names { family: "BigCaslon", subfamily: "Medium", full: "BigCaslon Medium", postscript: "BigCaslon-Medium", file_stem: "BigCaslonExp" };
+    let p = profile::profile(&face, &names);
+    assert_eq!(p.kind, Kind::Expert);
+    assert!(p.flags & flags::MISSING_LETTERS != 0 && p.flags & flags::EXPERT_NAME != 0);
+    let roman = Names { file_stem: "BigCaslonRom", ..names };
+    assert_eq!(profile::profile(&face, &roman).kind, Kind::Name, "without the name signal, a few missing letters are just missing");
 }
 
 #[test]
@@ -444,20 +501,58 @@ fn variable_fonts_honour_use_typo_metrics() {
 }
 
 #[test]
-fn glyphs_that_cant_be_outlined_still_count_as_ink() {
+fn variable_glyphs_that_cant_be_outlined_still_count_as_ink() {
     let mut font = FontBuilder::new().chars(" ");
     for c in "Broken".chars() {
         font.char(c as u32, Some(Shape::Broken));
     }
+    // A static font: the glyph draws nothing.
     let data = font.build();
     let face = Face::parse(&data, 0).unwrap();
     let view = FontView::new(&face);
     let g = view.glyph('B' as u32).unwrap();
     assert_eq!(face.glyph_bounding_box(g), None, "the outline really fails");
+    assert!(!view.real(g));
+    // With variation data (here one ttf-parser can't even read), the glyph has ink we can't
+    // measure: ttf-parser can't apply some variations, and CoreText draws them.
+    let font = font.raw_table(b"gvar", vec![0; 20]);
+    let data = font.build();
+    let face = Face::parse(&data, 0).unwrap();
+    let view = FontView::new(&face);
+    assert_eq!(view.ink(g), Ink::Unknown);
     assert!(view.real(g), "unknown ink isn't an empty slot");
     let p = profile::profile_of(&view, &names("Broken"));
     assert_eq!(p.kind, Kind::Name);
     assert_eq!(p.ink, None, "no outline, so no ink extent");
+}
+
+#[test]
+fn one_point_glyphs_draw_nothing() {
+    // Material Icons maps a–z to glyphs of a single point: alone they draw nothing (words such
+    // as "home" become icons through ligatures).
+    let mut font = FontBuilder::new().chars(" ");
+    let letters: Vec<u16> = ('a'..='z').map(|c| font.char(c as u32, Some(Shape::Point))).collect();
+    let icons: Vec<u16> = (0xE000..0xE020).map(|cp| font.char(cp, None)).collect();
+    let letter = |c: char| letters[(c as u8 - b'a') as usize];
+    let data = font.build();
+    let face = Face::parse(&data, 0).unwrap();
+    let view = FontView::new(&face);
+    let g = GlyphId(letter('h'));
+    assert_eq!(view.ink(g), Ink::None);
+    assert!(!view.real(g));
+    let p = profile::profile_of(&view, &names("material icons"));
+    assert_eq!(p.kind, Kind::Symbols, "the name would draw as blanks");
+    assert!(chars_of(p.family_text.as_deref().unwrap()).iter().all(|cp| (0xE000..0xE020).contains(cp)));
+    assert!(p.ascii_missing.contains('h'));
+
+    // With ligatures, a letter that starts one isn't missing: typed "home" draws a house.
+    let home = [letter('h'), letter('o'), letter('m'), letter('e')];
+    let add = [letter('a'), letter('d'), letter('d')];
+    let font = font.raw_table(b"GSUB", ligature_gsub(&[(&home[..], icons[0]), (&add[..], icons[1])]));
+    let p = profile_of(&font, "material icons");
+    assert_eq!(p.kind, Kind::Symbols);
+    assert!(!p.ascii_missing.contains('h') && !p.ascii_missing.contains('a'), "{}", p.ascii_missing);
+    assert!(p.ascii_missing.contains('o') && p.ascii_missing.contains('z'), "{}", p.ascii_missing);
 }
 
 #[test]
@@ -524,6 +619,223 @@ fn tall_icons_record_their_ascent_and_ink() {
     assert!((p.ascent - 2.048).abs() < 0.001 && (p.descent - 0.0195).abs() < 0.001, "{} {}", p.ascent, p.descent);
     let (top, bottom) = p.ink.unwrap();
     assert!((top - 2.048).abs() < 0.001 && bottom.abs() < 0.001, "{top} {bottom}");
+}
+
+#[test]
+fn each_name_keeps_its_own_kind() {
+    // Magdelena: capitals only, and a full name ending in a colon the font lacks. The family row
+    // draws MAGDELENA; the style row needs a sample, and gets the badge.
+    let data = FontBuilder::new().chars(" ABCDEFGHIJKLMNOPQRSTUVWXYZ").build();
+    let face = Face::parse(&data, 0).unwrap();
+    let names = Names { family: "Magdelena", subfamily: "Plain", full: "Magdelena Plain:", ..Default::default() };
+    let p = profile::profile(&face, &names);
+    assert_eq!((p.kind, p.full_kind), (Kind::Case, Kind::Partial));
+    assert_eq!(p.family_text.as_deref(), Some("MAGDELENA"));
+    assert_eq!(p.full_text.as_deref(), Some("ABCDEFGHIJKL"));
+    assert_eq!(p.label.as_deref(), Some("Partial set"));
+    assert_eq!(PreviewInfo::from_profile(&p).full_kind.as_deref(), Some("partial"));
+    let plain = profile_of(&latin_except(""), "Plain Sans");
+    assert_eq!(plain.full_kind, Kind::Name);
+    assert_eq!(PreviewInfo::from_profile(&plain).full_kind, None, "sent only when it differs");
+}
+
+#[test]
+fn glyph_names_are_the_ones_ttf_parser_reads() {
+    let mut font = latin_except("");
+    font.glyph_names = true;
+    let data = font.build();
+    let face = Face::parse(&data, 0).unwrap();
+    let view = FontView::new(&face);
+    let mut named = 0;
+    for g in 0..face.number_of_glyphs() {
+        let g = GlyphId(g);
+        assert_eq!(view.glyph_name(g), face.glyph_name(g), "glyph {}", g.0);
+        named += view.glyph_name(g).is_some() as usize;
+    }
+    assert!(named > 90);
+}
+
+// ----------------------------------------------------------------------------------- limits
+
+/// A `cmap` listing each subtable under (3,10), each `repeat` times.
+fn cmap_table(subtables: &[Vec<u8>], repeat: usize) -> Vec<u8> {
+    let records = subtables.len() * repeat;
+    let mut t = Vec::new();
+    t.extend(0u16.to_be_bytes());
+    t.extend((records as u16).to_be_bytes());
+    let mut offsets = Vec::new();
+    let mut at = 4 + 8 * records;
+    for st in subtables {
+        offsets.push(at);
+        at += st.len();
+    }
+    for _ in 0..repeat {
+        for offset in &offsets {
+            t.extend(3u16.to_be_bytes());
+            t.extend(10u16.to_be_bytes());
+            t.extend((*offset as u32).to_be_bytes());
+        }
+    }
+    for st in subtables {
+        t.extend(st);
+    }
+    t
+}
+
+/// A format 12 (one glyph after another) or 13 (one glyph for the whole range) subtable.
+fn groups(format: u16, groups: &[(u32, u32, u32)]) -> Vec<u8> {
+    let mut t = Vec::new();
+    t.extend(format.to_be_bytes());
+    t.extend(0u16.to_be_bytes());
+    t.extend(((16 + 12 * groups.len()) as u32).to_be_bytes());
+    t.extend(0u32.to_be_bytes());
+    t.extend((groups.len() as u32).to_be_bytes());
+    for (start, end, glyph) in groups {
+        for v in [start, end, glyph] {
+            t.extend(v.to_be_bytes());
+        }
+    }
+    t
+}
+
+/// A format 4 subtable of `n` segments that all cover U+0000–U+FFFE.
+fn overlapping_segments(n: usize) -> Vec<u8> {
+    let segs = n + 1;
+    let mut t = Vec::new();
+    for v in [4u16, (16 + 8 * segs) as u16, 0, (2 * segs) as u16, 0, 0, 0] {
+        t.extend(v.to_be_bytes());
+    }
+    let column = |first: u16, last: u16| -> Vec<u8> { (0..segs).flat_map(|i| if i < n { first } else { last }.to_be_bytes()).collect() };
+    t.extend(column(0xFFFE, 0xFFFF)); // ends
+    t.extend(0u16.to_be_bytes());
+    t.extend(column(0, 0xFFFF)); // starts
+    t.extend(column(1, 1)); // deltas: glyph = code + 1
+    t.extend(column(0, 0)); // no range offsets
+    t
+}
+
+/// A font with 60 glyphs whose character map is `cmap`, and the time its profile and its
+/// characters took.
+fn hostile(cmap: Vec<u8>) -> (Profile, usize, Duration) {
+    let mut font = FontBuilder::new();
+    for i in 0..60 {
+        font.glyph(Shape::bar(100 + i, 700), None);
+    }
+    let data = font.raw_table(b"cmap", cmap).build();
+    let face = Face::parse(&data, 0).unwrap();
+    let start = Instant::now();
+    let view = FontView::new(&face);
+    let p = profile::profile_of(&view, &names("Hostile"));
+    let grid = super::characters::characters(&face, &names("Hostile"));
+    assert!(grid.total <= limits::CODE_POINTS);
+    (p, view.map.len(), start.elapsed())
+}
+
+/// How long a hostile font may take (its profile and its character grid). Unoptimized test
+/// builds are many times slower than the app, and run the tests side by side.
+const QUICK: Duration = if cfg!(debug_assertions) { Duration::from_secs(6) } else { Duration::from_secs(1) };
+
+#[test]
+fn a_character_map_claiming_every_code_point_is_cut_short() {
+    // One format 12 group from 0 to 0xFFFFFFFF: ttf-parser would walk four billion codes.
+    let (p, mapped, took) = hostile(cmap_table(&[groups(12, &[(0, u32::MAX, 1)])], 1));
+    assert!(took < QUICK, "{took:?}");
+    assert_eq!(mapped, 60, "codes 0–59 reach glyphs 1–60; past glyph 65,535 the group ends");
+    assert_eq!(p.flags & flags::LIMITED, 0);
+    // The same as format 13: every code point maps to one glyph.
+    let (p, mapped, took) = hostile(cmap_table(&[groups(13, &[(0, u32::MAX, 5)])], 1));
+    assert!(took < QUICK, "{took:?}");
+    assert_eq!(mapped, limits::CODE_POINTS, "kept up to the limit");
+    assert_eq!(p.kind, Kind::Name);
+    assert!(p.flags & flags::LIMITED != 0);
+}
+
+#[test]
+fn many_character_maps_share_one_budget() {
+    // One full-range subtable listed 2,000 times is read once.
+    let (_, mapped, took) = hostile(cmap_table(&[groups(13, &[(0, 0x10FFFF, 5)])], 2000));
+    assert!(took < QUICK, "{took:?}");
+    assert_eq!(mapped, limits::CODE_POINTS);
+    // 40 different subtables that each repeat the same 131,072 codes: the visits run out.
+    let many: Vec<Vec<u8>> = (0..40).map(|i| groups(13, &[(0, 0x1FFFF, 5 + i)])).collect();
+    let (p, mapped, took) = hostile(cmap_table(&many, 1));
+    assert!(took < QUICK, "{took:?}");
+    assert_eq!(mapped, 0x20000, "the first subtable's");
+    println!("hostile character maps: {took:?} for the profile and the character grid");
+    assert!(p.flags & flags::LIMITED != 0);
+}
+
+#[test]
+fn overlapping_segments_are_visited_once() {
+    // 8,000 segments over the whole BMP: two billion codes as ttf-parser lists them.
+    let (p, mapped, took) = hostile(cmap_table(&[overlapping_segments(8000)], 1));
+    assert!(took < QUICK, "{took:?}");
+    assert_eq!(mapped, 60, "codes 0–59 map to glyphs 1–60; the rest point past the font");
+    assert_eq!(p.flags & flags::LIMITED, 0);
+}
+
+#[test]
+fn composite_bombs_are_not_drawn() {
+    // Each level places the one below four times: 4^20 outlines from a few hundred bytes.
+    let mut font = FontBuilder::new().chars(" ");
+    let mut bomb = font.glyph(Shape::bar(300, 700), None);
+    for _ in 0..20 {
+        bomb = font.glyph(Shape::Composite { glyph: bomb, times: 4 }, None);
+    }
+    for c in "Bomb".chars() {
+        font.map(Cmap::Unicode, c as u32, bomb);
+    }
+    // A glyph of a few components is fine.
+    let base = font.glyph(Shape::bar(300, 700), None);
+    let pair = font.glyph(Shape::Composite { glyph: base, times: 2 }, None);
+    font.map(Cmap::Unicode, 'x' as u32, pair);
+    let data = font.build();
+    let face = Face::parse(&data, 0).unwrap();
+    let start = Instant::now();
+    let view = FontView::new(&face);
+    let p = profile::profile_of(&view, &names("Bomb"));
+    assert!(start.elapsed() < QUICK, "{:?}", start.elapsed());
+    assert_eq!(p.kind, Kind::Name, "drawn, its size unknown");
+    assert_eq!(view.ink(GlyphId(bomb)), Ink::Unknown);
+    assert!(p.flags & flags::LIMITED != 0);
+    assert_eq!(view.ink(GlyphId(pair)), Ink::Outline { y_min: 0, y_max: 700 });
+}
+
+#[test]
+fn glyphs_drawing_too_many_segments_are_stopped() {
+    // 100 copies of a 60,000-point outline: few components, but six million segments.
+    let mut font = FontBuilder::new().chars(" ");
+    let long = font.glyph(Shape::Zigzag { points: 60_000 }, None);
+    let heavy = font.glyph(Shape::Composite { glyph: long, times: 100 }, None);
+    for c in "Heavy".chars() {
+        font.map(Cmap::Unicode, c as u32, heavy);
+    }
+    let lone = font.glyph(Shape::Composite { glyph: long, times: 1 }, None);
+    font.map(Cmap::Unicode, 'z' as u32, lone);
+    let data = font.build();
+    let face = Face::parse(&data, 0).unwrap();
+    let start = Instant::now();
+    let view = FontView::new(&face);
+    let p = profile::profile_of(&view, &names("Heavy"));
+    assert!(start.elapsed() < QUICK, "{:?}", start.elapsed());
+    assert_eq!(view.ink(GlyphId(heavy)), Ink::Unknown);
+    assert!(p.flags & flags::LIMITED != 0);
+    assert!(matches!(view.ink(GlyphId(lone)), Ink::Outline { .. }), "60,000 segments are within the limit");
+}
+
+#[test]
+fn reader_threads_answer_and_outlive_a_failed_job() {
+    tauri::async_runtime::block_on(async {
+        assert_eq!(super::on_reader(|| 2 + 2).await.unwrap(), 4);
+        let failed = super::on_reader(|| -> i32 { std::panic::resume_unwind(Box::new("damaged font")) }).await;
+        assert!(failed.is_err());
+        let answers = futures_join(super::on_reader(|| 1), super::on_reader(|| 2)).await;
+        assert_eq!(answers, (1, 2), "the threads carry on");
+    });
+}
+
+async fn futures_join<A, B>(a: impl std::future::Future<Output = crate::error::AppResult<A>>, b: impl std::future::Future<Output = crate::error::AppResult<B>>) -> (A, B) {
+    (a.await.unwrap(), b.await.unwrap())
 }
 
 // ------------------------------------------------------------------------------- characters
@@ -636,6 +948,40 @@ mod stored {
     }
 
     #[test]
+    fn a_style_row_kind_is_stored_when_it_differs() {
+        let lib = Library::new("fullkind");
+        lib.write("Magdelena.ttf", &FontBuilder::new().chars(" ABCDEFGHIJKLMNOPQRSTUVWXYZ").named("Magdelena").name(4, "Magdelena Plain:"));
+        lib.write("Plain.ttf", &latin_except("").named("Plain Sans"));
+        lib.scan();
+        let fonts = db::list_fonts(&lib.conn()).unwrap();
+        let kinds: Vec<(String, Option<String>)> =
+            fonts.iter().map(|f| (f.preview.as_ref().unwrap().kind.clone(), f.preview.as_ref().unwrap().full_kind.clone())).collect();
+        assert_eq!(kinds, vec![("case".into(), Some("partial".into())), ("name".into(), None)]);
+        let json = serde_json::to_value(&fonts[0]).unwrap();
+        assert_eq!(json["preview"]["fullKind"], "partial");
+        assert_eq!(json["preview"]["label"], "Partial set");
+    }
+
+    #[test]
+    fn an_older_table_gets_the_new_column() {
+        let dir = std::env::temp_dir().join(format!("fontface-preview-oldtable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = db::open(&dir.join("library.sqlite3")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE face_previews (font_id INTEGER PRIMARY KEY REFERENCES fonts(id) ON DELETE CASCADE,
+             file_size INTEGER NOT NULL, mtime INTEGER NOT NULL, rev INTEGER NOT NULL, kind TEXT NOT NULL,
+             family_text TEXT, full_text TEXT, sample TEXT, label TEXT, ascii_missing TEXT NOT NULL DEFAULT '',
+             flags INTEGER NOT NULL DEFAULT 0, ascent REAL, descent REAL, ink_top REAL, ink_bottom REAL)",
+        )
+        .unwrap();
+        preview::ensure_schema(&conn).unwrap();
+        preview::ensure_schema(&conn).unwrap();
+        assert!(db::list_fonts(&conn).unwrap().is_empty(), "the list's join reads the new column");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn stale_profiles_read_as_none() {
         let lib = Library::new("stale");
         two_fonts(&lib);
@@ -714,11 +1060,47 @@ mod stored {
         assert_eq!(report.orphans_removed, 1);
         assert_eq!(report.written as i64, before);
         assert_eq!(lib.rows(), before);
-        assert!(batches.last().unwrap().done);
+        let last = batches.last().unwrap();
+        assert!(last.done);
+        assert_eq!(last.written as i64, before, "the list reloads once");
         let sent: usize = batches.iter().map(|b| b.profiles.len()).sum();
         assert_eq!(sent as i64, before);
         let again = preview::backfill(&lib.db(), 2, |_| {}).unwrap();
         assert_eq!((again.files, again.written), (0, 0), "nothing left to do");
+    }
+
+    #[test]
+    fn a_backfill_that_saves_nothing_says_so() {
+        // A file gone since its scan is looked at every launch; the list needn't reload for it.
+        let lib = Library::new("nothingnew");
+        two_fonts(&lib);
+        lib.scan();
+        let conn = lib.conn();
+        insert_font(&conn, lib.folder, lib.dir.join("fonts/Gone.ttf").to_str().unwrap(), "Gone");
+        let mut batches = Vec::new();
+        let report = preview::backfill(&lib.db(), 2, |b| batches.push(b)).unwrap();
+        assert_eq!((report.files, report.written, report.other), (1, 0, 1));
+        assert_eq!(batches.len(), 1);
+        assert!(batches[0].done && batches[0].written == 0 && batches[0].profiles.is_empty());
+    }
+
+    #[test]
+    fn the_backfill_writer_rolls_back_before_giving_up_its_turn() {
+        let lib = Library::new("writer");
+        two_fonts(&lib);
+        lib.scan();
+        let mut writer = preview::Writer { conn: lib.conn(), turn: None };
+        writer.begin().unwrap();
+        writer.conn.execute("DELETE FROM face_previews", []).unwrap();
+        drop(writer); // an error mid-batch
+        assert_eq!(lib.rows(), 2, "rolled back");
+        let mut writer = preview::Writer { conn: lib.conn(), turn: None };
+        writer.begin().unwrap();
+        writer.conn.execute("DELETE FROM face_previews WHERE font_id = 1", []).unwrap();
+        writer.commit().unwrap();
+        assert!(!writer.in_transaction());
+        assert_eq!(lib.rows(), 1);
+        let _turn = db::scan_write_turn(); // free again
     }
 
     #[test]
@@ -770,7 +1152,7 @@ mod real {
 
     use rusqlite::{Connection, OpenFlags};
 
-    use super::super::{profiles_for_file, FaceRow, PreviewInfo, Unreadable};
+    use super::super::{read_file, FaceRow, PreviewInfo, Profile, Unreadable};
 
     fn library() -> Option<Connection> {
         let home = std::env::var("HOME").ok()?;
@@ -809,6 +1191,18 @@ mod real {
         .map(Result::unwrap)
         .filter(|r| !excluded(&r.path))
         .collect()
+    }
+
+    /// Profiles for one file's faces, from the file as it is now: the library's stamps can lag
+    /// behind a cloud drive, and these tests only read. Online-only files still fail fast.
+    fn profiles_now(faces: &[FaceRow]) -> Result<Vec<(i64, Profile)>, Unreadable> {
+        let data = read_file(&faces[0].path, None)?;
+        let mut out = Vec::new();
+        for row in faces {
+            let face = ttf_parser::Face::parse(&data, row.face_index).map_err(|e| Unreadable::Broken(e.to_string()))?;
+            out.push((row.id, row.with_names(|names| super::super::profile_safely(&face, names))));
+        }
+        Ok(out)
     }
 
     /// The list fit (src/previewFit.ts), for checking the numbers here.
@@ -859,7 +1253,18 @@ mod real {
         ("Apple Color Emoji", "family = 'Apple Color Emoji'", "symbols"),
         // Lookup checks: Mac Roman only, and another symbol-only font.
         ("Krupper", "family = 'Krupper'", "name"),
-        ("Monica", "family = 'Monica'", "symbols"),
+        // Symbol-only maps: plain letters draw the name, pictures show symbols.
+        ("Monica", "family = 'Monica'", "name"),
+        ("Jedi Solid", "family = 'Jedi Solid'", "name"),
+        ("Webdings", "family = 'Webdings'", "symbols"),
+        ("Wingdings 2", "family = 'Wingdings 2'", "symbols"),
+        // Letters of one point (blank alone) and an Expert set named only by its file.
+        ("Material Icons", "family = 'Material Icons'", "symbols"),
+        ("Trek Signs", "family = 'Trek Signs'", "symbols"),
+        ("BigCaslonExp", "path LIKE '%/BigCaslonExp.otf'", "expert"),
+        ("BigCaslonRom", "path LIKE '%/BigCaslonRom.otf'", "name"),
+        // The family draws in capitals, the full name needs a sample (checked below).
+        ("Magdelena", "family = 'Magdelena'", "case"),
         // Fit references for src/previewFit.test.ts.
         ("Zapfino", "family = 'Zapfino'", "name"),
         ("STIXSizeThreeSym", "family = 'STIXSizeThreeSym' AND subfamily = 'Regular'", "symbols"),
@@ -883,7 +1288,7 @@ mod real {
                 by_file.entry(r.path.clone()).or_default().push(r);
             }
             for (path, faces) in by_file {
-                let result = match profiles_for_file(&faces) {
+                let result = match profiles_now(&faces) {
                     // The backfill skips files over 96 MB (Apple Color Emoji); the scanner still
                     // profiles them when it reads them. Check the profile itself here.
                     Err(Unreadable::TooLarge) => {
@@ -892,7 +1297,7 @@ mod real {
                             .iter()
                             .filter_map(|r| {
                                 let face = ttf_parser::Face::parse(&data, r.face_index).ok()?;
-                                r.with_names(|n| super::super::profile_safely(&face, n)).map(|p| (r.id, p))
+                                Some((r.id, r.with_names(|n| super::super::profile_safely(&face, n))))
                             })
                             .collect())
                     }
@@ -919,14 +1324,19 @@ mod real {
                             if info.kind != *want {
                                 wrong.push(format!("{label} #{id}: {} (wanted {want})", info.kind));
                             }
+                            if *label == "Magdelena" && info.full_kind.as_deref() != Some("partial") {
+                                wrong.push(format!("Magdelena #{id}: its style row draws {:?} (wanted partial)", info.full_kind));
+                            }
                             let text = info.family_text.clone().unwrap_or_default();
                             if *label == "Apple Color Emoji" {
                                 assert!(!text.chars().any(|c| c.is_ascii_graphic()), "no Basic Latin: {text}");
                             }
-                            if info.kind == "expert" {
+                            if *want == "expert" && (label.starts_with("MetaCond") || label.starts_with("District")) {
+                                assert!(p.flags & super::flags::PLACEHOLDER != 0, "{label}: the placeholder was found");
+                            }
+                            if info.kind == "expert" && p.flags & super::flags::PLACEHOLDER != 0 {
                                 // Letter slots can hold real Expert glyphs (MetaCond's A is one);
                                 // what must never show is the shared placeholder.
-                                assert!(p.flags & super::flags::PLACEHOLDER != 0, "{label}: the placeholder was found");
                                 let data = std::fs::read(&path).unwrap();
                                 let face = ttf_parser::Face::parse(&data, faces[0].face_index).unwrap();
                                 let view = super::FontView::new(&face);
@@ -964,7 +1374,7 @@ mod real {
                 let view = super::FontView::new(&face);
                 let extra: Vec<char> = row
                     .with_names(|n| super::super::profile_safely(&face, n))
-                    .and_then(|p| p.family_text)
+                    .family_text
                     .map(|t| t.chars().filter(|c| !c.is_whitespace()).collect())
                     .unwrap_or_default();
                 for c in probe.iter().chain(extra.iter()) {
@@ -1082,14 +1492,19 @@ mod real {
                 std::thread::spawn(move || {
                     crate::cloud::fail_fast_on_this_thread();
                     let mut out: Vec<(String, Option<String>, u128)> = Vec::new(); // kind, label, µs per face
+                    let mut lines: Vec<String> = Vec::new();
                     let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(faces) = jobs.get(i) else { break };
                         let t = Instant::now();
-                        match profiles_for_file(faces) {
+                        match profiles_now(faces) {
                             Ok(profiles) => {
                                 let us = t.elapsed().as_micros() / profiles.len().max(1) as u128;
+                                for (id, p) in &profiles {
+                                    let family = faces.iter().find(|r| r.id == *id).map_or("", |r| r.family.as_str());
+                                    lines.push(format!("{id}\t{family}\t{}\t{:?}\t{:?}\t{:?}\t{}", p.kind.as_str(), p.label, p.family_text, p.full_text, p.flags));
+                                }
                                 out.extend(profiles.into_iter().map(|(_, p)| (p.kind.as_str().to_string(), p.label, us)));
                             }
                             Err(e) => {
@@ -1101,7 +1516,7 @@ mod real {
                             }
                         }
                     }
-                    (out, skipped)
+                    (out, skipped, lines)
                 })
             })
             .collect();
@@ -1109,8 +1524,10 @@ mod real {
         let mut labels: BTreeMap<String, usize> = BTreeMap::new();
         let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
         let mut times = Vec::new();
+        let mut dump: Vec<String> = Vec::new();
         for t in threads {
-            let (out, skip) = t.join().expect("no panics in the whole-library pass");
+            let (out, skip, lines) = t.join().expect("no panics in the whole-library pass");
+            dump.extend(lines);
             for (kind, label, us) in out {
                 *kinds.entry(kind).or_default() += 1;
                 if let Some(l) = label {
@@ -1135,6 +1552,13 @@ mod real {
             v
         });
         println!("skipped faces: {skipped:?}");
+        // FONTFACE_PREVIEW_DUMP=<file>: one line per face (id, family, kind, label, texts, flags),
+        // sorted by id, for comparing two versions of the rules.
+        if let Ok(file) = std::env::var("FONTFACE_PREVIEW_DUMP") {
+            dump.sort_by_key(|l| l.split('\t').next().and_then(|id| id.parse::<i64>().ok()).unwrap_or(0));
+            std::fs::write(&file, dump.join("\n") + "\n").unwrap();
+            println!("wrote {} faces to {file}", dump.len());
+        }
         assert!(!times.is_empty());
     }
 }

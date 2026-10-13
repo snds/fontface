@@ -127,10 +127,11 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
   const variation = Object.entries(axisValues)
     .map(([tag, v]) => `"${tag}" ${v}`)
     .join(", ");
-  const fontFamily = `"${faceName(font)}"`;
+  const pageFace = faceName(font);
+  const fontFamily = `"${pageFace}"`;
   const sample = waterfallText(previewText, profile, font.family);
-  const characterSet =
-    characters.status === "ready" ? characterSetLine(characters.data, isSampleKind(profile) ? profile?.label : undefined) : profile?.label;
+  // The label is there only when a row of this face draws a sample of characters.
+  const characterSet = characters.status === "ready" ? characterSetLine(characters.data, profile?.label) : profile?.label;
   const axes = detail?.axes.filter((a) => !a.hidden) ?? [];
 
   // [label, value, monospace?]
@@ -193,12 +194,14 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
             {WATERFALL.map((px) => (
               <div key={px} className="flex items-baseline gap-2 overflow-hidden whitespace-nowrap">
                 <span className="w-5 shrink-0 text-right font-mono text-[10px] text-muted-foreground">{px}</span>
-                {/* Never shrunk: a row grows when the font's ink is taller than the line. */}
+                {/* Never shrunk: a row grows when the font's ink is taller than the line. Hidden
+                    only while loading: a face that fails to load draws in the fallback font. */}
                 <PreviewText
                   fontFamily={fontFamily}
+                  face={pageFace}
                   text={sample}
                   size={px}
-                  ready={state === "ready"}
+                  ready={state !== "loading"}
                   profile={profile}
                   ownText={!previewText && sample === (profile?.familyText ?? font.family)}
                   sample={!previewText && sample === profile?.familyText && isSampleKind(profile)}
@@ -243,7 +246,7 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
           <Separator />
           <section>
             <SectionTitle>Characters</SectionTitle>
-            <CharacterGrid state={characters} fontFamily={fontFamily} fontVariationSettings={variation || undefined} ready={state === "ready"} />
+            <CharacterGrid state={characters} fontFamily={fontFamily} fontVariationSettings={variation || undefined} fontState={state} />
           </section>
 
           <Separator />

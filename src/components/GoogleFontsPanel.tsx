@@ -54,6 +54,7 @@ function FamilyPreview({ family, font, text }: { family: GoogleFamily; font: Fon
   return (
     <PreviewText
       fontFamily={`"${faceName(font)}"`}
+      face={faceName(font)}
       text={text || profile?.familyText || family.family}
       size={22}
       ready={state === "ready" && !pending}

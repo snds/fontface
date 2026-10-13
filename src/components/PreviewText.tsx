@@ -1,20 +1,25 @@
 import { useMemo } from "react";
 import type { PreviewInfo } from "@/api";
-import { chooseMetrics, fitRow, fitStyle, fitWaterfall, type Fit, type Ink, type LineMetrics } from "@/previewFit";
+import { isFaceLoaded } from "@/fontLoader";
+import { chooseMetrics, fitRow, fitStyle, fitWaterfall, type Fit } from "@/previewFit";
 import { measureText } from "@/previewMeasure";
 import { cn } from "@/lib/utils";
 
 interface Props {
   /** CSS font-family value, such as `"ff-12-abc"`. Also what the canvas measures with. */
   fontFamily: string;
+  /** The page-only face name (fontLoader's `faceName`) when the font is one the app loads. The
+   *  text is measured only once that face has loaded, so a measurement of the fallback font is
+   *  never taken (or cached) for it. Leave it out for fonts the system draws by name. */
+  face?: string;
   text: string;
   /** Font size in px. */
   size: number;
-  /** The font has loaded: until then the text stays hidden and isn't measured. */
+  /** Show the text: until then it stays hidden and isn't measured. */
   ready: boolean;
-  /** The face's profile, when it has one: its line metrics are the reference for fitting. */
+  /** The face's profile, when it has one: its line metrics are the fallback for fitting. */
   profile?: PreviewInfo;
-  /** `text` is the profile's own text, so its ink is already known (no canvas needed). */
+  /** `text` is the profile's own text, so its stored ink counts too. */
   ownText?: boolean;
   /** "row": a list preview, 1.3 em tall, shrunk if needed. "waterfall": never shrunk; the row
    *  grows instead. */
@@ -28,28 +33,27 @@ interface Props {
 
 /** The fit for this text, or undefined to draw it plainly. Pure apart from the cached canvas
  *  measurement, so it's cheap to call on every render. */
-function useFit({ fontFamily, text, size, ready, profile, ownText, mode = "row" }: Props): Fit | undefined {
+function useFit({ fontFamily, face, text, size, ready, profile, ownText, mode = "row" }: Props): Fit | undefined {
   const ascent = profile?.ascent;
   const descent = profile?.descent;
   const inkTop = profile?.inkTop;
   const inkBottom = profile?.inkBottom;
+  // A face that failed to load (or hasn't yet) draws in the fallback font: drawn plainly.
+  const loaded = ready && (!face || isFaceLoaded(face));
   return useMemo(() => {
-    if (!ready || !text) return undefined;
+    if (!loaded || !text) return undefined;
     const fit = mode === "row" ? fitRow : fitWaterfall;
-    const line: LineMetrics | undefined = ascent !== undefined && descent !== undefined ? { ascent, descent } : undefined;
-    if (ownText && line && inkTop !== undefined && inkBottom !== undefined) {
-      const ink: Ink = { top: inkTop, bottom: inkBottom };
-      return fit(line, ink, size);
-    }
-    const chosen = chooseMetrics(line, measureText(fontFamily, text) ?? undefined);
+    const line = ascent !== undefined && descent !== undefined ? { ascent, descent } : undefined;
+    const ink = ownText && inkTop !== undefined && inkBottom !== undefined ? { top: inkTop, bottom: inkBottom } : undefined;
+    const chosen = chooseMetrics({ line, ink }, measureText(fontFamily, text) ?? undefined);
     return chosen ? fit(chosen.line, chosen.ink, size) : undefined;
-  }, [ready, text, mode, ascent, descent, inkTop, inkBottom, ownText, fontFamily, size]);
+  }, [loaded, text, mode, ascent, descent, inkTop, inkBottom, ownText, fontFamily, size]);
 }
 
 /**
  * Preview text fitted to its box: nothing clipped, the baseline where it belongs (see
- * previewFit.ts). Hidden until the font is ready. Always left to right, so Hebrew and Arabic
- * samples line up with everything else.
+ * previewFit.ts). Hidden until ready. Always left to right, so Hebrew and Arabic samples line
+ * up with everything else.
  */
 export function PreviewText(props: Props) {
   const { fontFamily, text, size, ready, sample, className, style, mode = "row" } = props;

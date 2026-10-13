@@ -1,7 +1,11 @@
 import { LruCache, type Measured } from "./previewFit";
 
-// Measures text with a shared canvas, for fitting previews (see previewFit.ts). Only call it
-// once the font has loaded, or the canvas measures the fallback font instead.
+// Measures text with a shared canvas, for fitting previews (see previewFit.ts). Call it only
+// once the font has loaded (PreviewText checks fontLoader's isFaceLoaded): before that the
+// canvas measures the fallback font, and the cache would keep that answer.
+//
+// Cached by font-family and text. The app's font-family names carry the file's version
+// (fontLoader's faceName), so a changed file is a new key and gets measured afresh.
 
 const SIZE = 100;
 const cache = new LruCache<Measured | null>(4000);
@@ -17,8 +21,8 @@ function canvas(): CanvasRenderingContext2D | null {
 }
 
 /**
- * The ink and line metrics of `text` in `fontFamily` (a CSS font-family value), in em. Cached
- * by family and text; null when the canvas can't measure.
+ * The ink and line metrics of `text` in `fontFamily` (a CSS font-family value), in em, as the
+ * text is drawn (shaped). Cached by family and text; null when the canvas can't measure.
  */
 export function measureText(fontFamily: string, text: string): Measured | null {
   const key = `${fontFamily}\u0000${text}`;

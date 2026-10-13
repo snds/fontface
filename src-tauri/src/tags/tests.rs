@@ -667,6 +667,8 @@ fn real_typeface_backup() {
     std::fs::copy(&library, &copy).unwrap();
     let conn = db::open(&copy).unwrap();
     super::ensure_schema(&conn).unwrap();
+    // list_fonts joins the preview profiles, which a library copied from before them lacks.
+    crate::preview::ensure_schema(&conn).unwrap();
     let source = typeface::parse(&std::fs::read(&backup).unwrap()).unwrap();
     let p = import::preview(&conn, &source).unwrap();
     println!("{}: {} tags, {} fonts named, {} matched, {} not in the library", p.label, p.tags.len(), p.fonts, p.matched_fonts, p.unmatched_fonts);

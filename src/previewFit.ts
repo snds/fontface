@@ -87,29 +87,40 @@ export function fitStyle(fit: Fit, sizePx: number) {
 
 /** What the canvas reports for text in a loaded font, in em. */
 export interface Measured {
-  /** actualBoundingBoxAscent / Descent. */
+  /** actualBoundingBoxAscent / Descent: the ink of the text as drawn, shaped (ligatures,
+   *  contextual swashes and marks included). */
   ink: Ink;
   /** fontBoundingBoxAscent / Descent: the line metrics the canvas used. Missing on engines
    *  that don't report them. */
   line?: LineMetrics;
 }
 
-/** How far the canvas's line metrics may stray from the font file's before they're distrusted. */
-export const METRICS_TOLERANCE = 0.02;
+/** What Rust read from the font file (the preview profile). */
+export interface Stored {
+  /** The line ascent and descent CoreText reads from the file. */
+  line?: LineMetrics;
+  /** The ink of the profile's own text, each character's own glyph (no shaping). Only for that
+   *  text: typed text has none. */
+  ink?: Ink;
+}
 
 /**
- * The line metrics and ink to fit with.
- * - `profile`: ascent and descent read from the font file in Rust (what CoreText uses).
- * - `measured`: the canvas's numbers for the text being drawn.
- * When both exist and the canvas line metrics differ from the file's by more than 0.02 em, the
- * file's are used with the canvas ink: the file is the reference for how WebKit lays out lines.
+ * The line metrics and ink to fit with, once the face has loaded (before that the canvas
+ * measures the fallback font).
+ * - Line metrics: the canvas's, which are what WebKit lays the line out with. They can differ
+ *   from the file's: WebKit adds 15% ascent to installed Times, Helvetica and Courier. The
+ *   file's are the fallback for an engine that doesn't report them.
+ * - Ink: the canvas's, since shaping can reach further than any single glyph (Zapfino's swashes,
+ *   Voluta Script's joins). For the profile's own text, the larger of the canvas's and the
+ *   stored ink, so neither source can clip the other.
  */
-export function chooseMetrics(profile: LineMetrics | undefined, measured: Measured | undefined): { line: LineMetrics; ink: Ink | null } | undefined {
-  if (!measured) return profile ? { line: profile, ink: null } : undefined;
-  const line = measured.line;
-  if (!profile) return line ? { line, ink: measured.ink } : undefined;
-  const agree = !!line && Math.abs(line.ascent - profile.ascent) <= METRICS_TOLERANCE && Math.abs(line.descent - profile.descent) <= METRICS_TOLERANCE;
-  return { line: agree && line ? line : profile, ink: measured.ink };
+export function chooseMetrics(stored: Stored | undefined, measured: Measured | undefined): { line: LineMetrics; ink: Ink | null } | undefined {
+  const line = measured?.line ?? stored?.line;
+  if (!line) return undefined;
+  const drawn = measured?.ink;
+  const own = stored?.ink;
+  const ink = drawn && own ? { top: Math.max(drawn.top, own.top), bottom: Math.max(drawn.bottom, own.bottom) } : (drawn ?? own ?? null);
+  return { line, ink };
 }
 
 /** A small least-recently-used map, for measurements keyed by face and text. */
