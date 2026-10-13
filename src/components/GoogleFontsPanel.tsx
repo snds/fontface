@@ -3,6 +3,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { api, type FontSummary, type GoogleCatalog, type GoogleFamily } from "@/api";
 import { faceName, useFontFace } from "@/fontLoader";
+import { isSampleKind, usePreviewProfile } from "@/previewProfiles";
+import { PreviewText } from "./PreviewText";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
@@ -40,20 +42,26 @@ type Show = "all" | "installed" | "updates";
 
 const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 
-/** Installed families preview in their own font (from the local files). Others show their name. */
+/** Installed families preview in their own font (from the local files), fitted like the library
+ *  list (icon families show their icons). Others show their name. */
 function FamilyPreview({ family, font, text }: { family: GoogleFamily; font: FontSummary | undefined; text: string }) {
   const state = useFontFace(font);
+  const { profile, pending } = usePreviewProfile(font);
   // Not downloaded, or its preview can't load: show the name in the interface font.
   if (!font || state === "error" || state === "cloud" || state === "too-large") {
     return <div className="truncate text-lg font-medium">{family.family}</div>;
   }
   return (
-    <div
-      className={cn("truncate text-[22px] leading-tight transition-opacity", state === "loading" && "preview-loading")}
-      style={{ fontFamily: `"${faceName(font)}"` }}
-    >
-      {text || family.family}
-    </div>
+    <PreviewText
+      fontFamily={`"${faceName(font)}"`}
+      face={faceName(font)}
+      text={text || profile?.familyText || family.family}
+      size={22}
+      ready={state === "ready" && !pending}
+      profile={profile}
+      ownText={!text && !!profile && font.family === family.family}
+      sample={!text && isSampleKind(profile)}
+    />
   );
 }
 

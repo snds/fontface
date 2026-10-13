@@ -21,13 +21,16 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Duplicate copies shown as one style | ✅ | ⬜ | "×N" badge; turning on registers one preferred copy, turning off covers all copies |
 | Online-only files never stall a scan | ✅ | ⬜ | Fast readers skip them instantly; 3 background downloaders fetch them |
 | Group by family, expand to styles | ✅ | ⬜ | Representative face = closest to Regular |
-| Custom preview text + size | ✅ | ⬜ | |
+| Custom preview text + size | ✅ | ⬜ | An icon shows when the typed text uses characters the font doesn't have ("Not in this font: …") |
+| Previews for symbol, icon, Expert and script fonts | 🟡 | ⬜ | A font that can't draw its name shows its name tidied (™ dropped, "-" as a space) or in capitals or lowercase, its own sample text, or a run of its real characters with a quiet badge: Symbols, Expert set, the script's name, or Partial set. Expert sets are found by their shared placeholder shape, empty letter slots or Expert glyph names, plus "Expert"/"Exp" in a name. Families show a style that can draw its name. Worked out by the scanner, once in the background for fonts scanned before, and on demand; online-only and Adobe files are never read for it. Not yet checked in the running app |
+| Previews never clipped; baselines line up | 🟡 | ⬜ | Tall fonts (LI Glyphs, Zapfino, Christiana) are fitted into the row instead of cut off: moved, and shrunk (to half size at most) only when taller than the row. Baselines sit at the same height from row to row. Also in the Google Fonts and Adobe Fonts lists. Not yet checked in the running app |
 | Lazy preview loading (large libraries) | ✅ | ⬜ | Virtualized list; faces load only when on screen |
 | Collection faces preview individually | ✅ | ⬜ | Face is extracted from the .ttc in Rust |
 | Activate / deactivate a style or family | ✅ | ⬜ | Persistent by default: stays on after quit and restart. Temporary mode in Settings |
 | Activation survives app not running | ✅ | ⬜ | CoreText persistent user scope |
 | Re-apply activations at launch and after scans | ✅ | ⬜ | Keeps intent if a file is only temporarily unreachable |
-| Detail panel: waterfall, characters, metadata | ✅ | ⬜ | |
+| Detail panel: waterfall, characters, metadata | ✅ | ⬜ | The waterfall shows the pangram only when the font has its letters (else its own text), and grows a row instead of clipping tall ink. "Character set" in the info section |
+| Characters grid | 🟡 | ⬜ | Every real character of the font, by Unicode block (the biggest block first), with a summary line ("166 characters, all in Private Use Area …", "Expert set: 60 real characters; 175 slots share one placeholder (hidden)"). Hover shows the code point and glyph name; click or Enter copies the character. Arrow keys move between cells. 512 per block, then "Show all". Not yet checked in the running app |
 | Variable font axis sliders | ✅ | ⬜ | |
 | Search by family / style / PostScript name | ✅ | ⬜ | |
 | Show in Finder / Explorer | ✅ | ⬜ | |
@@ -123,7 +126,7 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Conflict warnings (name already active from another file) | ⬜ | ⬜ |
 | Broken / unreadable file report | 🟡 | ⬜ |
 | Side-by-side compare | ⬜ | ⬜ |
-| Full glyph grid with Unicode info | ⬜ | ⬜ |
+| Full glyph grid with Unicode info | 🟡 | ⬜ |
 | OpenType feature toggles (liga, ss01…) in previews | ⬜ | ⬜ |
 | Language / script coverage | ⬜ | ⬜ |
 

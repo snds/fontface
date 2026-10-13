@@ -19,13 +19,18 @@ type Outcome = Exclude<FaceState, "loading"> | "dropped";
 
 const MAX_CONCURRENT = 6;
 const cache = new Map<string, Promise<Outcome>>();
+/** Faces added to the page and ready to draw. */
+const loaded = new Set<string>();
 const users = new Map<string, number>();
 const queue: { name: string; start: () => void; drop: () => void }[] = [];
 let running = 0;
 
-const version = (f: FontSummary) => `${f.mtime.toString(36)}${f.fileSize.toString(36)}`;
+type FileVersion = Pick<FontSummary, "id" | "mtime" | "fileSize">;
 
-export const faceName = (f: FontSummary) => `ff-${f.id}-${version(f)}`;
+const version = (f: FileVersion) => `${f.mtime.toString(36)}${f.fileSize.toString(36)}`;
+
+/** The page-only font name for this exact version of a font file. */
+export const faceName = (f: FileVersion) => `ff-${f.id}-${version(f)}`;
 
 function pump() {
   while (running < MAX_CONCURRENT && queue.length) {
@@ -61,6 +66,7 @@ async function fromApp(font: FontSummary, name: string): Promise<Outcome> {
   if (!res.ok) return "error";
   const face = await new FontFace(name, await res.arrayBuffer()).load();
   document.fonts.add(face);
+  loaded.add(name);
   return "ready";
 }
 
@@ -69,6 +75,7 @@ async function fromSystem(font: FontSummary, name: string): Promise<boolean> {
   try {
     const face = await new FontFace(name, `local("${font.postscriptName.replace(/["\\]/g, "\\$&")}")`).load();
     document.fonts.add(face);
+    loaded.add(name);
     return true;
   } catch {
     return false; // e.g. WebKit doesn't expose this installed font by name
@@ -89,16 +96,29 @@ function loadFace(font: FontSummary): Promise<Outcome> {
   return pending;
 }
 
+/** The face has loaded and was added to the page: text in it draws (and measures) in it. */
+export const isFaceLoaded = (name: string) => loaded.has(name);
+
+/**
+ * Whether a font's face is ready to draw. The state belongs to one face: when a row starts
+ * showing another font (a family's representative changes as you search), it reads "loading"
+ * at once, not the last font's "ready", so nothing is shown or measured in the fallback font
+ * meanwhile. A face that has already loaded reads "ready" straight away.
+ */
 export function useFontFace(font: FontSummary | undefined): FaceState {
-  const [state, setState] = useState<FaceState>("loading");
   const name = font ? faceName(font) : undefined;
+  const [current, setCurrent] = useState<{ name: string | undefined; state: FaceState }>(() => ({
+    name,
+    state: name && loaded.has(name) ? "ready" : "loading",
+  }));
   useEffect(() => {
     if (!font || !name) return;
     let live = true;
     users.set(name, (users.get(name) ?? 0) + 1);
-    setState("loading");
+    const settle = (state: FaceState) => setCurrent({ name, state });
+    settle(loaded.has(name) ? "ready" : "loading");
     // "dropped" means the row left the screen before its turn; if it's back, ask again.
-    const run = () => loadFace(font).then((o) => live && (o === "dropped" ? queueMicrotask(run) : setState(o)));
+    const run = () => loadFace(font).then((o) => live && (o === "dropped" ? queueMicrotask(run) : settle(o)));
     run();
     return () => {
       live = false;
@@ -107,5 +127,6 @@ export function useFontFace(font: FontSummary | undefined): FaceState {
     // The face name captures everything that identifies the file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name]);
-  return state;
+  if (current.name === name) return current.state;
+  return name && loaded.has(name) ? "ready" : "loading";
 }

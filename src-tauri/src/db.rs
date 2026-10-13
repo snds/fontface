@@ -382,12 +382,24 @@ pub fn other_roots(conn: &Connection, except: i64) -> AppResult<Vec<PathBuf>> {
     Ok(rows.map(|r| r.map(PathBuf::from)).collect::<Result<_, _>>()?)
 }
 
-pub const SUMMARY_COLUMNS: &str = "fonts.id, fonts.folder_id, fonts.path, fonts.face_index, fonts.family, \
-     fonts.subfamily, fonts.full_name, fonts.postscript_name, fonts.weight, fonts.width, fonts.italic, \
-     fonts.monospace, fonts.variable, fonts.format, fonts.activated, folders.kind = 'system', \
-     fonts.mtime, fonts.file_size";
+/// The list columns: the font's own (18), then its preview profile's (`preview::COLUMNS`).
+fn summary_columns() -> String {
+    format!(
+        "fonts.id, fonts.folder_id, fonts.path, fonts.face_index, fonts.family, \
+         fonts.subfamily, fonts.full_name, fonts.postscript_name, fonts.weight, fonts.width, fonts.italic, \
+         fonts.monospace, fonts.variable, fonts.format, fonts.activated, folders.kind = 'system', \
+         fonts.mtime, fonts.file_size, {}",
+        crate::preview::COLUMNS
+    )
+}
 
-const SUMMARY_FROM: &str = "fonts JOIN folders ON folders.id = fonts.folder_id";
+/// How many columns `summary_columns` lists.
+const SUMMARY_LEN: usize = 18 + crate::preview::COLUMN_COUNT;
+
+/// Fonts with their folder, and their preview profile if it's current (a stale one reads as none).
+fn summary_from() -> String {
+    format!("fonts JOIN folders ON folders.id = fonts.folder_id {}", crate::preview::join_clause())
+}
 
 /// Fills in `os_active` from the set of font files the OS currently has loaded.
 /// `None` means the platform can't report it; then intent (or installed) is shown instead.
@@ -421,13 +433,16 @@ pub fn summary_from_row(r: &Row) -> rusqlite::Result<FontSummary> {
         mtime: r.get(16)?,
         file_size: r.get(17)?,
         os_active: false,
+        preview: crate::preview::info_from_row(r, 18)?,
     })
 }
 
 pub fn list_fonts(conn: &Connection) -> AppResult<Vec<FontSummary>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {SUMMARY_COLUMNS} FROM {SUMMARY_FROM} \
-         ORDER BY fonts.family COLLATE NOCASE, fonts.italic, fonts.width, fonts.weight"
+        "SELECT {} FROM {} \
+         ORDER BY fonts.family COLLATE NOCASE, fonts.italic, fonts.width, fonts.weight",
+        summary_columns(),
+        summary_from()
     ))?;
     let rows = stmt.query_map([], summary_from_row)?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -435,23 +450,26 @@ pub fn list_fonts(conn: &Connection) -> AppResult<Vec<FontSummary>> {
 
 pub fn get_font(conn: &Connection, id: i64) -> AppResult<Option<FontDetail>> {
     let sql = format!(
-        "SELECT {SUMMARY_COLUMNS}, fonts.version, fonts.designer, fonts.manufacturer, fonts.copyright, \
+        "SELECT {}, fonts.version, fonts.designer, fonts.manufacturer, fonts.copyright, \
          fonts.license, fonts.license_url, fonts.axes, fonts.glyph_count \
-         FROM {SUMMARY_FROM} WHERE fonts.id = ?1"
+         FROM {} WHERE fonts.id = ?1",
+        summary_columns(),
+        summary_from()
     );
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([id])?;
     let Some(r) = rows.next()? else { return Ok(None) };
-    let axes_json: String = r.get(24)?;
+    let n = SUMMARY_LEN;
+    let axes_json: String = r.get(n + 6)?;
     Ok(Some(FontDetail {
         summary: summary_from_row(r)?,
-        version: r.get(18)?,
-        designer: r.get(19)?,
-        manufacturer: r.get(20)?,
-        copyright: r.get(21)?,
-        license: r.get(22)?,
-        license_url: r.get(23)?,
+        version: r.get(n)?,
+        designer: r.get(n + 1)?,
+        manufacturer: r.get(n + 2)?,
+        copyright: r.get(n + 3)?,
+        license: r.get(n + 4)?,
+        license_url: r.get(n + 5)?,
         axes: serde_json::from_str::<Vec<Axis>>(&axes_json).unwrap_or_default(),
-        glyph_count: r.get(25)?,
+        glyph_count: r.get(n + 7)?,
     }))
 }

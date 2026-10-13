@@ -32,6 +32,7 @@ use crate::{
     activation, cloud, db,
     error::{AppError, AppResult},
     model::{Axis, ScanFailure, ScanProgress, ScanReport},
+    preview,
 };
 
 pub const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
@@ -59,6 +60,9 @@ pub struct ParsedFace {
     pub axes: Vec<Axis>,
     pub glyph_count: u16,
     pub format: String,
+    /// What the library list draws for this face (see preview/). Worked out only for files the
+    /// scanner reads into the library.
+    pub preview: Option<preview::Profile>,
 }
 
 pub fn is_font_file(path: &Path) -> bool {
@@ -70,6 +74,16 @@ pub fn is_font_file(path: &Path) -> bool {
 
 /// Parses every face in a font file. A plain .ttf/.otf has one face; a collection has several.
 pub fn parse_file(data: &[u8]) -> Result<Vec<ParsedFace>, String> {
+    parse_faces(data, None)
+}
+
+/// Like `parse_file`, and also works out each face's preview profile. `file_stem` is the file
+/// name without its extension (some Expert sets say what they are only there).
+pub fn parse_file_with_previews(data: &[u8], file_stem: &str) -> Result<Vec<ParsedFace>, String> {
+    parse_faces(data, Some(file_stem))
+}
+
+fn parse_faces(data: &[u8], previews: Option<&str>) -> Result<Vec<ParsedFace>, String> {
     // Real collections hold a few dozen faces at most. The count comes from the file's header,
     // so a hostile file could claim millions; refuse those instead of parsing them all.
     const MAX_FACES: u32 = 256;
@@ -81,7 +95,7 @@ pub fn parse_file(data: &[u8]) -> Result<Vec<ParsedFace>, String> {
     let mut faces = Vec::with_capacity(count as usize);
     for index in 0..count {
         let face = Face::parse(data, index).map_err(|e| e.to_string())?;
-        faces.push(parse_face(&face, collection.is_some()));
+        faces.push(parse_face(&face, collection.is_some(), previews));
     }
     if faces.is_empty() {
         return Err("collection contains no fonts".into());
@@ -89,7 +103,7 @@ pub fn parse_file(data: &[u8]) -> Result<Vec<ParsedFace>, String> {
     Ok(faces)
 }
 
-fn parse_face(face: &Face, in_collection: bool) -> ParsedFace {
+fn parse_face(face: &Face, in_collection: bool, previews: Option<&str>) -> ParsedFace {
     let name = |id: u16| name_string(face, id);
     let family = name(16).or_else(|| name(1)).unwrap_or_else(|| "Unknown".into());
     let subfamily = name(17).or_else(|| name(2)).unwrap_or_else(|| "Regular".into());
@@ -111,11 +125,23 @@ fn parse_face(face: &Face, in_collection: bool) -> ParsedFace {
         })
         .collect();
 
+    let (full_name, postscript_name) = (name(4), name(6));
+    let preview = previews.map(|file_stem| {
+        let names = preview::Names {
+            family: &family,
+            subfamily: &subfamily,
+            full: full_name.as_deref().unwrap_or(""),
+            postscript: postscript_name.as_deref().unwrap_or(""),
+            file_stem,
+        };
+        preview::profile_safely(face, &names)
+    });
+
     ParsedFace {
         family,
         subfamily,
-        full_name: name(4),
-        postscript_name: name(6),
+        full_name,
+        postscript_name,
         version: name(5),
         designer: name(9),
         manufacturer: name(8),
@@ -130,11 +156,12 @@ fn parse_face(face: &Face, in_collection: bool) -> ParsedFace {
         axes,
         glyph_count: face.number_of_glyphs(),
         format,
+        preview,
     }
 }
 
 /// Picks the best `name` table entry: Windows US English, then any Unicode entry, then Mac Roman.
-fn name_string(face: &Face, id: u16) -> Option<String> {
+pub(crate) fn name_string(face: &Face, id: u16) -> Option<String> {
     let mut unicode: Option<String> = None;
     let mut mac: Option<String> = None;
     for n in face.names().into_iter().filter(|n| n.name_id == id) {
@@ -154,7 +181,7 @@ fn name_string(face: &Face, id: u16) -> Option<String> {
     unicode.or(mac).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
-fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
+pub(crate) fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -175,15 +202,16 @@ enum ReadOutcome {
     NotDownloaded,
 }
 
-fn parse_bytes(data: std::io::Result<Vec<u8>>) -> Result<Vec<ParsedFace>, ReadError> {
+fn parse_bytes(path: &Path, data: std::io::Result<Vec<u8>>) -> Result<Vec<ParsedFace>, ReadError> {
     let data = data.map_err(|e| ReadError::Io(e.to_string()))?;
-    parse_file(&data).map_err(ReadError::Parse)
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    parse_file_with_previews(&data, &stem).map_err(ReadError::Parse)
 }
 
 fn read_and_parse(path: &Path) -> ReadOutcome {
     match std::fs::read(path) {
         Err(e) if cloud::is_not_downloaded(&e) => ReadOutcome::NotDownloaded,
-        other => ReadOutcome::Parsed(parse_bytes(other)),
+        other => ReadOutcome::Parsed(parse_bytes(path, other)),
     }
 }
 
@@ -286,6 +314,8 @@ pub fn scan_folder(
         )));
     }
     let mut conn = db::open(db_path)?;
+    // The scanner writes preview profiles with the fonts.
+    preview::ensure_schema(&conn)?;
     let mut report = ScanReport { folder_id, ..Default::default() };
     let mut throttle = Throttle::new(PROGRESS_EVERY);
 
@@ -447,7 +477,7 @@ pub fn scan_folder(
                     break;
                 }
                 // Default I/O policy: this read downloads the file.
-                let outcome = ReadOutcome::Parsed(parse_bytes(std::fs::read(&pending[i].path)));
+                let outcome = ReadOutcome::Parsed(parse_bytes(&pending[i].path, std::fs::read(&pending[i].path)));
                 if tx.send((i, outcome)).is_err() {
                     break;
                 }
@@ -609,7 +639,8 @@ fn remember_skipped(conn: &Connection, folder_id: i64, item: &Pending, reason: &
     Ok(())
 }
 
-/// Writes every listable face of a file. Returns how many rows were written.
+/// Writes every listable face of a file, with its preview profile. Returns how many rows were
+/// written.
 fn upsert_faces(
     conn: &Connection,
     folder_id: i64,
@@ -632,7 +663,8 @@ fn upsert_faces(
             copyright = excluded.copyright, license = excluded.license,
             license_url = excluded.license_url, weight = excluded.weight, width = excluded.width,
             italic = excluded.italic, monospace = excluded.monospace, variable = excluded.variable,
-            axes = excluded.axes, glyph_count = excluded.glyph_count, format = excluded.format",
+            axes = excluded.axes, glyph_count = excluded.glyph_count, format = excluded.format
+         RETURNING id",
     )?;
     let mut written = 0;
     for (index, f) in faces.iter().enumerate() {
@@ -642,12 +674,18 @@ fn upsert_faces(
             continue;
         }
         let axes = serde_json::to_string(&f.axes).unwrap_or_else(|_| "[]".into());
-        stmt.execute(params![
-            folder_id, path, index as u32, size, mtime, f.family, f.subfamily, f.full_name,
-            f.postscript_name, f.version, f.designer, f.manufacturer, f.copyright, f.license,
-            f.license_url, f.weight, f.width, f.italic, f.monospace, f.variable, axes,
-            f.glyph_count, f.format
-        ])?;
+        let id: i64 = stmt.query_row(
+            params![
+                folder_id, path, index as u32, size, mtime, f.family, f.subfamily, f.full_name,
+                f.postscript_name, f.version, f.designer, f.manufacturer, f.copyright, f.license,
+                f.license_url, f.weight, f.width, f.italic, f.monospace, f.variable, axes,
+                f.glyph_count, f.format
+            ],
+            |r| r.get(0),
+        )?;
+        if let Some(profile) = &f.preview {
+            preview::store(conn, id, size, mtime, profile)?;
+        }
         written += 1;
     }
     // A collection that shrank leaves stale faces behind.

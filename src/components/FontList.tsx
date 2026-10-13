@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { FontSummary } from "@/api";
+import type { FontSummary, PreviewInfo } from "@/api";
 import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
+import { isSampleKind, kindFor, missingCharacters, usePreviewProfile, type ProfileState } from "@/previewProfiles";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -18,6 +19,7 @@ import { uniqueFaces, useTagIndex, type TagIndex } from "@/tags/model";
 import { LocationDots, TagChips } from "@/tags/TagChips";
 import { TagPicker } from "@/tags/TagPicker";
 import { ActivationSwitch, InstalledBadge } from "./ActivationSwitch";
+import { PreviewText } from "./PreviewText";
 
 type Row = { kind: "family"; family: Family } | { kind: "face"; face: Face };
 
@@ -306,8 +308,26 @@ const UNAVAILABLE: Record<string, { icon: string; text: string }> = {
   "too-large": { icon: "data_usage", text: "Too large to preview" },
 };
 
-function Preview({ font, text, size }: { font: FontSummary; text: string; size: number }) {
+/** How long a preview waits for its profile before drawing the name anyway. */
+const PROFILE_WAIT_MS = 300;
+
+/**
+ * A row's preview: the typed text, else the profile's text (the name, tidied, or a sample of
+ * the font's real characters), else the name. Hidden until the font has loaded and the profile
+ * is known (or 300 ms have passed), then fitted so nothing is clipped.
+ */
+function Preview({ font, preview, typed, own, size }: { font: FontSummary; preview: ProfileState; typed: string; own: "family" | "full"; size: number }) {
   const state = useFontFace(font);
+  const { profile, pending } = preview;
+  const face = faceName(font);
+  // The wait belongs to one face: a row that starts showing another font waits afresh.
+  const [waitedFor, setWaitedFor] = useState<string>();
+  useEffect(() => {
+    if (!pending) return;
+    const timer = setTimeout(() => setWaitedFor(face), PROFILE_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [pending, face]);
+  const waited = waitedFor === face;
   const unavailable = UNAVAILABLE[state];
   if (unavailable) {
     return (
@@ -317,13 +337,57 @@ function Preview({ font, text, size }: { font: FontSummary; text: string; size: 
       </div>
     );
   }
+  const name = own === "family" ? font.family : font.fullName || `${font.family} ${font.subfamily}`;
+  const profileText = own === "family" ? profile?.familyText : profile?.fullText;
   return (
-    <div
-      className={cn("truncate leading-[1.3] transition-opacity", state === "loading" && "preview-loading")}
-      style={{ fontFamily: `"${faceName(font)}"`, fontSize: size }}
-    >
-      {text || font.fullName || `${font.family} ${font.subfamily}`}
-    </div>
+    <PreviewText
+      fontFamily={`"${face}"`}
+      face={face}
+      text={typed || profileText || name}
+      size={size}
+      ready={state === "ready" && (!pending || waited)}
+      profile={profile}
+      ownText={!typed && !!profile}
+      sample={!typed && isSampleKind(profile, own)}
+    />
+  );
+}
+
+/** "Symbols", "Expert set", a script name or "Partial set", for rows previewed by a sample.
+ *  `row`: a family row goes by the family name, a style row by its full name. */
+function SampleBadge({ profile, row }: { profile: PreviewInfo | undefined; row: "family" | "full" }) {
+  if (!isSampleKind(profile, row) || !profile?.label) return null;
+  const why =
+    kindFor(profile, row) === "expert"
+      ? "An expert set: extra characters (fractions, ligatures, small capitals and the like) that go with another font. This shows the characters it has."
+      : "This font can't draw its name, so this shows characters it does have.";
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="shrink-0" onClick={(e) => e.stopPropagation()} />}>
+        <Badge variant="outline" className="text-muted-foreground">
+          {profile.label}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{why}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Shown when the typed preview text uses characters this font doesn't have. */
+function MissingHint({ text, profile }: { text: string; profile: PreviewInfo | undefined }) {
+  const missing = missingCharacters(text, profile);
+  if (!missing.length) return null;
+  const list = missing.join(" ");
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="inline-flex shrink-0 items-center text-muted-foreground" onClick={(e) => e.stopPropagation()} />}>
+        <Icon name="font_download_off" size={14} />
+        <span className="sr-only">Not in this font: {list}</span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        Not in this font: {list}. Those characters show in another font, or as boxes or blanks.
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -366,6 +430,7 @@ function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, sele
   const key = `f:${family.name}`;
   const selected = isSelected(key, actions, family.faces.some((face) => face.copies.some((c) => c.id === selectedId)));
   const copies = useMemo(() => family.faces.flatMap((f) => f.copies), [family]);
+  const preview = usePreviewProfile(family.representative.primary);
   return (
     <div
       role="listitem"
@@ -395,6 +460,8 @@ function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, sele
           {family.faces.some((f) => f.primary.variable) && <Badge variant="outline">Variable</Badge>}
           {family.faces.some((f) => f.primary.monospace) && <Badge variant="outline">Mono</Badge>}
           {duplicates && <Badge variant="outline">Duplicates</Badge>}
+          <SampleBadge profile={preview.profile} row="family" />
+          <MissingHint text={previewText} profile={preview.profile} />
           <TagChips faces={family.faces} index={actions.index} />
         </span>
         <RowTagButton rowKey={key} actions={actions} label={family.name} />
@@ -411,7 +478,7 @@ function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, sele
         )}
       </div>
       <div className="pl-8">
-        <Preview font={family.representative.primary} text={previewText || family.name} size={size} />
+        <Preview font={family.representative.primary} preview={preview} typed={previewText} own="family" size={size} />
       </div>
     </div>
   );
@@ -419,6 +486,7 @@ function FamilyRow({ family, expanded, onToggleExpanded, previewText, size, sele
 
 function FaceRow({ face, previewText, size, selectedId, busy, locations, onActivate, actions, rowIndex }: RowProps & { face: Face }) {
   const font = face.primary;
+  const preview = usePreviewProfile(font);
   const key = `s:${face.key}`;
   const selected = isSelected(key, actions, face.copies.some((c) => c.id === selectedId));
   return (
@@ -440,6 +508,10 @@ function FaceRow({ face, previewText, size, selectedId, busy, locations, onActiv
             {font.italic ? " · italic" : ""}
           </span>
           <CopiesBadge face={face} />
+          <span className="flex items-center gap-1.5 font-sans">
+            <SampleBadge profile={preview.profile} row="full" />
+            <MissingHint text={previewText} profile={preview.profile} />
+          </span>
           <span className="font-sans">
             <TagChips faces={[face]} index={actions.index} />
           </span>
@@ -457,7 +529,7 @@ function FaceRow({ face, previewText, size, selectedId, busy, locations, onActiv
           />
         )}
       </div>
-      <Preview font={font} text={previewText} size={size} />
+      <Preview font={font} preview={preview} typed={previewText} own="full" size={size} />
     </div>
   );
 }

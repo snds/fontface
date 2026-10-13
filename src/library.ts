@@ -17,7 +17,8 @@ export interface Face {
 export interface Family {
   name: string;
   faces: Face[];
-  /** The face used for the family's preview line: closest to Regular. */
+  /** The face used for the family's preview line: one that can draw its name (so Lucida Math
+   *  Std shows its Italic, not its Symbol face), then the one closest to Regular. */
   representative: Face;
   /** Faces that can be switched (not installed in a macOS font folder). */
   switchable: Face[];
@@ -140,12 +141,20 @@ const sortFaces = (faces: Face[]) =>
       Number(b.primary.variable) - Number(a.primary.variable),
   );
 
+/** The face's preview reads as its name: drawn as is, tidied or in one case. Unknown counts too
+ *  (no profile yet). A face that needs a sample of characters (symbols, an expert set) doesn't. */
+const drawsItsName = (f: FontSummary) => !f.preview || f.preview.kind === "name" || f.preview.kind === "trim" || f.preview.kind === "case";
+
+/** Is `a` a better family representative than `b`? One that can draw its name, then the most regular. */
+const betterRepresentative = (a: FontSummary, b: FontSummary) =>
+  drawsItsName(a) !== drawsItsName(b) ? drawsItsName(a) : regularness(a) < regularness(b);
+
 function makeFamily(name: string, faces: Face[]): Family {
   const switchable = faces.filter((face) => !face.installed);
   return {
     name,
     faces,
-    representative: faces.reduce((best, face) => (regularness(face.primary) < regularness(best.primary) ? face : best)),
+    representative: faces.reduce((best, face) => (betterRepresentative(face.primary, best.primary) ? face : best)),
     switchable,
     activeCount: switchable.filter((face) => face.active).length,
   };

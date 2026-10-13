@@ -27,6 +27,7 @@ import {
   type StatusFilter,
 } from "@/library";
 import { faceName } from "@/fontLoader";
+import { listenForProfiles } from "@/previewProfiles";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -295,6 +296,11 @@ export default function App() {
       unlisten.then((fn) => fn());
     };
   }, [loadFonts, setScan, announce]);
+
+  // Preview profiles worked out at launch for fonts that had none. Rows on screen pick them up
+  // as they arrive; when the backfill is done, the list reloads once so families can choose a
+  // representative that draws its name.
+  useEffect(() => listenForProfiles(() => loadFonts().catch(() => {})), [loadFonts]);
 
   // The purchases watcher found new font downloads. The listener is registered before the
   // first count, and only the newest count is applied.

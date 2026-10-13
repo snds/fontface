@@ -19,7 +19,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 walkdir = "2"
-ttf-parser = "0.25"
+# gvar-alloc: without it, outlines fail for variable fonts with many variation tuples (SF Pro,
+# Roboto Flex), and previews would wrongly decide those fonts can't draw their names.
+ttf-parser = { version = "0.25", features = ["gvar-alloc"] }
 thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 ureq = "2"

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { PreviewText } from "./PreviewText";
 import { PageHeader } from "./TitleBar";
 
 const LINKS = {
@@ -134,9 +135,9 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
                 </Button>
               </div>
               {/* Drawn by the OS through the font's registered name. Nothing is read from Adobe's files. */}
-              <div className="truncate text-[22px] leading-tight" style={{ fontFamily: `"${previewFace(faces).postscriptName}", "${family}"` }}>
-                {previewText || family}
-              </div>
+              {/* Fitted from the canvas's measurement of the drawn text, never from the file. */}
+              <PreviewText fontFamily={`"${previewFace(faces).postscriptName}", "${family}"`} text={previewText || family} size={22} ready />
+
               <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
                 {faces.map((f) => (
                   <span key={f.postscriptName}>{f.style}</span>

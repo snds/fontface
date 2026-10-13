@@ -7,6 +7,7 @@ mod error;
 #[cfg(target_os = "macos")]
 mod login_item;
 mod model;
+mod preview;
 mod protocol;
 mod scanner;
 mod services;
@@ -116,6 +117,7 @@ pub fn run() {
             let db_path = dir.join("library.sqlite3");
             let mut conn = db::open(&db_path)?;
             tags::ensure_schema(&conn)?;
+            preview::ensure_schema(&conn)?;
             settings::ensure_schema(&conn)?;
             activation::ensure_schema(&conn)?;
             sync::ensure_schema(&conn)?;
@@ -152,6 +154,25 @@ pub fn run() {
             });
             commands::restart_purchase_watcher(app.handle());
             sync::start(app.handle());
+            // Preview profiles for fonts scanned before profiles existed (or after a PREVIEW_REV
+            // bump). It waits a moment, so the window's first list and the launch scans go first.
+            {
+                let (handle, db_path) = (app.handle().clone(), db_path.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    let result = preview::backfill(&db_path, 2, |batch| {
+                        let _ = handle.emit("preview-profiles", batch);
+                    });
+                    match result {
+                        Ok(r) if r.files > 0 => eprintln!(
+                            "fontface: preview profiles for {} faces in {} files ({} online-only and {} other files skipped)",
+                            r.written, r.files, r.cloud, r.other
+                        ),
+                        Ok(_) => {}
+                        Err(e) => eprintln!("fontface: preview backfill failed: {e}"),
+                    }
+                });
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || restore_at_launch(&handle, app_settings.restore_on_launch));
             if app_settings.tag_backups {
@@ -173,6 +194,8 @@ pub fn run() {
             commands::cancel_scan,
             commands::list_fonts,
             commands::get_font,
+            commands::preview_profiles,
+            commands::font_characters,
             commands::set_activation,
             commands::reveal_font,
             commands::list_services,
@@ -317,5 +340,7 @@ fn restore_at_launch(handle: &tauri::AppHandle, policy: settings::RestorePolicy)
 
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod test_fonts;
 #[cfg(test)]
 mod tests;

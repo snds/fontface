@@ -19,7 +19,7 @@ use tauri::{
 
 use crate::{cloud, sfnt, AppState};
 
-const MAX_PREVIEW_BYTES: u64 = 96 * 1024 * 1024;
+pub(crate) const MAX_PREVIEW_BYTES: u64 = 96 * 1024 * 1024;
 
 /// (path, mtime, size) → bytes of the most recently read collection file.
 static LAST_COLLECTION: Mutex<Option<((String, i64, i64), std::sync::Arc<Vec<u8>>)>> = Mutex::new(None);
