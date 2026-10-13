@@ -40,6 +40,8 @@ pub struct FontSummary {
     pub file_size: i64,
     /// What the OS reports right now. Can differ from `activated` if another app changed it.
     pub os_active: bool,
+    /// What the preview draws (see preview/). None until the face has a current profile.
+    pub preview: Option<crate::preview::PreviewInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -16,7 +16,7 @@ use tokio::sync::watch;
 
 use crate::{
     activation::{self, Scope, TurnOn},
-    backups, db, services,
+    backups, db, preview, services,
     error::{AppError, AppResult},
     model::{ActivationOutcome, Folder, FontDetail, FontSummary, ScanReport},
     scanner,
@@ -263,6 +263,46 @@ fn notice_turned_off_elsewhere(state: &AppState, fonts: &mut [FontSummary]) {
             f.activated = false;
         }
     }
+}
+
+/// Preview profiles for list rows that arrived without one (`preview: null`): at most
+/// `preview::MAX_ON_DEMAND` ids per call. Current stored profiles come back as they are; the
+/// rest are worked out from their files (never downloading online-only ones, never reading
+/// Creative Cloud's) and saved.
+#[tauri::command(async)]
+pub fn preview_profiles(state: State<'_, AppState>, ids: Vec<i64>) -> AppResult<Vec<preview::OnDemand>> {
+    preview::on_demand(
+        || preview::rows_for_ids(&*state.conn()?, &ids),
+        |fresh| {
+            state.write(|conn| {
+                let tx = conn.transaction()?;
+                for (row, profile) in fresh {
+                    preview::store(&tx, row.id, row.file_size, row.mtime, profile)?;
+                }
+                tx.commit()?;
+                Ok(())
+            })
+        },
+    )
+}
+
+/// Every real character of a face, by Unicode block, for the detail panel's character grid.
+/// Worked out from the file each time, with the same safeguards as previews.
+#[tauri::command(async)]
+pub fn font_characters(state: State<'_, AppState>, font_id: i64) -> AppResult<preview::characters::FontCharacters> {
+    let row = preview::face_row_by_id(&*state.conn()?, font_id)?.ok_or_else(|| AppError::NotFound(format!("font {font_id}")))?;
+    let result = std::thread::spawn(move || {
+        crate::cloud::fail_fast_on_this_thread();
+        let data = preview::read_file(&row.path, Some(row.stamp())).map_err(|why| why.message())?;
+        let face = ttf_parser::Face::parse(&data, row.face_index).map_err(|e| preview::Unreadable::Broken(e.to_string()).message())?;
+        row.with_names(|names| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| preview::characters::characters(&face, names)))
+                .map_err(|_| "This font's characters can't be read.".to_string())
+        })
+    })
+    .join()
+    .map_err(|_| AppError::Other("reading the font's characters failed".into()))?;
+    result.map_err(AppError::Invalid)
 }
 
 #[tauri::command(async)]
