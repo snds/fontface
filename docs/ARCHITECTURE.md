@@ -9,6 +9,7 @@ App / Sidebar / FontList / DetailPanel
    │  invoke("list_fonts" …)  ───────────▶   commands.rs   ── db.rs (SQLite, WAL)
    │  listen("scan-progress") ◀───────────     │               scanner.rs (walk + parse)
    │  FontFace("ff://localhost/<id>") ───▶   protocol.rs   ── sfnt.rs (split .ttc faces)
+   │  invoke("preview_profiles" …) ──────▶   preview/      (what previews draw; face_previews)
                                                │
                                              activation/   ── macos.rs   (CoreText)  ✅
                                                             ─ windows.rs (GDI + HKCU) ⬜
@@ -100,6 +101,69 @@ apart from macOS dropping a font before its drive mounted, so launch still re-ap
 - Installed fonts load by PostScript name (`local()`).
 - Other fonts are fetched over `ff://`, 6 at a time, newest first. Rows that scroll away are dropped from the queue.
 - Online-only files are never downloaded for a preview; they show "Not downloaded yet". Files over 96 MB aren't previewed.
+
+**Preview profiles: what a preview draws.**
+A preview used to draw the font's name in the font itself. Icon, symbol, math, Expert and
+non-Latin fonts often can't draw their own name, and WebKit fills the gaps with the system
+font, so the preview showed plain text or the wrong glyphs. `src-tauri/src/preview/` works out
+a small *profile* per face instead:
+- **Character lookup as CoreText does it** (`font.rs`): a Unicode character map wins; a font
+  with only a Microsoft Symbol (3,0) map also finds "A" at U+F041; a Mac Roman-only font is
+  looked up through Mac Roman; a font with both a Symbol and a Unicode map uses only the Unicode
+  one. A glyph is *real* when its id isn't 0, it has ink (an outline with area, or a COLR,
+  sbix, CBDT or SVG image; sbix is read directly), and it isn't the placeholder shape.
+- **Expert sets** keep extra characters in the letter slots, and often fill unused slots with
+  one shared shape. Detection (`profile.rs`): the placeholder (one outline shared by 8+ code
+  points, 5+ of them letters, in a font with 8–400 inked code points, covering under 90% of
+  them), letter slots with no ink, old Expert glyph names (`Ethsmall`, `onequarter`, but not
+  dotted names like `zero.oldstyle`), and the word Expert/Exp/Ep in the names or file name.
+- **The cascade**, run for the family name (family rows) and the full name (style rows): the
+  name as is; trimmed (missing ™ ® © dropped, missing `-` `_` as spaces); UPPER or lower case
+  (not for icon fonts); the font's own sample text (name ID 19); a sample of its real
+  characters. The sample is labelled **Symbols**, **Expert set**, the script name (from the
+  `meta` table, or the biggest script) or **Partial set**.
+- The profile also keeps the printable ASCII characters the face can't draw, its line ascent
+  and descent as CoreText uses them, and the ink of its preview text. CoreText's line metrics:
+  hhea (a descender stored as positive still counts as below the baseline; a zero descender
+  in a CFF font takes the font's lowest point); OS/2 typo for variable fonts with
+  USE_TYPO_METRICS set (static fonts ignore the flag); OS/2 typo when hhea is all zero.
+- An ignored test compares the lookup and the line metrics with CoreText's own on every face
+  of the library (`coretext_agrees_across_the_library`): no differences on 12,167 faces.
+- `src-tauri/scripts/gen_unicode.py` generates the Unicode block and skip tables
+  (`preview/unicode.rs`) offline: Blocks.txt as macOS ships it with Perl, plus the blocks added
+  in Unicode 14–16 (listed and checked in the script), and Python's `unicodedata` for categories.
+- `ttf-parser`'s `gvar-alloc` feature is on: without it, outlines fail for large variable fonts
+  (SF Pro, Roboto Flex), which would then look as if they couldn't draw their names.
+
+**Where profiles live.** A side table, `face_previews`, keyed by font id (ON DELETE CASCADE),
+created by `preview::ensure_schema` like the tag tables, outside the numbered migrations. A
+row counts only while its file size, modified time and `rev` match the font and
+`PREVIEW_REV`; `list_fonts` checks that in its LEFT JOIN, so a stale row arrives as
+`preview: null`. Bumping `PREVIEW_REV` recomputes everything at the next launch.
+- **The scanner** works the profile out from the face it already parsed and writes it in the
+  same transaction as the font row.
+- **The backfill** (`preview::backfill`, at launch) covers fonts scanned before profiles
+  existed: two reader threads that fail fast on online-only files (which it skips, along with
+  Creative Cloud's files and files over 96 MB), reading each collection once; one writer
+  committing about every 400 ms through the scan write turn, stepping aside for UI writes. Each
+  batch goes to the UI as a `preview-profiles` event. It also removes orphaned rows.
+- **On demand:** a row on screen whose profile is still missing asks `preview_profiles` (64 ids
+  at most, batched once per frame), with the same safeguards. Nothing ever downloads a cloud
+  file or reads Creative Cloud's files to make a profile.
+- `font_characters` works out the detail panel's character grid on demand and stores nothing.
+
+**Fitting previews: no clipping, aligned baselines.** A list preview is a 1.3 em box that hides
+overflow (for the ellipsis), and fonts with tall ink (LI Glyphs, Zapfino, Christiana) were cut
+off. `src/previewFit.ts` (pure; `npm run test:ui`) fits the text instead: with an explicit line
+height L, WebKit puts the baseline (L + A − D) / 2 below the top of the line, so
+L = 2B − k(A − D) puts it at B. The text shrinks (k, never below 0.5) only when its ink is
+taller than the box, and B stays at 1 em below the top whenever the ink allows, so baselines
+line up from row to row. Rows keep their 1.3 em height. For the profile's own text the ascent,
+descent and ink come from Rust; for typed text a shared canvas measures the ink once the font
+has loaded (`previewMeasure.ts`, cached by face and text), and if the canvas's line metrics
+differ from the file's by more than 0.02 em, the file's are used. The detail panel's
+waterfall never shrinks: a row grows to fit the ink. A preview stays hidden until its font has
+loaded and its profile is known, or 300 ms have passed.
 
 **Purchases.**
 `services/purchases.rs` and `services/purchase_watch.rs` handle font downloads.
