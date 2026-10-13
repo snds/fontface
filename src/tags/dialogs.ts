@@ -7,6 +7,8 @@ import type { ImportSource, Tag } from "./api";
  *  gives when it was made (Unix ms): the dialog then restores, and can replace the tags. */
 export type TagDialog =
   | { kind: "create"; parent?: Tag; faces?: Face[] }
+  /** Find tags for some fonts, by typing (the right-click menu's "Find a Tag…"). */
+  | { kind: "pick"; faces: Face[] }
   | { kind: "rename"; tag: Tag }
   | { kind: "delete"; tag: Tag }
   | { kind: "import"; source?: ImportSource; backupMadeAt?: number }

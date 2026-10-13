@@ -39,3 +39,10 @@
   --tag-brown: oklch(0.7 0.07 55);
   --tag-tint: 22%;
 }
+
+/* While dragging fonts or tags onto the sidebar (src/tags/drag.tsx). */
+.ff-dragging,
+.ff-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}

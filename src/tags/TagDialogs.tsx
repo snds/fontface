@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
-import type { Family } from "@/library";
+import type { Face, Family } from "@/library";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,18 +18,27 @@ import type { Tag, TagColor } from "./api";
 import { ColorSwatches } from "./ColorSwatches";
 import { openTagDialog, useTagDialog } from "./dialogs";
 import { ExportDialog } from "./ExportDialog";
+import { describeFaces } from "./FontMenu";
 import { ImportDialog } from "./ImportDialog";
 import { countByTag, useTagIndex } from "./model";
-import { createTag, deleteTag, renameTag, setFaceTags } from "./store";
+import { createTag, deleteTag, reload, renameTag, setFaceTags } from "./store";
+import { TagPicker } from "./TagPicker";
 
 const close = () => openTagDialog(null);
 
-/** Shows whichever tag dialog is open. Mounted once, in App. */
+/**
+ * Loads tags at launch and shows whichever tag dialog is open. Mounted once, in App (not in the
+ * sidebar), so tags, chips and menus work even when the Tags section is hidden or settings are open.
+ */
 export function TagDialogHost({ families, onDeleted }: { families: Family[]; onDeleted: (ids: number[]) => void }) {
   const dialog = useTagDialog();
+  useEffect(() => {
+    reload().catch((e) => toast.error("Couldn't load tags", { description: String(e) }));
+  }, []);
   return (
     <>
       <NameDialog dialog={dialog?.kind === "create" || dialog?.kind === "rename" ? dialog : null} />
+      <PickDialog faces={dialog?.kind === "pick" ? dialog.faces : null} />
       <DeleteDialog tag={dialog?.kind === "delete" ? dialog.tag : null} families={families} onDeleted={onDeleted} />
       <ImportDialog
         open={dialog?.kind === "import"}
@@ -39,6 +48,24 @@ export function TagDialogHost({ families, onDeleted }: { families: Family[]; onD
       />
       <ExportDialog open={dialog?.kind === "export"} tag={dialog?.kind === "export" ? dialog.tag : undefined} onClose={close} />
     </>
+  );
+}
+
+/** Find a tag by typing and tick it, from a font's right-click menu. */
+function PickDialog({ faces }: { faces: Face[] | null }) {
+  return (
+    <Dialog open={!!faces} onOpenChange={(o) => !o && close()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Tags</DialogTitle>
+          <DialogDescription className="truncate">{faces ? describeFaces(faces) : ""}</DialogDescription>
+        </DialogHeader>
+        {faces && <TagPicker faces={faces} />}
+        <DialogFooter>
+          <Button onClick={close}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

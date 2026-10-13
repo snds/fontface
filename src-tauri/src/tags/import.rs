@@ -6,12 +6,14 @@
 //! preview. Applying the same source again adds nothing new: tags merge by name (ignoring
 //! letter case) and each font gets a tag at most once.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rusqlite::Connection;
 use serde::Serialize;
 
-use super::{colors, ensure_tag, find_tag, is_loose, key_postscript_name, list_tags, loose_key, normalize_name, LibraryIndex};
+use super::{
+    colors, ensure_tag, find_tag, is_loose, key_postscript_name, list_tags, loose_key, named_styles, normalize_name, LibraryIndex,
+};
 use crate::error::AppResult;
 
 /// How a source names a font.
@@ -85,8 +87,27 @@ pub struct ImportPreview {
     pub fonts: usize,
     pub matched_fonts: usize,
     pub unmatched_fonts: usize,
+    /// Fonts matched as named styles inside variable fonts (see [`named_styles`]).
+    pub named_style_matches: usize,
+    /// Fonts matched once their library name was tidied the way macOS writes it.
+    pub tidied_matches: usize,
+    /// The fonts that aren't in the library, with the tags that name them (at most
+    /// [`MAX_MISSING_LISTED`]; `unmatched_fonts` has the full count).
+    pub missing: Vec<MissingFont>,
     pub notes: Vec<String>,
 }
+
+/// A font the source names that isn't in the library.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingFont {
+    /// Its PostScript name (or file, or family, as the source gives it).
+    pub name: String,
+    pub tags: Vec<String>,
+}
+
+/// The preview lists at most this many missing fonts. Real backups have a few thousand.
+pub const MAX_MISSING_LISTED: usize = 20_000;
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,32 +134,134 @@ struct Resolved {
     pending: Vec<(SourceFont, Vec<String>)>,
 }
 
+/// How a source font was found in the library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum How {
+    /// By the name or key as written, or as `<variable font>_<instance>`.
+    Direct,
+    /// As a named style inside a variable font.
+    NamedStyle,
+    /// Once the library's name was tidied the way macOS writes it.
+    Tidied,
+}
+
 /// What one source font stands for in the library.
 struct Match {
     keys: Vec<String>,
     /// Keys to keep if the font isn't in the library yet (empty if it can't be kept).
     pending: Vec<String>,
+    how: How,
+}
+
+/// A PostScript name the way macOS reports it: spaces become hyphens, and characters a
+/// PostScript name can't hold are dropped ("MDRS-FD01(c)Zhimetcardozo,2009" becomes
+/// "MDRS-FD01cZhimetcardozo,2009"). Typeface backups hold names in this form.
+pub fn tidy_postscript(name: &str) -> String {
+    name.trim()
+        .chars()
+        .filter_map(|c| match c {
+            ' ' => Some('-'),
+            '[' | ']' | '(' | ')' | '{' | '}' | '<' | '>' | '/' | '%' => None,
+            c if ('!'..='~').contains(&c) => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The library, ready to match an import against.
+///
+/// Building it is quick. [`Matcher::with_named_styles`] reads font files, so the commands run
+/// it without holding the database lock.
+#[derive(Default)]
+pub struct Matcher {
+    index: LibraryIndex,
+    /// PostScript names of named styles inside variable fonts → the variable fonts' keys.
+    named: HashMap<String, Vec<String>>,
+    /// Library PostScript names that aren't valid as written ("D3 Factorism Katakana"), by the
+    /// form macOS and Typeface use ("D3-Factorism-Katakana").
+    tidied: HashMap<String, Vec<String>>,
+}
+
+impl Matcher {
+    pub fn load(conn: &Connection) -> AppResult<Self> {
+        Ok(Self::new(LibraryIndex::load(conn)?))
+    }
+
+    pub fn new(index: LibraryIndex) -> Self {
+        let mut tidied: HashMap<String, Vec<String>> = HashMap::new();
+        for face in &index.faces {
+            if let Some(ps) = &face.postscript_name {
+                let t = tidy_postscript(ps);
+                if !t.is_empty() && t != *ps {
+                    tidied.entry(t).or_default().push(face.key.clone());
+                }
+            }
+        }
+        Matcher { index, named: HashMap::new(), tidied }
+    }
+
+    /// Learns the named styles of the library's variable fonts, if the source has PostScript
+    /// names that nothing else matches. Reads font files (only their `fvar` and `name` tables).
+    pub fn with_named_styles(mut self, source: &Source) -> Self {
+        let needed = source
+            .tags
+            .iter()
+            .flat_map(|t| t.fonts.iter())
+            .any(|f| matches!(f, SourceFont::PostScript(_)) && match_font(&self, f).keys.is_empty());
+        if !needed {
+            return self;
+        }
+        let mut named: HashMap<String, Vec<String>> = HashMap::new();
+        for face in self.index.faces.iter().filter(|f| f.variable) {
+            // Copies of a font have the same styles; the first copy that has any is enough.
+            for file in &face.files {
+                let names = named_styles::postscript_names(&file.path, file.face_index);
+                if names.is_empty() {
+                    continue;
+                }
+                for name in names {
+                    let keys = named.entry(name).or_default();
+                    if !keys.contains(&face.key) {
+                        keys.push(face.key.clone());
+                    }
+                }
+                break;
+            }
+        }
+        self.named = named;
+        self
+    }
 }
 
 /// Longest font name an import accepts. Real PostScript names are at most 63 characters; this
 /// leaves room for Typeface's `<name>_<instance>` form while keeping hostile files cheap to read.
 pub const MAX_FONT_NAME: usize = 512;
 
-fn match_font(index: &LibraryIndex, font: &SourceFont) -> Match {
+fn match_font(matcher: &Matcher, font: &SourceFont) -> Match {
+    let index = &matcher.index;
     let keys_of = |faces: Vec<&super::LibraryFace>| -> Vec<String> { faces.into_iter().map(|f| f.key.clone()).collect() };
+    let found = |keys: Vec<String>, how: How| Match { keys, pending: vec![], how };
     match font {
         SourceFont::PostScript(name) => {
             let exact = keys_of(index.by_postscript_name(name).collect());
             if !exact.is_empty() {
-                return Match { keys: exact, pending: vec![] };
+                return found(exact, How::Direct);
             }
             // "<variable font>_<instance>": the longest prefix that names a variable font in the
             // library. Only variable fonts: a static font with that name is a different style.
             for (i, _) in name.rmatch_indices('_') {
                 let variable: Vec<_> = index.by_postscript_name(&name[..i]).filter(|f| f.variable).collect();
                 if !variable.is_empty() {
-                    return Match { keys: keys_of(variable), pending: vec![] };
+                    return found(keys_of(variable), How::Direct);
                 }
+            }
+            // A named style's own PostScript name ("SFPro-CondensedThin"): its variable font.
+            if let Some(keys) = matcher.named.get(name.as_str()) {
+                return found(keys.clone(), How::NamedStyle);
+            }
+            // A library font whose name isn't valid as written ("D3 Factorism Katakana").
+            if let Some(keys) = matcher.tidied.get(&tidy_postscript(name)) {
+                return found(keys.clone(), How::Tidied);
             }
             // Not in the library. Keep the name itself, and for "<base>_<instance>" also the
             // variable font it would come from (cut at the last "_", as Typeface writes it).
@@ -147,7 +270,7 @@ fn match_font(index: &LibraryIndex, font: &SourceFont) -> Match {
                 pending.push(super::face_key(Some(base), true, false, "", 0));
                 pending.push(super::face_key(Some(base), true, true, "", 0));
             }
-            Match { keys: vec![], pending }
+            Match { keys: vec![], pending, how: How::Direct }
         }
         SourceFont::Key(key) => {
             let mut keys = keys_of(index.resolve(key));
@@ -159,15 +282,25 @@ fn match_font(index: &LibraryIndex, font: &SourceFont) -> Match {
                 }
             }
             let pending = if keys.is_empty() { vec![key.clone()] } else { vec![] };
-            Match { keys, pending }
+            Match { keys, pending, how: How::Direct }
         }
-        SourceFont::File(path) => Match { keys: keys_of(index.in_file(path).collect()), pending: vec![] },
-        SourceFont::Family(family) => Match { keys: keys_of(index.by_family(family).collect()), pending: vec![] },
+        SourceFont::File(path) => found(keys_of(index.in_file(path).collect()), How::Direct),
+        SourceFont::Family(family) => found(keys_of(index.by_family(family).collect()), How::Direct),
+    }
+}
+
+/// How a missing font is listed in the preview.
+fn describe(font: &SourceFont) -> String {
+    match font {
+        SourceFont::PostScript(name) => name.clone(),
+        SourceFont::Key(key) => key_postscript_name(key).map(str::to_string).unwrap_or_else(|| key.clone()),
+        SourceFont::File(path) => path.clone(),
+        SourceFont::Family(family) => format!("{family} (family)"),
     }
 }
 
 /// Matches a source against the library. Writes nothing.
-fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResult<(Vec<Resolved>, ImportPreview)> {
+fn resolve(conn: &Connection, matcher: &Matcher, source: &Source) -> AppResult<(Vec<Resolved>, ImportPreview)> {
     // Merge tags whose names differ only in letter case (ASCII, like SQLite's NOCASE).
     let mut order: Vec<String> = Vec::new();
     let mut merged: HashMap<String, (String, Vec<&SourceTag>)> = HashMap::new();
@@ -197,6 +330,7 @@ fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResul
     let mut planned_colors: HashMap<String, String> = HashMap::new();
 
     let mut matches: HashMap<&SourceFont, Match> = HashMap::new();
+    let mut missing: BTreeMap<&SourceFont, BTreeSet<String>> = BTreeMap::new();
     let mut out = Vec::new();
     for folded in &order {
         let (name, parts) = &merged[folded];
@@ -227,9 +361,10 @@ fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResul
         let mut pending = Vec::new();
         let mut unmatched = 0;
         for font in &fonts {
-            let m = matches.entry(font).or_insert_with(|| match_font(index, font));
+            let m = matches.entry(font).or_insert_with(|| match_font(matcher, font));
             if m.keys.is_empty() {
                 unmatched += 1;
+                missing.entry(*font).or_default().insert(display.clone());
                 if !m.pending.is_empty() {
                     pending.push(((*font).clone(), m.pending.clone()));
                 }
@@ -267,7 +402,31 @@ fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResul
     }
 
     let matched_fonts = matches.values().filter(|m| !m.keys.is_empty()).count();
+    let found_by = |how: How| -> Vec<&SourceFont> {
+        let mut fonts: Vec<&SourceFont> = matches.iter().filter(|(_, m)| m.how == how && !m.keys.is_empty()).map(|(f, _)| *f).collect();
+        fonts.sort();
+        fonts
+    };
+    let (named, tidied) = (found_by(How::NamedStyle), found_by(How::Tidied));
     let mut notes = source.notes.clone();
+    if let Some(first) = named.first() {
+        notes.push(format!(
+            "{} {} named {} inside variable fonts you have, such as “{}”. {} the variable font.",
+            named.len(),
+            if named.len() == 1 { "font is a" } else { "fonts are" },
+            if named.len() == 1 { "style" } else { "styles" },
+            describe(first),
+            if named.len() == 1 { "It tags" } else { "They tag" },
+        ));
+    }
+    if let Some(first) = tidied.first() {
+        notes.push(format!(
+            "{} {} matched once spaces and brackets were taken out of the name in the font file, the way macOS writes it (such as “{}”).",
+            tidied.len(),
+            if tidied.len() == 1 { "font" } else { "fonts" },
+            describe(first),
+        ));
+    }
     if skipped > 0 {
         notes.push(format!(
             "{skipped} {} left out because {} empty, too long (over {} characters) or {} control characters.",
@@ -303,6 +462,13 @@ fn resolve(conn: &Connection, index: &LibraryIndex, source: &Source) -> AppResul
         fonts: matches.len(),
         matched_fonts,
         unmatched_fonts: matches.len() - matched_fonts,
+        named_style_matches: named.len(),
+        tidied_matches: tidied.len(),
+        missing: missing
+            .into_iter()
+            .take(MAX_MISSING_LISTED)
+            .map(|(font, tags)| MissingFont { name: describe(font), tags: tags.into_iter().collect() })
+            .collect(),
         notes,
     };
     Ok((out, preview))
@@ -319,25 +485,66 @@ fn has_loose(have: &BTreeSet<String>, key: &str) -> bool {
     !is_loose(key) && key_postscript_name(key).is_some_and(|ps| have.contains(&loose_key(ps)))
 }
 
+/// Builds the matcher and previews in one step, holding `conn` throughout (tests use this).
+#[cfg(test)]
 pub fn preview(conn: &Connection, source: &Source) -> AppResult<ImportPreview> {
-    let index = LibraryIndex::load(conn)?;
-    Ok(resolve(conn, &index, source)?.1)
+    let matcher = Matcher::load(conn)?.with_named_styles(source);
+    preview_with(conn, &matcher, source)
+}
+
+/// What an import would do, without changing anything. The commands build the matcher
+/// without holding the lock (see [`Matcher`]).
+pub fn preview_with(conn: &Connection, matcher: &Matcher, source: &Source) -> AppResult<ImportPreview> {
+    Ok(resolve(conn, matcher, source)?.1)
+}
+
+/// [`apply_with`] in one step, holding `conn` throughout (tests use this).
+#[cfg(test)]
+pub fn apply(conn: &mut Connection, source: &Source, chosen: &[String], keep_unmatched: bool) -> AppResult<ImportResult> {
+    let matcher = Matcher::load(conn)?.with_named_styles(source);
+    apply_with(conn, &matcher, source, chosen, keep_unmatched)
 }
 
 /// Applies the chosen tags (by name, as the preview showed them). With `keep_unmatched`,
 /// fonts that aren't in the library keep their tags for later.
-pub fn apply(conn: &mut Connection, source: &Source, chosen: &[String], keep_unmatched: bool) -> AppResult<ImportResult> {
-    write(conn, source, chosen, keep_unmatched, false)
+pub fn apply_with(
+    conn: &mut Connection,
+    matcher: &Matcher,
+    source: &Source,
+    chosen: &[String],
+    keep_unmatched: bool,
+) -> AppResult<ImportResult> {
+    write(conn, matcher, source, chosen, keep_unmatched, false)
 }
 
-/// Like [`apply`], but in place of the tags there now: every tag, tag link and location color
-/// is deleted first, in the same transaction, so a backup comes back as it was (names, colors,
-/// fonts) and nothing changes if any step fails.
+/// Like [`apply_with`], but in place of the tags there now: every tag, tag link and location
+/// color is deleted first, in the same transaction, so a backup comes back as it was (names,
+/// colors, fonts) and nothing changes if any step fails.
+pub fn replace_with(
+    conn: &mut Connection,
+    matcher: &Matcher,
+    source: &Source,
+    chosen: &[String],
+    keep_unmatched: bool,
+) -> AppResult<ImportResult> {
+    write(conn, matcher, source, chosen, keep_unmatched, true)
+}
+
+/// [`replace_with`] in one step, holding `conn` throughout (tests use this).
+#[cfg(test)]
 pub fn replace(conn: &mut Connection, source: &Source, chosen: &[String], keep_unmatched: bool) -> AppResult<ImportResult> {
-    write(conn, source, chosen, keep_unmatched, true)
+    let matcher = Matcher::load(conn)?.with_named_styles(source);
+    replace_with(conn, &matcher, source, chosen, keep_unmatched)
 }
 
-fn write(conn: &mut Connection, source: &Source, chosen: &[String], keep_unmatched: bool, replace: bool) -> AppResult<ImportResult> {
+fn write(
+    conn: &mut Connection,
+    matcher: &Matcher,
+    source: &Source,
+    chosen: &[String],
+    keep_unmatched: bool,
+    replace: bool,
+) -> AppResult<ImportResult> {
     let chosen: BTreeSet<String> = chosen.iter().map(|n| n.trim().to_ascii_lowercase()).collect();
     let mut result = ImportResult::default();
     let mut styles = BTreeSet::new();
@@ -349,9 +556,8 @@ fn write(conn: &mut Connection, source: &Source, chosen: &[String], keep_unmatch
         tx.execute("DELETE FROM location_colors", [])?;
     }
     // Planned inside the transaction, so a replace plans against no tags: each one is created
-    // again with the source's color.
-    let index = LibraryIndex::load(&tx)?;
-    let (resolved, _) = resolve(&tx, &index, source)?;
+    // again with the source's color. (The matcher only knows the library's fonts, not its tags.)
+    let (resolved, _) = resolve(&tx, matcher, source)?;
     let mut touched = BTreeSet::new();
     for r in resolved.iter().filter(|r| chosen.contains(&r.tag.name.to_ascii_lowercase())) {
         let (tag, created) = ensure_tag(&tx, &r.tag.name, &r.tag.color)?;

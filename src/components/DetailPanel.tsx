@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { colorVar } from "@/tags/api";
+import { FontContextMenu } from "@/tags/FontMenu";
 import type { Locations } from "@/tags/locations";
 import { leafOf, useTagIndex } from "@/tags/model";
 import { applyTags, TagPicker } from "@/tags/TagPicker";
@@ -129,7 +130,7 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
     : [];
 
   return (
-    <aside className="flex min-h-0 flex-col border-l" aria-label="Font details">
+    <FontContextMenu faces={[face]} render={<aside className="flex min-h-0 flex-col border-l" aria-label="Font details" />}>
       {/* 52px, so it lines up with the toolbar; on macOS it's part of the title bar. */}
       <header className="flex h-13 shrink-0 items-center gap-3 border-b px-4 select-none" {...dragRegion(titleBar)}>
         <div className="min-w-0 flex-1">
@@ -269,6 +270,6 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
           </section>
         </div>
       </ScrollArea>
-    </aside>
+    </FontContextMenu>
   );
 }

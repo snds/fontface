@@ -205,6 +205,7 @@ pub fn run() {
             tags::commands::tags_delete,
             tags::commands::tags_assign,
             tags::commands::location_color_set,
+            tags::commands::folder_relocate,
             tags::commands::tags_import_preview,
             tags::commands::tags_import_apply,
             tags::commands::tags_export,

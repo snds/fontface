@@ -13,7 +13,9 @@
 //! - `/` nests tags, as in Fontface. Parents usually appear as tags of their own, often empty.
 //! - `typeface/active…` and `quick-collection` are Typeface's own lists, not tags the user made.
 //! - `families` (custom families), `mainFonts` and `locations` (watched folders) have no
-//!   Fontface equivalent; the preview says so instead of importing them.
+//!   Fontface equivalent; the preview says so instead of importing them. `locations` may also
+//!   hold Typeface's own download folder for Google Fonts.
+//! - Format 5 (2026) adds `meta` and `fontData`, which hold nothing tag-related; they're ignored.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -113,14 +115,52 @@ pub fn parse(bytes: &[u8]) -> AppResult<Source> {
         source.notes.push(format!("{} family settings (main styles) aren't imported.", backup.main_fonts.len()));
     }
     let locations: Vec<&str> = backup.locations.iter().filter_map(Value::as_str).collect();
-    if !locations.is_empty() {
-        source.notes.push(format!(
-            "Typeface was watching {} folders. Fonts are matched by name, so they don't need to be in the same place. \
-             Add any folder that's missing under Folders.",
-            locations.len()
-        ));
+    let (own, watched): (Vec<&str>, Vec<&str>) = locations.into_iter().partition(|l| is_typeface_download_folder(l));
+    if !own.is_empty() {
+        source.notes.push(
+            "Typeface kept the Google Fonts it downloaded in its own folder, which Fontface doesn't read, so those fonts \
+             show as not in your library. Add the families from Google Fonts in Fontface, then run this import again."
+                .into(),
+        );
+    }
+    if !watched.is_empty() {
+        // Folders that aren't there any more: renamed, moved, or from another Mac.
+        let gone: Vec<&str> = watched.iter().copied().filter(|l| !std::path::Path::new(l).is_dir()).collect();
+        let count = |n: usize| if n == 1 { "1 folder".to_string() } else { format!("{n} folders") };
+        source.notes.push(if gone.is_empty() {
+            format!(
+                "Typeface was watching {}. Fonts are matched by name, so they don't need to be in the same place. \
+                 Add any folder that's missing under Folders.",
+                count(watched.len())
+            )
+        } else {
+            format!(
+                "Typeface was watching {}, and {} isn't on this Mac at that place any more ({}). That's fine: fonts are \
+                 matched by name, not by where they are. If the fonts moved, add their new folder under Folders.",
+                count(watched.len()),
+                if gone.len() == 1 { "1".to_string() } else { gone.len().to_string() },
+                gone.iter().map(|g| short_path(g)).collect::<Vec<_>>().join(", ")
+            )
+        });
     }
     Ok(source)
+}
+
+/// The last two levels of a path ("…/Design/Fonts"), enough to recognize it.
+fn short_path(path: &str) -> String {
+    let parts: Vec<&str> = path.trim_end_matches(['/', '\\']).split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    match parts.len() {
+        0 => path.to_string(),
+        1 | 2 => parts.join("/"),
+        n => format!("…/{}/{}", parts[n - 2], parts[n - 1]),
+    }
+}
+
+/// Typeface's own download folder (`…/com.criminalbird.typeface/…/downloads/…`), where it keeps
+/// fonts it fetched itself, such as Google Fonts.
+fn is_typeface_download_folder(path: &str) -> bool {
+    let p = path.replace('\\', "/").to_ascii_lowercase();
+    p.contains("/com.criminalbird.typeface/") && p.contains("/downloads")
 }
 
 #[derive(Serialize)]

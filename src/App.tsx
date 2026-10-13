@@ -49,9 +49,9 @@ import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
 import { IS_MAC } from "@/components/TitleBar";
+import { locateFolder } from "@/tags/locate";
 import { useLocations } from "@/tags/locations";
 import { useFilterContext } from "@/tags/model";
-import { reload as reloadTags } from "@/tags/store";
 import { TagDialogHost } from "@/tags/TagDialogs";
 import { hiddenBySidebar, useLastView } from "@/settings/lastView";
 import type { SectionId } from "@/settings/parts";
@@ -347,11 +347,6 @@ export default function App() {
     })().catch((e) => toast.error(String(e)));
   }, [refresh, scan, settingsReady]);
 
-  // Tags show in the list, the detail panel and the sidebar; load them once for all of them.
-  useEffect(() => {
-    reloadTags().catch((e) => toast.error("Couldn't load tags", { description: String(e) }));
-  }, []);
-
   // Settings that change what's on screen: the appearance, and the preview text and size (at
   // launch, and again whenever they're changed in settings).
   useEffect(() => {
@@ -403,6 +398,14 @@ export default function App() {
     } catch (e) {
       toast.error("Couldn't add that folder", { description: String(e) });
     }
+  };
+
+  /** "Locate…" for a folder that moved: point it at the new place, then rescan it. */
+  const relocate = async (folder: Folder) => {
+    if (!(await locateFolder(folder))) return;
+    await refresh().catch(() => {});
+    const moved = (await api.listFolders()).find((f) => f.id === folder.id);
+    if (moved) await scan(moved);
   };
 
   const removeFolder = async (folder: Folder) => {
@@ -832,6 +835,7 @@ export default function App() {
               onRescan={(f) => scan(f)}
               onCancelScan={(f) => api.cancelScan(f.id).catch((e) => toast.error(String(e)))}
               onOpenSettings={openSettings}
+              onLocateFolder={relocate}
             />
             <main className="flex min-h-0 min-w-0 flex-col">
               {view.kind === "service" ? (
@@ -963,7 +967,7 @@ export default function App() {
           )}
         </div>
 
-        {/* Tag dialogs (new, rename, delete, import, export) can be asked for from anywhere. */}
+        {/* Tag dialogs (new, rename, delete, find, import, export) can be asked for from anywhere. */}
         <TagDialogHost
           families={allFamilies}
           onDeleted={(ids) => setView((v) => (v.kind === "tag" && ids.includes(v.id) ? { kind: "all" } : v))}

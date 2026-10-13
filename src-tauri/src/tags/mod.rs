@@ -21,6 +21,8 @@ pub mod colors;
 pub mod commands;
 pub mod export;
 pub mod import;
+pub mod named_styles;
+pub mod relocate;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod typeface;
@@ -468,6 +470,8 @@ pub struct LibraryFace {
 #[derive(Debug, Clone)]
 pub struct FontFile {
     pub path: String,
+    /// Which face in the file (collections hold several).
+    pub face_index: u32,
     /// In a macOS font folder.
     pub installed: bool,
 }
@@ -531,7 +535,7 @@ impl LibraryIndex {
             };
             let face = &mut index.faces[i];
             face.installed |= installed;
-            face.files.push(FontFile { path: path.clone(), installed });
+            face.files.push(FontFile { path: path.clone(), face_index, installed });
             let in_file = index.by_path.entry(path).or_default();
             if !in_file.contains(&i) {
                 in_file.push(i);

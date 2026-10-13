@@ -9,7 +9,7 @@ use tauri::{AppHandle, State};
 use super::{
     export,
     import::{self, ImportPreview, ImportResult, Source},
-    typeface, Organize, Tag,
+    relocate, typeface, Organize, Tag,
 };
 use crate::{
     error::{AppError, AppResult},
@@ -51,6 +51,26 @@ pub fn tags_assign(state: State<'_, AppState>, tag_ids: Vec<i64>, keys: Vec<Stri
 #[tauri::command(async)]
 pub fn location_color_set(state: State<'_, AppState>, location: String, color: Option<String>) -> AppResult<()> {
     state.write(|conn| super::set_location_color(conn, &location, color.as_deref()))
+}
+
+/// Points a folder that moved at its new place, keeping its fonts' on/off state, tags and
+/// colors. With `force` unset, nothing changes if none of its fonts are there (the UI asks).
+/// The UI rescans the folder afterwards; fonts that were on are turned on again after that.
+#[tauri::command(async)]
+pub fn folder_relocate(state: State<'_, AppState>, folder_id: i64, path: String, force: bool) -> AppResult<relocate::Relocated> {
+    if state.scans()?.contains_key(&folder_id) {
+        return Err(AppError::Invalid("That folder is being scanned. Try again when the scan has finished.".into()));
+    }
+    let result = state.write(|conn| relocate::relocate(conn, folder_id, Path::new(&path), force))?;
+    if result.moved {
+        let old: std::collections::HashSet<&String> = result.old_paths.iter().collect();
+        state.seen_loaded().retain(|p| !old.contains(p));
+        let mut deferred = state.deferred();
+        deferred.retain(|p| !old.contains(p));
+        // Retried after the folder's next scan, like fonts on a drive that wasn't there at launch.
+        deferred.extend(result.active.iter().cloned());
+    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------------- import
@@ -107,10 +127,18 @@ fn load_source(app: &AppHandle, state: &AppState, request: &ImportRequest) -> Ap
     }
 }
 
+/// The library, ready to match `source`. Reading named styles from font files happens after
+/// the database lock is released, so the rest of the app isn't held up.
+fn matcher_for(state: &AppState, source: &Source) -> AppResult<import::Matcher> {
+    let matcher = import::Matcher::load(&*state.conn()?)?;
+    Ok(matcher.with_named_styles(source))
+}
+
 #[tauri::command(async)]
 pub fn tags_import_preview(app: AppHandle, state: State<'_, AppState>, source: ImportRequest) -> AppResult<ImportPreview> {
     let source = load_source(&app, &state, &source)?;
-    import::preview(&*state.conn()?, &source)
+    let matcher = matcher_for(&state, &source)?;
+    import::preview_with(&*state.conn()?, &matcher, &source)
 }
 
 /// Applies the tags the user ticked in the preview (by name). With `replace` (restoring a
@@ -129,10 +157,11 @@ pub fn tags_import_apply(
         return Err(AppError::Invalid("Only a Fontface tags file can replace your tags".into()));
     }
     let source = load_source(&app, &state, &source)?;
+    let matcher = matcher_for(&state, &source)?;
     if replace {
-        state.write(|conn| import::replace(conn, &source, &tags, keep_unmatched))
+        state.write(|conn| import::replace_with(conn, &matcher, &source, &tags, keep_unmatched))
     } else {
-        state.write(|conn| import::apply(conn, &source, &tags, keep_unmatched))
+        state.write(|conn| import::apply_with(conn, &matcher, &source, &tags, keep_unmatched))
     }
 }
 
