@@ -23,9 +23,12 @@ const users = new Map<string, number>();
 const queue: { name: string; start: () => void; drop: () => void }[] = [];
 let running = 0;
 
-const version = (f: FontSummary) => `${f.mtime.toString(36)}${f.fileSize.toString(36)}`;
+type FileVersion = Pick<FontSummary, "id" | "mtime" | "fileSize">;
 
-export const faceName = (f: FontSummary) => `ff-${f.id}-${version(f)}`;
+const version = (f: FileVersion) => `${f.mtime.toString(36)}${f.fileSize.toString(36)}`;
+
+/** The page-only font name for this exact version of a font file. */
+export const faceName = (f: FileVersion) => `ff-${f.id}-${version(f)}`;
 
 function pump() {
   while (running < MAX_CONCURRENT && queue.length) {

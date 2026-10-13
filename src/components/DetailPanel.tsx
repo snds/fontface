@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, type FontDetail } from "@/api";
+import { api, type FontDetail, type PreviewInfo } from "@/api";
 import { faceName, useFontFace } from "@/fontLoader";
+import { isSampleKind, usePreviewProfile } from "@/previewProfiles";
 import { activationIds, WEIGHT_NAMES, type Face } from "@/library";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
@@ -15,6 +16,8 @@ import type { Locations } from "@/tags/locations";
 import { leafOf, useTagIndex } from "@/tags/model";
 import { applyTags, TagPicker } from "@/tags/TagPicker";
 import { ActivationSwitch, InstalledBadge } from "./ActivationSwitch";
+import { CharacterGrid, characterSetLine, useFontCharacters } from "./CharacterGrid";
+import { PreviewText } from "./PreviewText";
 import { dragRegion, useTitleBar } from "./TitleBar";
 
 interface Props {
@@ -28,7 +31,24 @@ interface Props {
 }
 
 const WATERFALL = [12, 16, 24, 36, 48, 72];
-const CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ\nabcdefghijklmnopqrstuvwxyz\n0123456789 !?&@#%$€£(){}[]“”‘’—–…";
+const PANGRAM = "The quick brown fox jumps over the lazy dog";
+
+/**
+ * The waterfall's text, first that fits: the typed text; the pangram, if the font has all its
+ * letters; the pangram in UPPER or lower case; the profile's own text (the name, or a sample of
+ * the font's characters). Symbol and Expert fonts skip the pangram: their letter keys hold
+ * pictures or extra characters, not letters.
+ */
+function waterfallText(typed: string, profile: PreviewInfo | undefined, family: string): string {
+  if (typed) return typed;
+  if (!profile) return PANGRAM;
+  if (profile.kind !== "symbols" && profile.kind !== "expert") {
+    const missing = profile.asciiMissing ?? "";
+    const draws = (s: string) => ![...s].some((c) => missing.includes(c));
+    for (const text of [PANGRAM, PANGRAM.toUpperCase(), PANGRAM.toLowerCase()]) if (draws(text)) return text;
+  }
+  return profile.familyText ?? family;
+}
 
 const formatBytes = (n: number) =>
   n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
@@ -87,6 +107,8 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
   const [detail, setDetail] = useState<FontDetail | null>(null);
   const [axisValues, setAxisValues] = useState<Record<string, number>>({});
   const state = useFontFace(font);
+  const { profile } = usePreviewProfile(font);
+  const characters = useFontCharacters(font.id);
   const titleBar = useTitleBar();
 
   useEffect(() => {
@@ -105,9 +127,10 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
   const variation = Object.entries(axisValues)
     .map(([tag, v]) => `"${tag}" ${v}`)
     .join(", ");
-  const faceStyle = { fontFamily: `"${faceName(font)}"`, fontVariationSettings: variation || undefined };
-  const faceClass = cn("transition-opacity", state === "loading" && "preview-loading");
-  const sample = previewText || "The quick brown fox jumps over the lazy dog";
+  const fontFamily = `"${faceName(font)}"`;
+  const sample = waterfallText(previewText, profile, font.family);
+  const characterSet =
+    characters.status === "ready" ? characterSetLine(characters.data, isSampleKind(profile) ? profile?.label : undefined) : profile?.label;
   const axes = detail?.axes.filter((a) => !a.hidden) ?? [];
 
   // [label, value, monospace?]
@@ -119,6 +142,7 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
         ["Weight", `${detail.weight}${WEIGHT_NAMES[detail.weight] ? ` · ${WEIGHT_NAMES[detail.weight]}` : ""}`],
         ["Width", String(detail.width)],
         ["Glyphs", detail.glyphCount.toLocaleString()],
+        ["Character set", characterSet],
         ["Monospaced", detail.monospace ? "Yes" : "No"],
         ["Designer", detail.designer],
         ["Foundry", detail.manufacturer],
@@ -169,9 +193,19 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
             {WATERFALL.map((px) => (
               <div key={px} className="flex items-baseline gap-2 overflow-hidden whitespace-nowrap">
                 <span className="w-5 shrink-0 text-right font-mono text-[10px] text-muted-foreground">{px}</span>
-                <span className={faceClass} style={{ ...faceStyle, fontSize: px }}>
-                  {sample}
-                </span>
+                {/* Never shrunk: a row grows when the font's ink is taller than the line. */}
+                <PreviewText
+                  fontFamily={fontFamily}
+                  text={sample}
+                  size={px}
+                  ready={state === "ready"}
+                  profile={profile}
+                  ownText={!previewText && sample === (profile?.familyText ?? font.family)}
+                  sample={!previewText && sample === profile?.familyText && isSampleKind(profile)}
+                  mode="waterfall"
+                  className="min-w-0 flex-1"
+                  style={{ fontVariationSettings: variation || undefined }}
+                />
               </div>
             ))}
           </section>
@@ -209,9 +243,7 @@ export function DetailPanel({ face, previewText, busy, locations, onClose, onAct
           <Separator />
           <section>
             <SectionTitle>Characters</SectionTitle>
-            <div className={cn(faceClass, "selectable text-[22px] leading-snug break-all whitespace-pre-wrap")} style={faceStyle}>
-              {CHARSET}
-            </div>
+            <CharacterGrid state={characters} fontFamily={fontFamily} fontVariationSettings={variation || undefined} ready={state === "ready"} />
           </section>
 
           <Separator />

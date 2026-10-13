@@ -35,6 +35,74 @@ export interface FontSummary {
   fileSize: number;
   /** What macOS reports right now. Drives the switches. */
   osActive: boolean;
+  /** What the preview draws (src-tauri/src/preview). Null until the face has a current profile:
+   *  the list then asks for one (`previewProfiles`) and draws the name meanwhile. */
+  preview: PreviewInfo | null;
+}
+
+/** A face's preview profile. Must match PreviewInfo in src-tauri/src/preview/mod.rs. */
+export interface PreviewInfo {
+  /** "name" (draw the name as is), "trim", "case", "sample19" (the font's own sample text),
+   *  or a sample of its real characters: "script", "symbols", "expert", "partial". "none":
+   *  nothing real to draw. */
+  kind: PreviewKind;
+  /** What a family row draws instead of the family name. */
+  familyText?: string;
+  /** What a style row draws instead of the full name. */
+  fullText?: string;
+  /** "Symbols", "Expert set", a script name or "Partial set". */
+  label?: string;
+  /** Printable ASCII characters the face can't draw. */
+  asciiMissing?: string;
+  /** Line ascent and descent in em, as the web view lays the line out. */
+  ascent: number;
+  descent: number;
+  /** Ink of the family and full preview texts in em, above and below the baseline. */
+  inkTop?: number;
+  inkBottom?: number;
+}
+
+export type PreviewKind = "name" | "trim" | "case" | "sample19" | "script" | "symbols" | "expert" | "partial" | "none";
+
+/** `previewProfiles` answer for one id. */
+export interface PreviewAnswer {
+  id: number;
+  preview: PreviewInfo | null;
+  /** No profile now, but worth asking again later (online-only, or changed since the scan). */
+  retry: boolean;
+}
+
+/** The "preview-profiles" event: profiles the launch backfill just saved. */
+export interface PreviewBatch {
+  profiles: { id: number; mtime: number; fileSize: number; preview: PreviewInfo }[];
+  /** The last batch: the backfill is finished. */
+  done: boolean;
+}
+
+/** Every real character of a face (`fontCharacters`). Must match FontCharacters in
+ *  src-tauri/src/preview/characters.rs. */
+export interface FontCharacters {
+  total: number;
+  /** Code points that draw the shared placeholder shape (hidden). */
+  placeholders: number;
+  /** Code points mapped to a glyph with no ink (hidden). */
+  empty: number;
+  lookup: "unicode" | "symbol" | "macRoman" | "none";
+  expert: boolean;
+  ascent: number;
+  descent: number;
+  /** The ink most characters stay within, in em, for sizing the grid's cells. */
+  inkTop: number;
+  inkBottom: number;
+  blocks: CharacterBlock[];
+}
+
+export interface CharacterBlock {
+  name: string;
+  /** Consecutive code points as [first, last]. */
+  runs: [number, number][];
+  /** One per code point, in run order ("" when the font has none). */
+  glyphNames: string[];
 }
 
 export interface Axis {
@@ -324,6 +392,9 @@ export const api = {
   cancelScan: (folderId: number) => invoke<void>("cancel_scan", { folderId }),
   listFonts: () => invoke<FontSummary[]>("list_fonts"),
   getFont: (fontId: number) => invoke<FontDetail>("get_font", { fontId }),
+  /** At most 64 ids per call. */
+  previewProfiles: (ids: number[]) => invoke<PreviewAnswer[]>("preview_profiles", { ids }),
+  fontCharacters: (fontId: number) => invoke<FontCharacters>("font_characters", { fontId }),
   /** `scope` turns fonts on that way instead of the saved activation mode (null: the saved mode). */
   setActivation: (fontIds: number[], active: boolean, scope: ActivationMode | null = null) =>
     invoke<ActivationOutcome[]>("set_activation", { fontIds, active, scope }),
