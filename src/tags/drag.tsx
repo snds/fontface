@@ -176,8 +176,9 @@ export function pressToDrag(e: React.PointerEvent, payload: () => DragPayload | 
     if (ev.key !== "Escape" || !started) return;
     ev.preventDefault();
     ev.stopPropagation();
-    swallowNextClick();
     end();
+    // Letting go of the button after Escape isn't a click either.
+    window.addEventListener("pointerup", swallowNextClick, { capture: true, once: true });
   };
   const end = () => {
     window.removeEventListener("pointermove", move);

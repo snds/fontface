@@ -78,8 +78,8 @@ function MissingFonts({ preview }: { preview: ImportPreview }) {
             </Button>
           </div>
           <ul className="max-h-48 overflow-y-auto font-mono" aria-label="Fonts not in your library">
-            {preview.missing.map((m) => (
-              <li key={m.name} className="flex gap-2 px-1 py-0.5">
+            {preview.missing.map((m, i) => (
+              <li key={`${i}:${m.name}`} className="flex gap-2 px-1 py-0.5">
                 <span className="truncate">{m.name}</span>
                 <span className="ml-auto shrink-0 truncate font-sans text-muted-foreground">{m.tags.join(", ")}</span>
               </li>
