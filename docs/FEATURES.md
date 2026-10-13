@@ -150,7 +150,7 @@ with two and three simulated computers; not yet checked in the running app.
 | Feature | macOS | Windows | Notes |
 |---|---|---|---|
 | Choose a sync folder (iCloud Drive, Dropbox, OneDrive, Google Drive, Syncthing, Nextcloud, rclone) | 🟡 | ⬜ | Settings › Sync. Each computer writes only its own folder inside `Fontface Sync` |
-| Tags, nesting, colors and tags on fonts sync | 🟡 | ⬜ | Renames and moves carry over; tags with the same name merge; fonts without a PostScript name don't sync |
+| Tags, nesting, colors, groups (My tags / Built-in) and tags on fonts sync | 🟡 | ⬜ | Renames and moves carry over; tags with the same name merge; a group follows its top-level tag, and the one-time sort into groups isn't shared; fonts without a PostScript name don't sync |
 | Which fonts are on syncs | 🟡 | ⬜ | Each computer turns on its own copy; fonts it lacks are listed and turn on when they arrive |
 | On this Mac: Follow sync / Always on here / Never on here | 🟡 | ⬜ | In a font's right-click menu. Device groups are in the data; no menu for group exceptions yet |
 | Status: last sync, other computers, problems, Sync Now, Turn Off Sync | 🟡 | ⬜ | Suggests keeping a cloud sync folder downloaded |

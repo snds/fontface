@@ -223,6 +223,7 @@ fn a_snapshot_holds_the_same_state() {
     let ops = vec![
         tag_op(h(1, 0, A), "p", &[("name", json!("Sci-Fi")), ("color", json!("blue"))]),
         tag_op(h(2, 0, A), "p", &[("color", json!("red"))]),
+        tag_op(h(2, 1, B), "p", &[("group", json!("builtin"))]),
         add(h(3, 0, A), "p", OKUDA),
         add(h(4, 0, B), "p", INTER),
         remove(h(5, 0, A), "p", INTER, &[h(4, 0, B)]),
@@ -234,8 +235,87 @@ fn a_snapshot_holds_the_same_state() {
     let squeezed: Vec<Op> = full.ops_by(A).into_iter().chain(full.ops_by(B)).collect();
     assert!(squeezed.len() < ops.len() + 1);
     assert_eq!(merged(&squeezed).tag_view(), full.tag_view());
+    assert!(full.tag_view().tags[0].builtin, "the group is kept too");
     assert_eq!(merged(&squeezed).effective(OKUDA, C, None), full.effective(OKUDA, C, None));
 }
+
+/// Each tag's full name and whether it's in Built-in.
+fn view_groups(m: &Merged) -> Vec<(String, bool)> {
+    m.tag_view().tags.into_iter().map(|t| (t.name, t.builtin)).collect()
+}
+
+fn groups(list: &[(&str, bool)]) -> Vec<(String, bool)> {
+    list.iter().map(|(n, b)| (n.to_string(), *b)).collect()
+}
+
+#[test]
+fn groups_belong_to_top_level_tags_and_default_to_the_name() {
+    // Changes from before tag groups: no `group` anywhere. The name decides, as the one-time
+    // sort does, and a nested tag follows its top-level tag.
+    let mut m = merged(&[
+        tag_op(h(1, 0, A), "fun", &[("name", json!("Fun"))]),
+        tag_op(h(1, 1, A), "party", &[("name", json!("Party")), ("parent", json!("fun"))]),
+        tag_op(h(1, 2, A), "scifi", &[("name", json!("Sci-Fi"))]),
+        tag_op(h(1, 3, A), "trek", &[("name", json!("Star Trek")), ("parent", json!("scifi"))]),
+    ]);
+    assert_eq!(
+        view_groups(&m),
+        groups(&[("Fun", true), ("Sci-Fi", false), ("Fun/Party", true), ("Sci-Fi/Star Trek", false)])
+    );
+    // A choice for a top-level tag moves everything in it.
+    m.apply(&tag_op(h(2, 0, B), "fun", &[("group", json!("mine"))]));
+    m.apply(&tag_op(h(2, 1, B), "scifi", &[("group", json!("builtin"))]));
+    assert_eq!(
+        view_groups(&m),
+        groups(&[("Fun", false), ("Sci-Fi", true), ("Fun/Party", false), ("Sci-Fi/Star Trek", true)])
+    );
+    // A nested tag's own field doesn't count while it's nested...
+    m.apply(&tag_op(h(3, 0, A), "trek", &[("group", json!("mine"))]));
+    assert_eq!(
+        view_groups(&m),
+        groups(&[("Fun", false), ("Sci-Fi", true), ("Fun/Party", false), ("Sci-Fi/Star Trek", true)])
+    );
+    // ...and does once it's at the top level.
+    m.apply(&tag_op(h(4, 0, A), "trek", &[("parent", json!(null))]));
+    assert_eq!(view_groups(&m).iter().find(|t| t.0 == "Star Trek").map(|t| t.1), Some(false));
+    // A group this version doesn't know, or null, is no choice: the name decides.
+    m.apply(&tag_op(h(5, 0, A), "fun", &[("group", json!("work"))]));
+    m.apply(&tag_op(h(5, 1, A), "scifi", &[("group", json!(null))]));
+    assert_eq!(view_groups(&m)[..2], groups(&[("Fun", true), ("Sci-Fi", false)]));
+}
+
+#[test]
+fn concurrent_group_choices_settle_the_same_everywhere() {
+    let ops = vec![
+        tag_op(h(1, 0, A), "t", &[("name", json!("Sci-Fi"))]),
+        tag_op(h(5, 0, A), "t", &[("group", json!("builtin"))]),
+        tag_op(h(6, 0, B), "t", &[("group", json!("mine"))]),
+    ];
+    let mut reversed = ops.clone();
+    reversed.reverse();
+    assert_eq!(view_groups(&merged(&ops)), groups(&[("Sci-Fi", false)]), "the later choice wins");
+    assert_eq!(merged(&reversed), merged(&ops));
+
+    // Two computers' tags with the same name: the latest choice for either wins, like colors.
+    let both = |a_group: Option<(u64, &str)>, b_group: Option<(u64, &str)>| {
+        let mut ops = vec![tag_op(h(1, 0, A), "t-a", &[("name", json!("Web"))]), tag_op(h(1, 0, B), "t-b", &[("name", json!("web"))])];
+        if let Some((when, g)) = a_group {
+            ops.push(tag_op(h(when, 0, A), "t-a", &[("group", json!(g))]));
+        }
+        if let Some((when, g)) = b_group {
+            ops.push(tag_op(h(when, 0, B), "t-b", &[("group", json!(g))]));
+        }
+        let view = merged(&ops).tag_view();
+        assert_eq!(view.tags.len(), 1);
+        view.tags[0].builtin
+    };
+    assert!(both(None, None), "nobody chose: the name decides");
+    assert!(!both(Some((3, "mine")), None), "a choice beats the name");
+    assert!(!both(None, Some((3, "mine"))));
+    assert!(both(Some((4, "builtin")), Some((3, "mine"))), "the later choice wins");
+    assert!(!both(Some((3, "builtin")), Some((4, "mine"))));
+}
+
 
 // ----------------------------------------------------------------------------- formats
 
@@ -351,6 +431,53 @@ impl Device {
 
     fn own_files(&self) -> Vec<String> {
         self.transport().list(self.engine.me()).unwrap()
+    }
+
+    /// Each tag's name and whether it's in Built-in, in name order.
+    fn groups(&self) -> Vec<(String, bool)> {
+        tags::list_tags(&self.conn).unwrap().into_iter().map(|t| (t.name, t.builtin)).collect()
+    }
+
+    fn builtin(&self, name: &str) -> bool {
+        tags::find_tag(&self.conn, name).unwrap().unwrap_or_else(|| panic!("no tag {name}")).builtin
+    }
+
+    /// "Move to Built-in" / "Move to My tags" (and their Undo), on a tag or any tag inside it.
+    fn set_group(&mut self, name: &str, builtin: bool) {
+        let id = self.tag_id(name);
+        tags::set_group(&mut self.conn, id, builtin).unwrap();
+    }
+
+    /// Rename, or a move ("Move to", or dragging onto another tag).
+    fn rename(&mut self, name: &str, to: &str) {
+        let id = self.tag_id(name);
+        tags::rename_tag(&mut self.conn, id, to).unwrap();
+    }
+
+    /// Change files this device has written.
+    fn written(&self) -> u64 {
+        self.engine.saved.seq
+    }
+
+    /// As if this computer had run a Fontface from before tag groups: the tags table has no
+    /// `builtin` column, and sync's saved state knows no tag's group.
+    fn before_groups(&mut self) {
+        self.engine.save_state(&self.conn).unwrap();
+        self.conn.execute_batch("ALTER TABLE tags DROP COLUMN builtin").unwrap();
+        let mut state: serde_json::Value =
+            serde_json::from_str(&self.conn.query_row("SELECT value FROM sync_meta WHERE key = 'state'", [], |r| r.get::<_, String>(0)).unwrap())
+                .unwrap();
+        for base in state["base"].as_object_mut().unwrap().values_mut() {
+            base.as_object_mut().unwrap().remove("builtin");
+        }
+        self.conn.execute("UPDATE sync_meta SET value = ?1 WHERE key = 'state'", [state.to_string()]).unwrap();
+    }
+
+    /// Launches the Fontface with tag groups: the column is added and tags are sorted once.
+    fn upgrade(&mut self, machine: &str) {
+        tags::ensure_schema(&self.conn).unwrap();
+        self.engine = Engine::load(&self.conn, machine, "upgraded").unwrap();
+        assert!(self.engine.saved.base.values().all(|b| b.builtin.is_none()), "a state saved before groups");
     }
 
     /// One sync, as `run_cycle` does it, with the font switches done straight in the database.
@@ -754,4 +881,317 @@ fn a_different_font_with_the_same_name_isnt_merged() {
     b.conn.execute("UPDATE fonts SET family = 'Nova Sans'", []).unwrap();
     b.sync();
     assert!(b.is_on(&key));
+}
+
+// ----------------------------------------------------------------------------- tag groups
+
+/// Whether any change file in the sync folder sets a tag's group.
+fn any_group_written(folder: &Path) -> bool {
+    let mut found = false;
+    for dev in std::fs::read_dir(folder.join("Fontface Sync/v1/devices")).unwrap() {
+        let dev = dev.unwrap();
+        let id = dev.file_name().to_string_lossy().into_owned();
+        for file in std::fs::read_dir(dev.path()).unwrap() {
+            let file = file.unwrap();
+            if ops::change_seq(&file.file_name().to_string_lossy()).is_none() {
+                continue;
+            }
+            let (_, ops) = ops::read_changes(&std::fs::read(file.path()).unwrap(), &id).unwrap();
+            found |= ops.iter().any(|op| matches!(&op.kind, OpKind::Tag { set, .. } if set.contains_key("group")));
+        }
+    }
+    found
+}
+
+#[test]
+fn a_tags_group_syncs_both_ways_and_nested_tags_follow() {
+    let folder = Folder::new("groups");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    a.tag("Sci-Fi/Star Trek");
+    a.tag("Projects");
+    a.sync();
+    b.sync();
+    assert_eq!(b.groups(), groups(&[("Projects", false), ("Sci-Fi", false), ("Sci-Fi/Star Trek", false)]));
+
+    // B moves "Star Trek" to Built-in: that moves "Sci-Fi" and everything in it.
+    b.set_group("Sci-Fi/Star Trek", true);
+    b.sync();
+    a.sync();
+    assert_eq!(a.groups(), groups(&[("Projects", false), ("Sci-Fi", true), ("Sci-Fi/Star Trek", true)]));
+    assert_eq!(a.groups(), b.groups());
+
+    // A tag made inside it on one computer is in Built-in on the other too.
+    a.tag("Sci-Fi/Aliens");
+    assert!(a.builtin("Sci-Fi/Aliens"));
+    a.sync();
+    b.sync();
+    assert!(b.builtin("Sci-Fi/Aliens"));
+
+    // A moves it back (Undo of B's move, say); B follows.
+    a.set_group("Sci-Fi", false);
+    a.sync();
+    b.sync();
+    assert_eq!(b.groups(), groups(&[("Projects", false), ("Sci-Fi", false), ("Sci-Fi/Aliens", false), ("Sci-Fi/Star Trek", false)]));
+
+    // A move undone before sync ran is no change at all.
+    let written = a.written();
+    a.set_group("Projects", true);
+    a.set_group("Projects", false);
+    a.sync();
+    assert_eq!(a.written(), written);
+
+    // At the same time: B moves "Sci-Fi" to Built-in while A makes a tag inside it (in My tags
+    // at A). Once both have synced, the new tag is in Built-in with the rest of "Sci-Fi".
+    b.set_group("Sci-Fi", true);
+    a.tag("Sci-Fi/Robots");
+    assert!(!a.builtin("Sci-Fi/Robots"));
+    a.sync();
+    b.sync();
+    a.sync();
+    assert_eq!(a.groups(), b.groups());
+    assert!(a.groups().iter().all(|(n, builtin)| *builtin == n.starts_with("Sci-Fi")));
+
+    // Applying never writes anything back.
+    assert_eq!(a.engine.local_changes(&a.conn, &BTreeSet::new()).unwrap(), 0);
+    assert_eq!(b.engine.local_changes(&b.conn, &BTreeSet::new()).unwrap(), 0);
+}
+
+#[test]
+fn renamed_and_moved_tags_keep_their_group_on_every_computer() {
+    let folder = Folder::new("group-moves");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    // "Fun" in Built-in, where its name puts it (no group is written for it).
+    a.tag("Fun/Party");
+    a.set_group("Fun", true);
+    a.tag("Trek");
+    a.tag("Projects");
+    a.sync();
+    b.sync();
+    assert!(!any_group_written(&folder.0), "only groups the name doesn't give are written");
+    assert_eq!(b.groups(), a.groups());
+    let check = |a: &mut Device, b: &mut Device, want: &[(&str, bool)]| {
+        a.sync();
+        b.sync();
+        a.sync();
+        assert_eq!(a.groups(), groups(want));
+        assert_eq!(b.groups(), groups(want));
+    };
+
+    // Renamed: still in Built-in, though the new name alone would put it in My tags.
+    a.rename("Fun", "Party Fonts");
+    check(&mut a, &mut b, &[("Party Fonts", true), ("Party Fonts/Party", true), ("Projects", false), ("Trek", false)]);
+    // Taken out to the top level: it keeps the group it had.
+    a.rename("Party Fonts/Party", "Party");
+    check(&mut a, &mut b, &[("Party", true), ("Party Fonts", true), ("Projects", false), ("Trek", false)]);
+    // Moved into a tag of the other group: it joins that group...
+    b.rename("Trek", "Party Fonts/Trek");
+    check(&mut a, &mut b, &[("Party", true), ("Party Fonts", true), ("Party Fonts/Trek", true), ("Projects", false)]);
+    // ...and keeps it when taken out again.
+    b.rename("Party Fonts/Trek", "Trek");
+    check(&mut a, &mut b, &[("Party", true), ("Party Fonts", true), ("Projects", false), ("Trek", true)]);
+    // A tag whose group was chosen before (Trek, just now), moved into My tags and back out:
+    // the group it has now counts, not the one chosen for it earlier.
+    a.rename("Trek", "Projects/Trek");
+    check(&mut a, &mut b, &[("Party", true), ("Party Fonts", true), ("Projects", false), ("Projects/Trek", false)]);
+    a.rename("Projects/Trek", "Trek");
+    check(&mut a, &mut b, &[("Party", true), ("Party Fonts", true), ("Projects", false), ("Trek", false)]);
+    // Renamed to a name that alone would put it in Built-in: it stays in My tags.
+    b.rename("Trek", "Modern");
+    check(&mut a, &mut b, &[("Modern", false), ("Party", true), ("Party Fonts", true), ("Projects", false)]);
+    // New tags made in Fontface are the user's own, whatever the name, on every computer.
+    a.tag("Web/Mine");
+    check(&mut a, &mut b, &[("Modern", false), ("Party", true), ("Party Fonts", true), ("Projects", false), ("Web", false), ("Web/Mine", false)]);
+}
+
+#[test]
+fn concurrent_group_changes_resolve_the_same_on_both_computers() {
+    let folder = Folder::new("group-race");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    a.tag("Sci-Fi/Star Trek");
+    a.sync();
+    b.sync();
+    a.set_group("Sci-Fi", true);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    b.set_group("Sci-Fi/Star Trek", false); // already in My tags at B: no change
+    b.rename("Sci-Fi", "Genre");
+    a.sync();
+    b.sync();
+    a.sync();
+    assert_eq!(a.groups(), b.groups());
+    assert_eq!(a.groups(), groups(&[("Genre", true), ("Genre/Star Trek", true)]), "A's move and B's rename both stay");
+
+    // At the same time: A moves "Genre" to My tags, and B takes "Star Trek" out of it to the
+    // top level (where it keeps Built-in, the group it had at B).
+    a.set_group("Genre", false);
+    b.rename("Genre/Star Trek", "Star Trek");
+    b.sync();
+    a.sync();
+    b.sync();
+    assert_eq!(a.groups(), b.groups());
+    assert_eq!(a.groups(), groups(&[("Genre", false), ("Star Trek", true)]));
+
+    // Same-named tags from two computers that hadn't synced: a group someone chose beats the one
+    // a name gives. "Designer" was moved to Built-in at A; "Fun" is A's own tag (made in Fontface).
+    let folder = Folder::new("group-join");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    a.tag("Designer");
+    a.set_group("Designer", true);
+    a.tag("Fun");
+    b.tag("designer/Studio");
+    b.tag("fun");
+    b.set_group("fun", true); // where the name puts it, as a Font Book import would
+    // B joins last, so its tags are written last; the groups its names give still don't count.
+    a.sync();
+    b.sync();
+    a.sync();
+    assert_eq!(b.groups(), a.groups());
+    assert_eq!(a.groups().len(), 3);
+    assert!(a.builtin("Designer") && a.builtin("Designer/Studio") && !a.builtin("Fun"));
+}
+
+#[test]
+fn the_one_time_sort_on_two_computers_doesnt_fight() {
+    let folder = Folder::new("group-sort");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    // Both computers synced these with a Fontface from before tag groups.
+    for name in ["Fun/Party", "Style/Sans", "Sci-Fi", "Projects"] {
+        a.tag(name);
+    }
+    a.set_group("Fun", true);
+    a.set_group("Style", true);
+    a.sync();
+    b.sync();
+    assert!(!any_group_written(&folder.0), "nothing in the folder says a group, as before groups");
+    a.before_groups();
+    b.before_groups();
+    let sorted = groups(&[("Fun", true), ("Fun/Party", true), ("Projects", false), ("Sci-Fi", false), ("Style", true), ("Style/Sans", true)]);
+
+    // B updates first. Its sort puts "Fun" and "Style" in Built-in, and that isn't shared.
+    b.upgrade("machine-b");
+    assert_eq!(b.groups(), sorted);
+    let b_written = b.written();
+    b.sync();
+    b.sync();
+    assert_eq!(b.written(), b_written, "the sort writes nothing");
+    assert_eq!(b.groups(), sorted);
+
+    // At B the user moves "Fun" to My tags. That is shared.
+    b.set_group("Fun", false);
+    b.sync();
+    assert_eq!(b.written(), b_written + 1);
+
+    // A updates later: its sort puts "Fun" in Built-in, but B's choice wins, and A writes
+    // nothing. Just after launching, before its first sync, the user at A moves "Sci-Fi" to
+    // Built-in: that is a choice, and it's shared.
+    a.upgrade("machine-a");
+    assert!(a.builtin("Fun"));
+    a.set_group("Sci-Fi", true);
+    let a_written = a.written();
+    a.sync();
+    assert_eq!(a.written(), a_written + 1, "only the move made here");
+    b.sync();
+    let want = groups(&[("Fun", false), ("Fun/Party", false), ("Projects", false), ("Sci-Fi", true), ("Style", true), ("Style/Sans", true)]);
+    assert_eq!(a.groups(), want);
+    assert_eq!(b.groups(), want);
+
+    // And it stays put: no more changes from either side.
+    let (aw, bw) = (a.written(), b.written());
+    for _ in 0..3 {
+        a.sync();
+        b.sync();
+    }
+    assert_eq!((a.written(), b.written()), (aw, bw));
+    assert_eq!(a.groups(), want);
+    assert_eq!(b.groups(), want);
+}
+
+#[test]
+fn files_from_before_tag_groups_still_apply() {
+    let folder = Folder::new("group-old-files");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    b.tag("Sci-Fi");
+    b.set_group("Sci-Fi", true);
+    b.sync();
+    // A change file written by a Fontface from before tag groups, on computer C.
+    let dir = folder.0.join("Fontface Sync/v1/devices").join(C);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lines = [
+        format!(r#"{{"format":"fontface-sync-changes","version":1,"device":"{C}","seq":1}}"#),
+        format!(r#"{{"hlc":"1000.0.{C}","op":"tag","id":"c0ffee01","set":{{"name":"Modern","parent":null,"color":"red"}}}}"#),
+        format!(r#"{{"hlc":"1000.1.{C}","op":"tag","id":"c0ffee02","set":{{"name":"Bauhaus","parent":"c0ffee01","color":"red"}}}}"#),
+        format!(r#"{{"hlc":"1000.2.{C}","op":"tag","id":"c0ffee03","set":{{"name":"Clients","parent":null,"color":"blue"}}}}"#),
+        format!(r#"{{"hlc":"1000.3.{C}","op":"tag","id":"c0ffee04","set":{{"name":"sci-fi","parent":null,"color":"blue"}}}}"#),
+    ];
+    std::fs::write(dir.join(ops::change_name(1)), lines.join("\n") + "\n").unwrap();
+    b.sync();
+    assert_eq!(
+        b.groups(),
+        groups(&[("Clients", false), ("Modern", true), ("Modern/Bauhaus", true), ("Sci-Fi", true)]),
+        "the name decides where nobody chose; B's choice for Sci-Fi stays"
+    );
+    assert_eq!(b.engine.local_changes(&b.conn, &BTreeSet::new()).unwrap(), 0, "nothing to send back");
+
+    // Sync's saved state from before groups still loads.
+    let base: engine::BaseTag = serde_json::from_str(r#"{"sids":["c0ffee01"],"name":"Fun","color":"red","keys":[]}"#).unwrap();
+    assert_eq!(base.builtin, None);
+}
+
+#[test]
+fn restoring_a_backup_with_groups_then_syncing() {
+    let folder = Folder::new("group-restore");
+    let mut a = Device::new("A", &folder.0, "machine-a");
+    let mut b = Device::new("B", &folder.0, "machine-b");
+    let okuda = a.font("Okuda", "Okuda");
+    a.tag("Sci-Fi/Star Trek");
+    a.put("Sci-Fi/Star Trek", &okuda, true);
+    a.set_group("Sci-Fi", true);
+    a.tag("Fun");
+    a.set_group("Fun", true);
+    a.tag("Work");
+    a.sync();
+    b.sync();
+    // The backup, as Settings › Backups makes it.
+    let json = tags::export::to_json(&a.conn, tags::export::collect(&a.conn, None).unwrap(), 1_760_000_000).unwrap();
+    let backup = tags::export::parse_json(json.as_bytes()).unwrap();
+    let all: Vec<String> = backup.tags.iter().map(|t| t.name.to_ascii_lowercase()).collect();
+
+    // Since then, at B: both moved to My tags, "Work" deleted, a new tag.
+    b.set_group("Sci-Fi", false);
+    b.set_group("Fun", false);
+    let work = b.tag_id("Work");
+    tags::delete_tag(&mut b.conn, work).unwrap();
+    b.tag("Later");
+    b.sync();
+    a.sync();
+    assert_eq!(a.groups(), groups(&[("Fun", false), ("Later", false), ("Sci-Fi", false), ("Sci-Fi/Star Trek", false)]));
+
+    // A restores the backup with "Replace my tags". Its groups come back on both computers.
+    tags::import::replace(&mut a.conn, &backup, &all, true).unwrap();
+    let want = groups(&[("Fun", true), ("Sci-Fi", true), ("Sci-Fi/Star Trek", true), ("Work", false)]);
+    assert_eq!(a.groups(), want);
+    a.sync();
+    b.sync();
+    a.sync();
+    assert_eq!(a.groups(), want);
+    assert_eq!(b.groups(), want);
+    assert_eq!(b.tags(), a.tags());
+
+    // Adding a tags file's tags: a new tag takes the file's group, and existing tags keep theirs.
+    let file = tags::export::parse_json(
+        br#"{"format":"fontface-tags","version":1,"tags":[
+            {"name":"Designer","color":"red","fonts":[],"builtin":true},
+            {"name":"Fun","color":"red","fonts":[],"builtin":false}
+        ]}"#,
+    )
+    .unwrap();
+    tags::import::apply(&mut b.conn, &file, &["designer".into(), "fun".into()], true).unwrap();
+    b.sync();
+    a.sync();
+    assert!(a.builtin("Designer") && a.builtin("Fun"));
+    assert_eq!(a.groups(), b.groups());
 }

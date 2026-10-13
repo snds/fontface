@@ -1,9 +1,10 @@
 # Sync
 
-Sync shares your *choices* between your computers: your tags, which fonts carry them, which
-fonts are on, and exceptions for one computer. It works through any folder that something else
-keeps in sync: iCloud Drive, OneDrive, Google Drive, Dropbox, the Nextcloud or Seafile client,
-Syncthing, or an rclone mount. Font files never sync. Each computer uses its own copies.
+Sync shares your *choices* between your computers: your tags (with their colors and groups),
+which fonts carry them, which fonts are on, and exceptions for one computer. It works through
+any folder that something else keeps in sync: iCloud Drive, OneDrive, Google Drive, Dropbox,
+the Nextcloud or Seafile client, Syncthing, or an rclone mount. Font files never sync. Each
+computer uses its own copies.
 
 Code: `src-tauri/src/sync/` (Rust) and `src/sync/` (interface). The plan it comes from is in
 [MOBILE-AND-SYNC.md](MOBILE-AND-SYNC.md).
@@ -13,13 +14,14 @@ Code: `src-tauri/src/sync/` (Rust) and `src/sync/` (interface). The plan it come
 | Item | Syncs | Notes |
 |---|---|---|
 | Tags: names, nesting, colors | Yes | Each tag has its own sync id, so renames and moves carry over |
+| Tag groups: My tags, Built-in | Yes | A top-level tag's group, which the tags inside it follow. See **Tag groups** |
 | Which fonts carry which tags | Yes | By the font's key (PostScript name, variable or static, slant) |
 | Which fonts are on | Yes | As a wish. Each computer turns on its own copy, if it has one |
 | Exceptions for one computer | Yes | Always on here, Never on here, Follow sync |
 | Exceptions for a device group | Yes | In the data; no menu for them yet |
 | Fonts without a PostScript name | No | Their key is a file path, which means nothing on another computer |
 | Font files | No | Purchased, Adobe and system fonts never will ([INTEGRATIONS.md](INTEGRATIONS.md)) |
-| Settings | No | They belong to one computer |
+| Settings | No | They belong to one computer, including which sidebar sections show (Built-in tags too) |
 | Folders and their colors | No | Paths differ between computers |
 | The library database | Never | Only small change files go in the folder |
 
@@ -116,7 +118,8 @@ same file, so a plain file-sync service can't create conflicts or mix two versio
 ```json
 {"format":"fontface-sync-changes","version":1,"device":"3f2a…","seq":7}
 {"hlc":"1760280000000.0.3f2a…","op":"tag","id":"9b1c…","set":{"name":"Star Trek","parent":"77aa…","color":"blue"}}
-{"hlc":"1760280000000.1.3f2a…","op":"add","tag":"9b1c…","key":"ps:Okuda|static|r"}
+{"hlc":"1760280000000.1.3f2a…","op":"tag","id":"77aa…","set":{"group":"builtin"}}
+{"hlc":"1760280000000.2.3f2a…","op":"add","tag":"9b1c…","key":"ps:Okuda|static|r"}
 {"hlc":"1760280000001.0.3f2a…","op":"remove","tag":"9b1c…","key":"ps:Inter|var|r","dots":["1760270000000.0.77aa…"]}
 {"hlc":"1760280000002.0.3f2a…","op":"face","key":"ps:Okuda|static|r","set":{"on":true,"family":"Okuda","style":"Regular"}}
 {"hlc":"1760280000003.0.3f2a…","op":"tagDel","id":"55e0…"}
@@ -124,16 +127,47 @@ same file, so a plain file-sync service can't create conflicts or mix two versio
 
 | Change | Fields |
 |---|---|
-| `tag` | `id` (sync id) and `set`: `name` (its own level only), `parent` (a sync id, or null), `color` |
+| `tag` | `id` (sync id) and `set`: `name` (its own level only), `parent` (a sync id, or null), `color`, `group` (`"builtin"` or `"mine"`; see **Tag groups**) |
 | `tagDel` | `id`. Final |
 | `add` | `tag`, `key`. Its clock value is its id |
 | `remove` | `tag`, `key`, and `dots`: the adds it saw |
 | `face` | `key` and `set`: `on`; `family` and `style` (for "Not on this computer"); `prints` (fingerprints); `x:<device id>` and `xg:<group>` exceptions, `"on"`, `"off"` or null |
 
-`set` is a field map on purpose. **Tag groups** ("My tags" / "Built-in") will add a `group`
-field to `tag`. It already syncs like any other field; applying it to the local tables is the
-one thing to add when tag groups land (`write_tags` in `sync/engine.rs`, and the diff in
-`local_changes`; `merge::TAG_GROUP` marks the spot).
+`set` is a field map on purpose, so a later version can add a field without a new format
+version. `group` arrived that way: files from before tag groups don't have it, and still apply.
+
+### Tag groups
+
+A tag is in **My tags** or **Built-in** ([TAGS.md](TAGS.md)). The group belongs to a top-level
+tag; every tag inside it is in the same group, on every computer.
+
+- **Where a tag starts:** where its name puts it (`tags::BUILTIN_NAMES`: Font Book's starter
+  collections and Typeface's "Style"), the rule the one-time sort uses when groups arrive. Every
+  computer works that out alike, so it needs no change in the folder.
+- **What's written:** `group` on a top-level tag, only when it differs from what the tag's name
+  gives it, or when it changes here. So a new "Sci-Fi" in My tags writes nothing, and a new
+  "Fun" made in Fontface (always My tags) writes `"mine"`.
+- **Every way a group changes here is sent,** because sync compares the tags with the base
+  (see **No echoes**): Move to Built-in / Move to My tags (menu or a drag onto a heading), its
+  Undo, a move into a tag of the other group, imports and restores (adding or replacing).
+  Undone before sync runs, it's no change at all.
+- **Renames and moves keep the group.** A top-level tag renamed so that its new name alone would
+  give the other group, or a tag taken out of its parent to the top level, writes the group it
+  has, so the other computers don't work out another one. A tag moved inside another tag needs
+  nothing: it follows its new top-level tag.
+- **Coming in:** a top-level tag is in the group chosen last for it, else where its name puts
+  it. A tag inside it (made, renamed or moved there on another computer) takes its group. A tag
+  that a loop of moves leaves at the top level is a top-level tag like any other.
+- **The one-time sort is never shared.** When groups arrive, each computer sorts its tags by
+  name once (`tags::ensure_schema`). Sync's saved state from before groups has no groups, and
+  counts each tag as having the group that sort gives it. So updating Fontface writes no
+  change, two computers that update never undo each other's sort, and a group someone chose on
+  another computer wins over the sort. A tag moved by hand after the update, even before the
+  first sync, does count as a change.
+- **Older files and older apps.** A change without `group` (any file from before tag groups)
+  leaves the name to decide. A `group` value this version doesn't know counts as no choice. A
+  computer still on a Fontface from before tag groups keeps the field and passes it on, but has
+  no groups itself: a tag it renames or moves to the top level goes where its new name puts it.
 
 ## How changes merge
 
@@ -141,8 +175,9 @@ one thing to add when tag groups land (`write_tags` in `sync/engine.rs`, and the
   counter, and the device id. It orders changes; the device id breaks ties. A computer that
   sees a change from the future (a clock set wrong) moves its own clock past it, so its next
   change still comes later. A wrong clock can win early, but not for ever.
-- **Single values** (a tag's name, parent and color; a font's on/off; each exception): the
-  latest change wins, field by field. Renaming on one computer and recoloring on another keeps both.
+- **Single values** (a tag's name, parent, color and group; a font's on/off; each exception):
+  the latest change wins, field by field. Renaming on one computer and recoloring on another
+  keeps both, and so does renaming on one and moving to Built-in on another.
 - **Deletes** are final (tombstones). A tag deleted on one computer and renamed on another at
   the same time stays deleted. Tags inside a deleted tag go too, as they do locally.
 - **Tags on fonts** are an add-wins set. Each add has its own id; a remove lists the adds it
@@ -150,7 +185,9 @@ one thing to add when tag groups land (`write_tags` in `sync/engine.rs`, and the
 - **Order doesn't matter.** Changes can arrive in any order, any number of times. A remove
   before its add, a tag before its parent, the same file twice: the result is the same.
 - **Same name, two tags.** Two computers that each had "Sci-Fi" before they first synced have
-  two sync ids for it. They show as one tag with both ids. Renames, colors and deletes go to both.
+  two sync ids for it. They show as one tag with both ids. Renames, colors, groups and deletes go
+  to both. The spelling, color and group come from the most recent change to either; a group
+  someone chose beats one that only comes from the name.
 - **A loop of moves** (A into B on one computer, B into A on another): the later move is
   dropped, the same way everywhere.
 - **No echoes.** Local tag changes are found by comparing the tags now with the tags as sync
@@ -189,6 +226,9 @@ one thing to add when tag groups land (`write_tags` in `sync/engine.rs`, and the
   joins, even if another computer turned that font off earlier. The opposite would turn fonts
   off on a new computer by surprise.
 - **Delete beats a rename made at the same time.** A rename doesn't bring a deleted tag back.
+- **A group someone chose beats the name rule.** When two computers' same-named tags meet, a
+  computer that never chose a group for its tag doesn't outvote one that did, even if it joins
+  later. Between two choices, the later one wins, as for colors.
 - **A tag inside a deleted tag goes too,** even one just made on another computer.
 - **Fingerprints only come from Purchases.** Hashing every font in a big library on each
   computer would take minutes and download online-only files. So "different font with the same
@@ -208,8 +248,9 @@ one thing to add when tag groups land (`write_tags` in `sync/engine.rs`, and the
 
 - **Merge rules:** concurrent add and remove, rename against delete, a deleted parent, clock
   skew, changes out of order and twice, a child before its parent, loops of moves, tags with
-  the same name, bad names and colors, exceptions (device, group, shared, back to follow), and
-  snapshots holding the same state.
+  the same name, bad names and colors, exceptions (device, group, shared, back to follow),
+  snapshots holding the same state, and tag groups (the name rule when nobody chose, nested tags
+  following their top-level tag, unknown values, the latest choice winning, same-named tags).
 - **Files:** round trips, unfinished files, files in the wrong folder, newer versions, unknown
   kinds of change, and which names count.
 - **Two or three computers sharing a temporary folder**, each with its own library: tags,
@@ -218,3 +259,8 @@ one thing to add when tag groups land (`write_tags` in `sync/engine.rs`, and the
   downloaded file and a conflicted copy; a damaged local state rebuilt from the folder; a newer
   format; copied app data; snapshots for a computer that joins later; and different fonts that
   share a name.
+- **Tag groups across computers:** a group change both ways, with Undo; tags made inside a
+  moved tag; renames and moves that keep a group; group changes racing renames and moves;
+  same-named tags; the one-time sort on two computers (nothing written, an earlier choice kept,
+  a move made just after updating sent); change files from before groups; and a backup restored
+  with "Replace my tags", then added to, and synced.

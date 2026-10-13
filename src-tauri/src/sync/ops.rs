@@ -10,7 +10,8 @@
 //! ```text
 //! {"format":"fontface-sync-changes","version":1,"device":"3f2a…","seq":7}
 //! {"hlc":"1760280000000.0.3f2a…","op":"tag","id":"9b1c…","set":{"name":"Star Trek","parent":"77aa…","color":"blue"}}
-//! {"hlc":"1760280000000.1.3f2a…","op":"add","tag":"9b1c…","key":"ps:Okuda|static|r"}
+//! {"hlc":"1760280000000.1.3f2a…","op":"tag","id":"77aa…","set":{"group":"builtin"}}
+//! {"hlc":"1760280000000.2.3f2a…","op":"add","tag":"9b1c…","key":"ps:Okuda|static|r"}
 //! {"hlc":"1760280000001.0.3f2a…","op":"face","key":"ps:Okuda|static|r","set":{"on":true,"family":"Okuda","style":"Regular"}}
 //! ```
 
@@ -39,14 +40,37 @@ pub struct Op {
 }
 
 /// Field names in a tag's `set`. A field map rather than fixed fields, so later versions can add
-/// fields (older apps keep them and pass them on). Tag groups ("My tags" / "Built-in") will add a
-/// `group` field here; see `merge::TAG_GROUP` and the note in docs/SYNC.md.
+/// fields (older apps keep them and pass them on).
 pub mod tag_field {
     /// The tag's own level only ("Star Trek", never "Sci-Fi/Star Trek").
     pub const NAME: &str = "name";
     /// The sync id of the tag it sits in, or null at the top level.
     pub const PARENT: &str = "parent";
     pub const COLOR: &str = "color";
+    /// A top-level tag's group: [`GROUP_BUILTIN`] or [`GROUP_MINE`]. Tags nested under it are in
+    /// its group whatever their own field says. Left out while the group is the one the tag's
+    /// name gives it (`tags::is_builtin_name`), which every computer works out for itself; see
+    /// `Merged::chosen_group` and docs/SYNC.md. Files from before tag groups never have it.
+    pub const GROUP: &str = "group";
+    /// "Built-in": tags that came with Font Book and Typeface.
+    pub const GROUP_BUILTIN: &str = "builtin";
+    /// "My tags": the user's own.
+    pub const GROUP_MINE: &str = "mine";
+}
+
+/// The `group` value for a tag in Built-in (`true`) or in My tags (`false`).
+pub fn group_value(builtin: bool) -> Value {
+    Value::String(if builtin { tag_field::GROUP_BUILTIN } else { tag_field::GROUP_MINE }.into())
+}
+
+/// Reads a `group` value: `Some(true)` for Built-in, `Some(false)` for My tags. Anything else
+/// (null, or a group from a newer version) counts as no choice.
+pub fn read_group(value: &Value) -> Option<bool> {
+    match value.as_str()? {
+        tag_field::GROUP_BUILTIN => Some(true),
+        tag_field::GROUP_MINE => Some(false),
+        _ => None,
+    }
 }
 
 /// Field names in a font's `set`.

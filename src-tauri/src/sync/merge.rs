@@ -2,8 +2,12 @@
 //!
 //! Pure data, no files or database, so the merge rules are tested on their own.
 //!
-//! - **Single values** (a tag's name, parent and color; a font's on/off; exceptions) are
+//! - **Single values** (a tag's name, parent, color and group; a font's on/off; exceptions) are
 //!   "last writer wins" registers: each field keeps the value with the latest clock.
+//! - **Tag groups** ("My tags" / "Built-in") belong to top-level tags; a nested tag is in its
+//!   top-level tag's group. A top-level tag nobody chose a group for is where its name puts it
+//!   (`tags::is_builtin_name`), the same rule every computer uses, so that default never needs
+//!   a change of its own and can't fight a choice made elsewhere.
 //! - **Deletes** are tombstones: a deleted tag stays deleted, whatever arrives later for it.
 //! - **Tags on fonts** are an add-wins set: each add has its own id (its clock value, a "dot"); a
 //!   remove names the dots it saw. An add made at the same time elsewhere wasn't seen, so it stays.
@@ -18,13 +22,8 @@ use serde_json::Value;
 
 use super::{
     hlc::Hlc,
-    ops::{face_field, tag_field, Op, OpKind},
+    ops::{self, face_field, tag_field, Op, OpKind},
 };
-
-/// Placeholder for the tag group field ("My tags" / "Built-in"), which arrives with the tag
-/// groups work. Synced like any other field already; applying it locally is still to do.
-#[allow(dead_code)]
-pub const TAG_GROUP: &str = "group";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reg {
@@ -158,6 +157,16 @@ impl Merged {
         self.tags.get(sid)?.get(field)?.value.as_str()
     }
 
+    /// The group someone chose for a tag with these sync ids: the latest `group` written for any
+    /// of them (`Some(true)`: Built-in). `None` if nobody chose one, so the name decides.
+    pub fn chosen_group(&self, sids: &[String]) -> Option<bool> {
+        sids.iter()
+            .filter_map(|s| self.tags.get(s)?.get(tag_field::GROUP))
+            .filter_map(|r| Some((&r.hlc, ops::read_group(&r.value)?)))
+            .max_by(|a, b| a.0.cmp(b.0))
+            .map(|(_, builtin)| builtin)
+    }
+
     /// The tags as this device should show them.
     pub fn tag_view(&self) -> TagView {
         tag_view(self)
@@ -242,6 +251,8 @@ pub struct ViewTag {
     /// The full name, e.g. "Sci-Fi/Star Trek".
     pub name: String,
     pub color: String,
+    /// In the Built-in group. Always the same as its top-level tag's.
+    pub builtin: bool,
     pub keys: BTreeSet<String>,
 }
 
@@ -366,6 +377,7 @@ fn tag_view(m: &Merged) -> TagView {
                 name: full[name_sid].clone().unwrap_or_default(),
                 sids: sids.into_iter().map(String::from).collect(),
                 color,
+                builtin: false, // set below, once the top-level tags are known
                 keys,
             }
         })
@@ -381,6 +393,20 @@ fn tag_view(m: &Merged) -> TagView {
             }
         }
         spelled.insert(t.name.to_ascii_lowercase(), t.name.clone());
+    }
+    // Groups. A top-level tag is in the group chosen last for any of its sync ids (two
+    // computers' tags with the same name: the later choice wins, as for colors), else where its
+    // name puts it. A nested tag is in its top-level tag's group, which comes first in `tags`.
+    let mut tops: HashMap<String, bool> = HashMap::new();
+    for t in &mut tags {
+        let top = crate::tags::top_level(&t.name).to_ascii_lowercase();
+        t.builtin = if t.name.contains('/') {
+            tops.get(&top).copied().unwrap_or_else(|| crate::tags::is_builtin_name(&t.name))
+        } else {
+            let builtin = m.chosen_group(&t.sids).unwrap_or_else(|| crate::tags::is_builtin_name(&t.name));
+            tops.insert(top, builtin);
+            builtin
+        };
     }
     TagView { tags, unusable }
 }

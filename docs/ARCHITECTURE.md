@@ -192,9 +192,9 @@ them and keeps their fonts' activation state. This guarantees each file belongs 
 
 ## Sync
 
-Sync shares choices (tags, tags on fonts, which fonts are on, per-computer exceptions) between
-the user's computers through a folder another app keeps in sync. Font files, settings and the
-database never sync. Full details: [SYNC.md](SYNC.md).
+Sync shares choices (tags with their colors and groups, tags on fonts, which fonts are on,
+per-computer exceptions) between the user's computers through a folder another app keeps in
+sync. Font files, settings and the database never sync. Full details: [SYNC.md](SYNC.md).
 
 - **Each computer writes only its own folder** (`Fontface Sync/v1/devices/<device id>/`):
   `device.json`, change files that are never edited, and a snapshot. So a plain file-sync
@@ -205,6 +205,8 @@ database never sync. Full details: [SYNC.md](SYNC.md).
   any number of times, gives the same result.
 - **Local tags ↔ changes** (`sync/engine.rs`): local edits are found by comparing the tables
   with what sync last wrote into them, so applying other computers' changes never echoes back.
+  A top-level tag's group is written only when it differs from what its name gives
+  (`tags::is_builtin_name`) or changes here, so the one-time sort into groups is never shared.
   On/off changes come only from the user's switch (`set_activation` calls
   `sync::activation_chosen`); synced choices are switched through `commands::switch`, once each.
 - **Hooks elsewhere are one line each:** `AppState::write` wakes sync after a UI write, and

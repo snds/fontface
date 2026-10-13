@@ -54,7 +54,8 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
   menus (Add to tag, Find a tag…, Move to) list My tags first, then Built-in under a quiet label
   when both have tags. Chips on font rows show every tag, as before. Settings › Sidebar ›
   **Built-in tags** hides the Built-in group from the sidebar only: the tags still exist, still
-  show on fonts and still appear in tag menus.
+  show on fonts and still appear in tag menus. With sync on, a tag's group syncs like its color
+  (the show/hide setting doesn't: settings belong to one computer).
 - **Search** matches tag names, so typing "sci-fi" finds every font tagged with it.
 - Tag views work with the All / Active / Inactive filter like any other view.
 
@@ -161,7 +162,12 @@ Built-in. "Styles" or "Sci-Fi/Style" don't count. The list is used:
 - once, when the `builtin` column is first added (`ensure_schema`, in the same transaction):
   existing tags are sorted by it. Later launches find the column and never sort again, so a tag
   you moved stays where you put it;
-- by imports, for the tags they create (see **Importing**).
+- by imports, for the tags they create (see **Importing**);
+- by sync, as the group of a top-level tag nobody chose one for. A group is only written to the
+  sync folder when it differs from what the name gives, or when you move the tag, so the
+  one-time sort is never shared and never overrides a choice made on another computer
+  ([SYNC.md](SYNC.md), **Tag groups**). Tags that arrive through sync keep the rule above: a
+  nested tag is in its top-level tag's group.
 
 **Locations** are keyed by folder path, or `fontbook` and `service:adobe`.
 
@@ -413,7 +419,8 @@ changes nothing, and a tag you moved stays put), the name rule, groups following
 tag on create, rename and move, moving a whole subtree, imports from Typeface and Font Book
 (new tags by name, existing tags keep theirs), Fontface tags files with and without `builtin`,
 and export, backup and restore round trips, including that a replace's preview shows the groups
-the restore creates. `cargo test settings` covers the Built-in tags setting.
+the restore creates. `cargo test settings` covers the Built-in tags setting. `cargo test sync::`
+covers groups between computers (see [SYNC.md](SYNC.md)).
 
 `cargo test tags::` also covers reading named styles from `fvar` (single files and collections),
 matching them and tidied names, Typeface format 5, and moving a folder with `Locate…`: fonts on

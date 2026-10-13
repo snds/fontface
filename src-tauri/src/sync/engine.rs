@@ -7,6 +7,12 @@
 //! the tag tables, and the base becomes what was written. Applying never makes changes of its own,
 //! so two devices can't echo each other.
 //!
+//! **Tag groups** ("My tags" / "Built-in") go the same way: a top-level tag's group is compared
+//! with the base, so moving a tag to the other group (from the menu, Undo, an import or a
+//! restore) becomes a change. A group is only written when it isn't the one the tag's name gives
+//! it (`tags::is_builtin_name`): the default needs no change, since every computer works it out
+//! alike, and the one-time sort when groups arrive (`tags::ensure_schema`) is never shared.
+//!
 //! **On/off** isn't compared like that, because the library also switches fonts off for reasons
 //! that aren't the user's choice (a drive that isn't mounted, "Leave them off" at launch). Only an
 //! on/off switch the user flips becomes a change (`choose`). A synced choice is applied once per
@@ -26,7 +32,7 @@ use super::{
     device,
     hlc::{now_ms, Clock, Hlc},
     merge::{Merged, Source, TagView},
-    ops::{self, face_field, tag_field, DeviceFile, Op, OpKind, ReadError},
+    ops::{self, face_field, group_value, tag_field, DeviceFile, Op, OpKind, ReadError},
     transport::Transport,
 };
 use crate::{
@@ -97,7 +103,18 @@ pub struct BaseTag {
     pub sids: Vec<String>,
     pub name: String,
     pub color: String,
+    /// In the Built-in group. `None` in a state saved before tag groups: then the tag's group was
+    /// the one the one-time sort gives it, by its name.
+    #[serde(default)]
+    pub builtin: Option<bool>,
     pub keys: BTreeSet<String>,
+}
+
+impl BaseTag {
+    /// The group the tag had when sync last left it.
+    fn was_builtin(&self) -> bool {
+        self.builtin.unwrap_or_else(|| tags::is_builtin_name(&self.name))
+    }
 }
 
 /// Everything kept between launches, as one JSON value in `sync_meta`. If it's lost or damaged,
@@ -162,6 +179,8 @@ pub fn syncable_key(key: &str) -> bool {
 pub struct LocalTag {
     pub name: String,
     pub color: String,
+    /// In the Built-in group (the same as its top-level tag).
+    pub builtin: bool,
     /// Syncable keys only.
     pub keys: BTreeSet<String>,
 }
@@ -169,7 +188,7 @@ pub struct LocalTag {
 pub fn load_local_tags(conn: &Connection) -> AppResult<BTreeMap<i64, LocalTag>> {
     let mut out: BTreeMap<i64, LocalTag> = BTreeMap::new();
     for t in tags::list_tags(conn)? {
-        out.insert(t.id, LocalTag { name: t.name, color: t.color, keys: BTreeSet::new() });
+        out.insert(t.id, LocalTag { name: t.name, color: t.color, builtin: t.builtin, keys: BTreeSet::new() });
     }
     let mut stmt = conn.prepare("SELECT tag_id, face_key FROM tag_fonts")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
@@ -674,15 +693,31 @@ impl Engine {
             match base.get(id).cloned() {
                 None => {
                     let sid = device::new_id();
-                    let set = BTreeMap::from([
+                    let mut set = BTreeMap::from([
                         (tag_field::NAME.to_string(), json!(leaf)),
                         (tag_field::PARENT.to_string(), parent_value),
                         (tag_field::COLOR.to_string(), json!(lt.color)),
                     ]);
+                    // A top-level tag's group, only when its name wouldn't put it there. Where the
+                    // name decides, every computer works it out alike; so a computer that joins
+                    // with the groups its one-time sort gave never outvotes a choice made elsewhere.
+                    if parent_name.is_none() && lt.builtin != tags::is_builtin_name(&lt.name) {
+                        set.insert(tag_field::GROUP.to_string(), group_value(lt.builtin));
+                    }
                     self.new_op(conn, OpKind::Tag { id: sid.clone(), set })?;
-                    base.insert(*id, BaseTag { sids: vec![sid], name: lt.name.clone(), color: lt.color.clone(), keys: BTreeSet::new() });
+                    base.insert(
+                        *id,
+                        BaseTag {
+                            sids: vec![sid],
+                            name: lt.name.clone(),
+                            color: lt.color.clone(),
+                            builtin: Some(lt.builtin),
+                            keys: BTreeSet::new(),
+                        },
+                    );
                 }
                 Some(b) => {
+                    let mut set = BTreeMap::new();
                     if b.name != lt.name {
                         // Compared with the base, not the merged state, so a rename that just
                         // arrived for this tag isn't undone. A tag's parent changes only when it
@@ -693,17 +728,21 @@ impl Engine {
                         };
                         let old_parent_id = old_parent.and_then(|p| base_names.get(&p.to_ascii_lowercase())).copied();
                         let new_parent_id = parent_name.and_then(|p| by_name.get(&p.to_ascii_lowercase())).copied();
-                        let mut set = BTreeMap::new();
                         if old_leaf != leaf {
                             set.insert(tag_field::NAME.to_string(), json!(leaf));
                         }
                         if old_parent_id != new_parent_id {
                             set.insert(tag_field::PARENT.to_string(), parent_value.clone());
                         }
-                        if !set.is_empty() {
-                            for sid in &b.sids {
-                                self.new_op(conn, OpKind::Tag { id: sid.clone(), set: set.clone() })?;
-                            }
+                    }
+                    // Only a top-level tag carries a group; a nested one is in its top-level
+                    // tag's, on every computer.
+                    if parent_name.is_none() && self.group_to_write(&b, lt) {
+                        set.insert(tag_field::GROUP.to_string(), group_value(lt.builtin));
+                    }
+                    if !set.is_empty() {
+                        for sid in &b.sids {
+                            self.new_op(conn, OpKind::Tag { id: sid.clone(), set: set.clone() })?;
                         }
                     }
                     if b.color != lt.color {
@@ -731,6 +770,30 @@ impl Engine {
         }
         self.saved.base = base;
         Ok(self.outbox.len() - before)
+    }
+
+    /// Whether a tag that's at the top level here needs its group written: it was moved to the
+    /// other group here, or the other computers would now work out another group for it.
+    fn group_to_write(&self, b: &BaseTag, lt: &LocalTag) -> bool {
+        if b.was_builtin() != lt.builtin {
+            // Moved to the other group here: from the menu, Undo, an import or a restore.
+            return true;
+        }
+        if b.name == lt.name {
+            return false;
+        }
+        let chosen = self.saved.merged.chosen_group(&b.sids);
+        if b.name.contains('/') {
+            // Taken out to the top level, it keeps the group it had. That came from its old
+            // top-level tag, not from anything written for this one, so write it unless the
+            // others would work out the same.
+            chosen.unwrap_or_else(|| tags::is_builtin_name(&lt.name)) != lt.builtin
+        } else {
+            // Renamed at the top level. A group someone chose stays with the tag (and a change
+            // to it made elsewhere meanwhile isn't undone); with none, the new name must still
+            // give the group it has.
+            chosen.is_none() && tags::is_builtin_name(&lt.name) != lt.builtin
+        }
     }
 
     /// When this device first syncs: its fonts that are on and that nobody has chosen to have on
@@ -821,7 +884,10 @@ impl Engine {
         for vt in &view.tags {
             if let Some((id, lt)) = local.iter().find(|(_, lt)| lt.name.eq_ignore_ascii_case(&vt.name)) {
                 let keys = lt.keys.iter().filter(|k| !mismatched.contains(*k)).cloned().collect();
-                base.insert(*id, BaseTag { sids: vt.sids.clone(), name: lt.name.clone(), color: lt.color.clone(), keys });
+                base.insert(
+                    *id,
+                    BaseTag { sids: vt.sids.clone(), name: lt.name.clone(), color: lt.color.clone(), builtin: Some(lt.builtin), keys },
+                );
             }
         }
         self.saved.base = base;
@@ -1040,18 +1106,26 @@ fn write_tags(conn: &Connection, view: &TagView, base: &BTreeMap<i64, BaseTag>, 
     let mut ids: Vec<(i64, usize)> = claimed.into_iter().filter(|(_, i)| *i != usize::MAX).collect();
     for i in create {
         let vt = &view.tags[i];
-        conn.execute("INSERT INTO tags (name, color, created_at) VALUES (?1, ?2, ?3)", params![vt.name, vt.color, now])?;
+        conn.execute(
+            "INSERT INTO tags (name, color, created_at, builtin) VALUES (?1, ?2, ?3, ?4)",
+            params![vt.name, vt.color, now, vt.builtin],
+        )?;
         ids.push((conn.last_insert_rowid(), i));
         changed = true;
     }
     for (id, i) in ids {
         let vt = &view.tags[i];
-        let (color, keys) = match local.get(&id) {
-            Some(lt) => (lt.color.as_str(), lt.keys.clone()),
-            None => ("", BTreeSet::new()),
+        let (color, builtin, keys) = match local.get(&id) {
+            Some(lt) => (lt.color.as_str(), lt.builtin, lt.keys.clone()),
+            None => ("", vt.builtin, BTreeSet::new()),
         };
         if color != vt.color && local.contains_key(&id) {
             conn.execute("UPDATE tags SET color = ?1 WHERE id = ?2", params![vt.color, id])?;
+            changed = true;
+        }
+        // The view gives a nested tag its top-level tag's group, so subtrees stay in one group.
+        if builtin != vt.builtin {
+            conn.execute("UPDATE tags SET builtin = ?1 WHERE id = ?2", params![vt.builtin, id])?;
             changed = true;
         }
         for key in vt.keys.difference(&keys).filter(|k| !mismatched.contains(*k)) {
