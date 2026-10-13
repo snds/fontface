@@ -5,14 +5,22 @@
 //! matches those fonts against the library without writing anything, so the UI can show a
 //! preview. Applying the same source again adds nothing new: tags merge by name (ignoring
 //! letter case) and each font gets a tag at most once.
+//!
+//! A source made before a folder was moved with Locate… names that folder by its old path.
+//! Preview and import both point those paths at the folder's current place first
+//! ([`follow_moves`]), so they agree and the colors and fonts land where the folder is now.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, HashMap},
+};
 
 use rusqlite::Connection;
 use serde::Serialize;
 
 use super::{
-    colors, ensure_tag, find_tag, is_loose, key_postscript_name, list_tags, loose_key, named_styles, normalize_name, LibraryIndex,
+    colors, ensure_tag, find_tag, is_loose, key_postscript_name, list_tags, loose_key, named_styles, normalize_name,
+    relocate::Moves, LibraryIndex,
 };
 use crate::error::AppResult;
 
@@ -299,7 +307,54 @@ fn describe(font: &SourceFont) -> String {
     }
 }
 
-/// Matches a source against the library. Writes nothing.
+/// The source with paths under a folder that has moved since (Locate…) pointed at the folder's
+/// current place: location colors, and fonts kept by file (`file:` keys and Finder's files). A
+/// file the library still lists at its path is left as it is. Location colors that were already
+/// at a current path come first, so they win over ones that moved there.
+fn follow_moves<'a>(conn: &Connection, matcher: &Matcher, source: &'a Source) -> AppResult<Cow<'a, Source>> {
+    let moves = Moves::load(conn)?;
+    if moves.is_empty() {
+        return Ok(Cow::Borrowed(source));
+    }
+    let moved_file = |path: &str| -> Option<String> {
+        if matcher.index.in_file(path).next().is_some() {
+            return None;
+        }
+        moves.current(path)
+    };
+    let moved_font = |font: &SourceFont| -> Option<SourceFont> {
+        match font {
+            SourceFont::Key(key) => {
+                let (path, face) = key.strip_prefix("file:")?.rsplit_once('#')?;
+                moved_file(path).map(|p| SourceFont::Key(format!("file:{p}#{face}")))
+            }
+            SourceFont::File(path) => moved_file(path).map(SourceFont::File),
+            SourceFont::PostScript(_) | SourceFont::Family(_) => None,
+        }
+    };
+    let mut out: Option<Source> = None;
+    for (i, tag) in source.tags.iter().enumerate() {
+        for (j, font) in tag.fonts.iter().enumerate() {
+            if let Some(moved) = moved_font(font) {
+                out.get_or_insert_with(|| source.clone()).tags[i].fonts[j] = moved;
+            }
+        }
+    }
+    let (mut kept, mut moved_colors) = (Vec::new(), Vec::new());
+    for (location, color) in &source.location_colors {
+        match moves.current(location) {
+            Some(now) => moved_colors.push((now, color.clone())),
+            None => kept.push((location.clone(), color.clone())),
+        }
+    }
+    if !moved_colors.is_empty() {
+        kept.extend(moved_colors);
+        out.get_or_insert_with(|| source.clone()).location_colors = kept;
+    }
+    Ok(out.map_or(Cow::Borrowed(source), Cow::Owned))
+}
+
+/// Matches a source against the library. Writes nothing. The source has followed any moves.
 fn resolve(conn: &Connection, matcher: &Matcher, source: &Source) -> AppResult<(Vec<Resolved>, ImportPreview)> {
     // Merge tags whose names differ only in letter case (ASCII, like SQLite's NOCASE).
     let mut order: Vec<String> = Vec::new();
@@ -495,7 +550,8 @@ pub fn preview(conn: &Connection, source: &Source) -> AppResult<ImportPreview> {
 /// What an import would do, without changing anything. The commands build the matcher
 /// without holding the lock (see [`Matcher`]).
 pub fn preview_with(conn: &Connection, matcher: &Matcher, source: &Source) -> AppResult<ImportPreview> {
-    Ok(resolve(conn, matcher, source)?.1)
+    let source = follow_moves(conn, matcher, source)?;
+    Ok(resolve(conn, matcher, &source)?.1)
 }
 
 /// [`apply_with`] in one step, holding `conn` throughout (tests use this).
@@ -546,6 +602,9 @@ fn write(
     replace: bool,
 ) -> AppResult<ImportResult> {
     let chosen: BTreeSet<String> = chosen.iter().map(|n| n.trim().to_ascii_lowercase()).collect();
+    // The same paths the preview showed (see `follow_moves`).
+    let source = follow_moves(conn, matcher, source)?;
+    let source = &*source;
     let mut result = ImportResult::default();
     let mut styles = BTreeSet::new();
     let mut kept_fonts = BTreeSet::new();

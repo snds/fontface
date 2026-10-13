@@ -26,6 +26,7 @@ impl Library {
         std::fs::create_dir_all(&dir).unwrap();
         let conn = db::open(&dir.join("library.sqlite3")).unwrap();
         super::ensure_schema(&conn).unwrap();
+        crate::activation::ensure_schema(&conn).unwrap();
         conn.execute("INSERT INTO folders (path, added_at, kind) VALUES ('/fonts', 0, 'user')", []).unwrap();
         let user_folder = conn.last_insert_rowid();
         conn.execute("INSERT INTO folders (path, added_at, kind) VALUES ('/Library/Fonts', 0, 'system')", []).unwrap();
@@ -1028,4 +1029,169 @@ fn a_moved_folder_keeps_its_fonts_tags_and_colors() {
     // Forcing works when the files really aren't there yet (say, still syncing).
     let r = super::relocate::relocate(&mut lib.conn, folder, &empty, true).unwrap();
     assert!(r.moved && r.found == 0);
+}
+
+/// Adds a user folder at `relative` inside the library's temporary folder. Returns (id, path).
+fn add_folder(lib: &Library, relative: &str) -> (i64, String) {
+    let path = lib.dir.join(relative).to_string_lossy().into_owned();
+    lib.conn.execute("INSERT INTO folders (path, added_at, kind) VALUES (?1, 0, 'user')", [&path]).unwrap();
+    (lib.conn.last_insert_rowid(), path)
+}
+
+/// Makes a folder with empty files at these paths inside it. Returns its real path.
+fn folder_with(lib: &Library, relative: &str, files: &[&str]) -> (PathBuf, String) {
+    let dir = lib.dir.join(relative);
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in files {
+        let file = dir.join(f);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, b"x").unwrap();
+    }
+    let real = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+    (dir, real)
+}
+
+#[test]
+fn a_moved_folder_keeps_fonts_on_for_this_login_temporary() {
+    use crate::activation::{temporary_paths, wanted_scope, Scope};
+    let mut lib = Library::new("relocate-temporary");
+    let (folder, old) = add_folder(&lib, "Fonts/Design");
+    for (file, on) in [("Temp.otf", true), ("Kept.otf", true), ("Off.otf", false), ("Twice.otf", true)] {
+        let path = format!("{old}/{file}");
+        lib.font(folder, &path, Some(file), "F", "Regular", false, false);
+        lib.conn.execute("UPDATE fonts SET activated = ?1 WHERE path = ?2", params![on, path]).unwrap();
+    }
+    let (new_dir, new) = folder_with(&lib, "Fonts/Archive", &["Temp.otf", "Kept.otf", "Off.otf", "Twice.otf"]);
+    // On for this login only: Temp, and Twice, which somehow also has a row at its new path already.
+    // Another folder's temporary font is left alone.
+    for path in [format!("{old}/Temp.otf"), format!("{old}/Twice.otf"), format!("{new}/Twice.otf"), "/fonts/Other.otf".into()] {
+        lib.conn.execute("INSERT INTO temporary_activations (path) VALUES (?1)", [&path]).unwrap();
+    }
+
+    let r = super::relocate::relocate(&mut lib.conn, folder, &new_dir, false).unwrap();
+    assert!(r.moved);
+    let mut old_active = r.old_active.clone();
+    old_active.sort_by(|x, y| x.0.cmp(&y.0));
+    assert_eq!(
+        old_active,
+        vec![
+            (format!("{old}/Kept.otf"), Scope::Persistent),
+            (format!("{old}/Temp.otf"), Scope::Session),
+            (format!("{old}/Twice.otf"), Scope::Session),
+        ],
+        "each old registration, in the scope to remove it from"
+    );
+    let mut active = r.active.clone();
+    active.sort();
+    assert_eq!(active, vec![format!("{new}/Kept.otf"), format!("{new}/Temp.otf"), format!("{new}/Twice.otf")]);
+    let temporary = temporary_paths(&lib.conn).unwrap();
+    let want: std::collections::HashSet<String> =
+        [format!("{new}/Temp.otf"), format!("{new}/Twice.otf"), "/fonts/Other.otf".into()].into_iter().collect();
+    assert_eq!(temporary, want, "temporary fonts follow the folder; nothing is left at the old path");
+
+    // After the rescan, reconcile turns each back on in the scope it had.
+    assert_eq!(wanted_scope(&lib.conn, &format!("{new}/Temp.otf")).unwrap(), Some(Scope::Session));
+    assert_eq!(wanted_scope(&lib.conn, &format!("{new}/Kept.otf")).unwrap(), Some(Scope::Persistent));
+    assert_eq!(wanted_scope(&lib.conn, &format!("{new}/Off.otf")).unwrap(), None, "turned off: not wanted");
+    assert_eq!(wanted_scope(&lib.conn, &format!("{old}/Temp.otf")).unwrap(), None, "the old path isn't in the library");
+    lib.font(lib.system_folder, "/Library/Fonts/Sys.otf", Some("Sys"), "S", "Regular", false, false);
+    lib.conn.execute("UPDATE fonts SET activated = 1 WHERE path = '/Library/Fonts/Sys.otf'", []).unwrap();
+    assert_eq!(wanted_scope(&lib.conn, "/Library/Fonts/Sys.otf").unwrap(), None, "macOS loads its own folders");
+}
+
+#[test]
+fn folder_moves_chain_and_never_move_a_live_folder() {
+    let mut lib = Library::new("relocate-chain");
+    let (folder, a) = add_folder(&lib, "A");
+    let (b_dir, b) = folder_with(&lib, "B", &[]);
+    let (c_dir, c) = folder_with(&lib, "C", &[]);
+    let moves = |conn: &Connection| super::relocate::Moves::load(conn).unwrap();
+    assert!(moves(&lib.conn).is_empty());
+
+    assert!(super::relocate::relocate(&mut lib.conn, folder, &b_dir, false).unwrap().moved);
+    assert_eq!(moves(&lib.conn).current(&format!("{a}/sub/x.otf")), Some(format!("{b}/sub/x.otf")));
+    assert_eq!(moves(&lib.conn).current(&a), Some(b.clone()), "the folder itself");
+    assert_eq!(moves(&lib.conn).current(&format!("{a}-other/x.otf")), None, "a sibling with a longer name");
+    assert_eq!(moves(&lib.conn).current(&format!("{b}/x.otf")), None, "already at the current place");
+
+    // A → B, then B → C: both old places lead to C.
+    assert!(super::relocate::relocate(&mut lib.conn, folder, &c_dir, false).unwrap().moved);
+    assert_eq!(moves(&lib.conn).current(&format!("{a}/x.otf")), Some(format!("{c}/x.otf")));
+    assert_eq!(moves(&lib.conn).current(&format!("{b}/x.otf")), Some(format!("{c}/x.otf")));
+
+    // And back to B: B is live again, so only A and C lead there.
+    assert!(super::relocate::relocate(&mut lib.conn, folder, &b_dir, false).unwrap().moved);
+    assert_eq!(moves(&lib.conn).current(&format!("{a}/x.otf")), Some(format!("{b}/x.otf")));
+    assert_eq!(moves(&lib.conn).current(&format!("{c}/x.otf")), Some(format!("{b}/x.otf")));
+    assert_eq!(moves(&lib.conn).current(&format!("{b}/x.otf")), None);
+    let rows: i64 = lib.conn.query_row("SELECT COUNT(*) FROM folder_moves", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 2, "no move from B to itself");
+
+    // A folder added later at an old place is its own: paths there stay put.
+    lib.conn.execute("INSERT INTO folders (path, added_at, kind) VALUES (?1, 0, 'user')", [&c]).unwrap();
+    assert_eq!(moves(&lib.conn).current(&format!("{c}/x.otf")), None);
+    assert_eq!(moves(&lib.conn).current(&format!("{a}/x.otf")), Some(format!("{b}/x.otf")));
+}
+
+#[test]
+fn a_folder_moved_up_into_its_parent_still_follows_the_move() {
+    let mut lib = Library::new("relocate-up");
+    let (folder, inner) = add_folder(&lib, "P/inner");
+    let (p_dir, p) = folder_with(&lib, "P", &[]);
+    assert!(super::relocate::relocate(&mut lib.conn, folder, &p_dir, false).unwrap().moved);
+    let moves = super::relocate::Moves::load(&lib.conn).unwrap();
+    assert_eq!(moves.current(&format!("{inner}/x.otf")), Some(format!("{p}/x.otf")), "into the folder the move led to");
+    assert_eq!(moves.current(&inner), Some(p.clone()));
+    assert_eq!(moves.current(&format!("{p}/x.otf")), None, "already at the current place");
+}
+
+#[test]
+fn a_backup_from_before_a_move_restores_onto_the_new_place() {
+    let mut lib = Library::new("relocate-restore");
+    let (folder, old) = add_folder(&lib, "Archive/Fonts");
+    let big = lib.font(folder, &format!("{old}/Display/Big.otf"), Some("Big-Regular"), "Big", "Regular", false, false);
+    let hand = lib.font(folder, &format!("{old}/Script/Hand.otf"), None, "Hand", "Regular", false, false);
+    let display = super::create_tag(&mut lib.conn, "Display", None).unwrap();
+    let script = super::create_tag(&mut lib.conn, "Script", None).unwrap();
+    super::assign(&mut lib.conn, &[display.id], &[big.clone()], true).unwrap();
+    super::assign(&mut lib.conn, &[script.id], &[hand], true).unwrap();
+    super::set_location_color(&lib.conn, &old, Some("teal")).unwrap();
+    super::set_location_color(&lib.conn, &format!("{old}/Script"), Some("pink")).unwrap();
+    super::set_location_color(&lib.conn, "/fonts", Some("green")).unwrap();
+    let json = export::to_json(&lib.conn, export::collect(&lib.conn, None).unwrap(), 1_760_000_000).unwrap();
+    let backup = export::parse_json(json.as_bytes()).unwrap();
+
+    // The folder moved, and Locate… found it.
+    let (new_dir, new) = folder_with(&lib, "Fonts", &["Display/Big.otf", "Script/Hand.otf"]);
+    assert!(super::relocate::relocate(&mut lib.conn, folder, &new_dir, false).unwrap().moved);
+    let hand_now = face_key(None, false, false, &format!("{new}/Script/Hand.otf"), 0);
+    super::set_location_color(&lib.conn, &new, Some("blue")).unwrap();
+
+    // The preview matches the moved font, and so does the restore.
+    let preview = import::preview(&lib.conn, &backup).unwrap();
+    assert_eq!((preview.matched_fonts, preview.unmatched_fonts), (2, 0), "{:?}", preview.missing);
+    let chosen = names(&["Display", "Script"]);
+    let result = import::replace(&mut lib.conn, &backup, &chosen, false).unwrap();
+    assert_eq!((result.styles, result.kept, result.location_colors), (2, 0, 3));
+    assert_eq!(lib.keys_of("Script"), vec![hand_now.clone()]);
+    assert_eq!(lib.keys_of("Display"), vec![big]);
+    let colors = super::location_colors(&lib.conn).unwrap();
+    let want: std::collections::BTreeMap<String, String> = [
+        (new.clone(), "teal".to_string()),
+        (format!("{new}/Script"), "pink".to_string()),
+        ("/fonts".to_string(), "green".to_string()),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(colors, want, "the backup's colors, at the folder's current place");
+
+    // Adding works the same way, and a color the source already has at the current place wins
+    // over one that moved there.
+    lib.conn.execute("DELETE FROM location_colors", []).unwrap();
+    let mut both = backup.clone();
+    both.location_colors = vec![(old.clone(), "teal".into()), (new.clone(), "red".into())];
+    let result = import::apply(&mut lib.conn, &both, &chosen, false).unwrap();
+    assert_eq!(result.location_colors, 1);
+    assert_eq!(super::location_colors(&lib.conn).unwrap().get(&new).map(String::as_str), Some("red"));
+    assert_eq!(lib.keys_of("Script"), vec![hand_now]);
 }

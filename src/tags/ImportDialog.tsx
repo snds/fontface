@@ -228,7 +228,8 @@ export function ImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className={cn((preview || restoring) && "sm:max-w-2xl")}>
+      {/* Header, one middle part, footer: the middle gives way and scrolls when the window is short. */}
+      <DialogContent className={cn("flex flex-col", (preview || restoring) && "sm:max-w-2xl")}>
         <DialogHeader>
           <DialogTitle className="leading-snug">{restoring ? `Restore tags from ${backupName}` : "Import tags"}</DialogTitle>
           <DialogDescription>
@@ -258,7 +259,7 @@ export function ImportDialog({
         )}
 
         {!restoring && !preview && (
-          <div className="flex flex-col gap-1.5">
+          <div className="-m-1 flex min-h-0 flex-col gap-1.5 overflow-y-auto p-1">
             {SOURCES.map((s) => (
               <button
                 key={s.kind}
@@ -277,7 +278,8 @@ export function ImportDialog({
         )}
 
         {preview && (
-          <div className="flex min-h-0 flex-col gap-3">
+          // -m-1 p-1: room for focus rings inside the scrolling area.
+          <div className="-m-1 flex min-h-0 flex-col gap-3 overflow-y-auto p-1">
             {restoring && preview.tags.length > 0 && (
               <ChoiceGroup look="cards" label="How to restore" value={mode} options={RESTORE_MODES} onChange={setMode} />
             )}
@@ -292,7 +294,10 @@ export function ImportDialog({
               )}
             </p>
             {preview.tags.length > 0 && (
-              <div className="max-h-[50vh] overflow-y-auto rounded-lg border">
+              // When space is short the table gives way first, down to about three rows; then
+              // the whole middle scrolls. Two rows or fewer are smaller than that, so they keep
+              // their height.
+              <div className={cn("max-h-[50vh] overflow-y-auto rounded-lg border", preview.tags.length > 2 ? "min-h-32" : "shrink-0")}>
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-popover text-muted-foreground">
                     <tr className="border-b text-left">

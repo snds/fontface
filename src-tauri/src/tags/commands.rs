@@ -12,6 +12,7 @@ use super::{
     relocate, typeface, Organize, Tag,
 };
 use crate::{
+    activation::{self, Scope},
     error::{AppError, AppResult},
     AppState,
 };
@@ -53,16 +54,34 @@ pub fn location_color_set(state: State<'_, AppState>, location: String, color: O
     state.write(|conn| super::set_location_color(conn, &location, color.as_deref()))
 }
 
-/// Points a folder that moved at its new place, keeping its fonts' on/off state, tags and
-/// colors. With `force` unset, nothing changes if none of its fonts are there (the UI asks).
-/// The UI rescans the folder afterwards; fonts that were on are turned on again after that.
+/// Points a folder that moved at its new place, keeping its fonts' on/off state (and which are
+/// on for this login only), tags and colors. With `force` unset, nothing changes if none of its
+/// fonts are there (the UI asks). The UI rescans the folder afterwards; fonts that were on are
+/// turned on again after that, each in the scope it had.
 #[tauri::command(async)]
 pub fn folder_relocate(state: State<'_, AppState>, folder_id: i64, path: String, force: bool) -> AppResult<relocate::Relocated> {
     if state.scans()?.contains_key(&folder_id) {
         return Err(AppError::Invalid("That folder is being scanned. Try again when the scan has finished.".into()));
     }
+    // Under the activation lock, so no on/off change or reconcile reads the paths mid-move.
+    let _guard = activation::lock();
     let result = state.write(|conn| relocate::relocate(conn, folder_id, Path::new(&path), force))?;
     if result.moved {
+        // The registrations at the old place point at files that are gone, or that the library
+        // no longer lists there. Remove them, so none lingers (the quit cleanup only knows the
+        // new paths now). One quick CoreText call per scope, per file. A failure is logged, and
+        // the font still comes back at its new path.
+        for (old, scope) in &result.old_active {
+            let scopes: &[Scope] = match scope {
+                Scope::Session => &[Scope::Persistent, Scope::Session],
+                Scope::Persistent => &[Scope::Persistent],
+            };
+            for &s in scopes {
+                if let Err(e) = activation::deactivate_in(Path::new(old), s) {
+                    eprintln!("fontface: couldn't turn off {old} at its old place: {e}");
+                }
+            }
+        }
         let old: std::collections::HashSet<&String> = result.old_paths.iter().collect();
         state.seen_loaded().retain(|p| !old.contains(p));
         let mut deferred = state.deferred();

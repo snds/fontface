@@ -49,6 +49,7 @@ import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
 import { IS_MAC } from "@/components/TitleBar";
+import { cancelDrag, isDragging } from "@/tags/drag";
 import { locateFolder } from "@/tags/locate";
 import { useLocations } from "@/tags/locations";
 import { useFilterContext } from "@/tags/model";
@@ -174,9 +175,13 @@ export default function App() {
     setSettingsOpen(true);
   }, []);
   /** ⌘, and the menu's Settings… item. Ignored while a dialog or menu is open, so settings
-   *  never open behind it (close it first). */
+   *  never open behind it (close it first), and during a drag, whose drop would land on a tag
+   *  that settings hide (drop or cancel it first). */
   const openSettingsByShortcut = useCallback(() => {
     if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+    if (isDragging()) return;
+    // A press that hasn't become a drag yet mustn't become one over settings.
+    cancelDrag();
     openSettings();
   }, [openSettings]);
   const closeSettings = useCallback(() => {

@@ -91,14 +91,14 @@ fn activation_round_trip() {
     let copy = dir.join("Andale Mono Copy.ttf");
     copy_plain(ANDALE_MONO, &copy).unwrap();
 
-    let first = activation::activate(&copy);
+    let first = activation::activate_in(&copy, activation::Scope::Persistent);
     println!("activate: {first:?}");
     // The OS reports loaded fonts in its own path form; available_paths() must map it back
     // to the real on-disk path the scanner stores (here /tmp → /private/tmp).
     let key = std::fs::canonicalize(&copy).unwrap().to_string_lossy().into_owned();
     let seen_on = activation::available_paths().unwrap().contains(&key);
     println!("listed as loaded after activate ({key}): {seen_on}");
-    let again = activation::activate(&copy);
+    let again = activation::activate_in(&copy, activation::Scope::Persistent);
     println!("activate again (should be Ok, idempotent): {again:?}");
     let off = activation::deactivate(&copy);
     println!("deactivate: {off:?}");
@@ -695,7 +695,7 @@ fn adobe_font_store_is_never_scanned_or_switched() {
     assert_eq!(report.files, 0, "nothing in Adobe's store is read");
     let rows: i64 = conn.query_row("SELECT COUNT(*) FROM fonts", [], |r| r.get(0)).unwrap();
     assert_eq!(rows, 0);
-    assert!(crate::activation::activate(&dir.join("fonts/Proxima.otf")).is_err(), "never registered");
+    assert!(crate::activation::activate_in(&dir.join("fonts/Proxima.otf"), crate::activation::Scope::Persistent).is_err(), "never registered");
     assert!(crate::activation::deactivate(&store.join("r/123.otf")).is_err(), "never unregistered");
     assert!(crate::db::insert_folder(&mut conn, &std::fs::canonicalize(&store).unwrap(), "user").is_err());
     let _ = std::fs::remove_dir_all(&dir);

@@ -27,6 +27,8 @@ let active: Active | null = null;
 let ghost: HTMLElement | null = null;
 let at = { x: 0, y: 0 };
 const listeners = new Set<() => void>();
+/** Cancels the press in progress (see pressToDrag), whether or not it has become a drag yet. */
+let cancelPress: (() => void) | null = null;
 
 function set(next: Active | null) {
   active = next;
@@ -41,6 +43,15 @@ const subscribe = (l: () => void) => {
 /** The drag in progress. Changes only when the target under the pointer changes. */
 export function useDrag(): Active | null {
   return useSyncExternalStore(subscribe, () => active);
+}
+
+/** Whether a drag is under way (the pointer moved with the button held). */
+export const isDragging = () => active !== null;
+
+/** Cancels the press or drag in progress, as Escape does: nothing is dropped, and letting go
+ *  of the button isn't a click. Does nothing when there's none. */
+export function cancelDrag() {
+  cancelPress?.();
 }
 
 const place = () => {
@@ -140,7 +151,8 @@ function swallowNextClick() {
 /**
  * Call from a pointerdown. Becomes a drag once the pointer moves a few pixels with the button
  * held; a plain click is left alone. `payload` is asked for only then. Presses on `ignore`
- * (controls inside the row) and in portaled popups are left alone. Escape cancels.
+ * (controls inside the row) and in portaled popups are left alone. Escape cancels, and so
+ * does `cancelDrag`.
  */
 export function pressToDrag(e: React.PointerEvent, payload: () => DragPayload | null, ignore = "input, textarea, select, a, [data-no-drag]") {
   if (e.button !== 0 || e.pointerType === "touch" || e.metaKey || e.ctrlKey || e.shiftKey) return;
@@ -172,22 +184,28 @@ export function pressToDrag(e: React.PointerEvent, payload: () => DragPayload | 
     swallowNextClick();
     if (done?.over) drop(done.payload, done.over);
   };
+  const cancel = () => {
+    const wasDragging = !!started;
+    end();
+    // Letting go of the button after a cancelled drag isn't a click either.
+    if (wasDragging) window.addEventListener("pointerup", swallowNextClick, { capture: true, once: true });
+  };
   const key = (ev: KeyboardEvent) => {
     if (ev.key !== "Escape" || !started) return;
     ev.preventDefault();
     ev.stopPropagation();
-    end();
-    // Letting go of the button after Escape isn't a click either.
-    window.addEventListener("pointerup", swallowNextClick, { capture: true, once: true });
+    cancel();
   };
   const end = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", end);
     window.removeEventListener("keydown", key, true);
+    if (cancelPress === cancel) cancelPress = null;
     document.documentElement.classList.remove("ff-dragging");
     if (active) set(null);
   };
+  cancelPress = cancel;
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
   window.addEventListener("pointercancel", end);

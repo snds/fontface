@@ -55,7 +55,7 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 
 Settings open inside the main window, over the library (Fontface › Settings… in the menu bar,
 Cmd+, or the gear at the bottom of the sidebar; Esc goes back). Cmd+, does nothing while a dialog
-or menu is open. The sidebar lists the sections, the main column shows one section or
+or menu is open, or while you're dragging fonts or a tag. The sidebar lists the sections, the main column shows one section or
 search results from all of them, and every change saves at once. Not yet checked in the running app.
 
 | Feature | macOS | Windows | Notes |

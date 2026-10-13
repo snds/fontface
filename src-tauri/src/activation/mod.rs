@@ -15,7 +15,9 @@
 //! registered in session scope and listed in `temporary_activations`. At launch, a listed file
 //! the OS no longer has means the login session ended: it's recorded as off, leaves the list,
 //! and is never turned back on. A file that's already on keeps the scope it has (`turn_on_plan`),
-//! and so does a font an update or replacement turns off and back on (`temporary_after_swap`).
+//! and so does a font an update or replacement turns off and back on (`temporary_after_swap`),
+//! or one whose folder moved (Locate… moves its listing, and `reconcile` turns it back on in
+//! session scope).
 
 use std::{
     collections::{BTreeSet, HashSet},
@@ -104,11 +106,7 @@ fn refuse_adobe(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-/// Turns a file on to stay on (persistent scope).
-pub fn activate(path: &Path) -> AppResult<()> {
-    activate_in(path, Scope::Persistent)
-}
-
+/// Turns a file on in this scope.
 pub fn activate_in(path: &Path, scope: Scope) -> AppResult<()> {
     refuse_adobe(path)?;
     platform::activate(path, scope)
@@ -136,43 +134,54 @@ pub struct Reactivated {
     pub failed: usize,
 }
 
-/// Re-applies recorded intent that the OS isn't honoring, for these files (persistent scope):
-/// at launch, after a scan for files that were unreachable at launch, and when the user answers
-/// "Turn them back on". It doesn't run after every scan, so it won't undo a change made in
-/// another app mid-session.
+/// Re-applies recorded intent that the OS isn't honoring, for these files: at launch, after a
+/// scan for files that were unreachable at launch or whose folder moved (Locate…), and when the
+/// user answers "Turn them back on". It doesn't run after every scan, so it won't undo a change
+/// made in another app mid-session. Each file is turned on in the scope `wanted_scope` gives.
 ///
 /// Intent is never cleared here: a missing file may be on a drive that hasn't mounted yet.
 /// Each path that's still missing is passed to `on_missing` (while the lock is held), to be
 /// retried after its folder's next scan.
-pub fn reconcile(db_path: &Path, paths: &HashSet<String>, mut on_missing: impl FnMut(String)) -> AppResult<Reactivated> {
-    let conn = db::open(db_path)?;
+pub fn reconcile(state: &AppState, paths: &HashSet<String>, mut on_missing: impl FnMut(String)) -> AppResult<Reactivated> {
+    let conn = db::open(&state.db_path)?;
     let loaded = available_paths().unwrap_or_default();
     let mut done = Reactivated::default();
     for path in paths.iter().filter(|p| !loaded.contains(*p)) {
         let _guard = lock();
         // Re-check under the lock: the user may have turned it off or removed its folder since.
-        let still_wanted: bool = conn
-            .query_row(
-                "SELECT COALESCE(MAX(fonts.activated), 0) FROM fonts JOIN folders ON folders.id = fonts.folder_id
-                 WHERE fonts.path = ?1 AND folders.kind != 'system'",
-                [path],
-                |r| r.get(0),
-            )
-            .unwrap_or(false);
-        if !still_wanted {
-            continue;
-        }
+        let Some(scope) = wanted_scope(&conn, path).unwrap_or(None) else { continue };
         let p = Path::new(path);
         if !p.exists() {
             on_missing(path.clone());
-        } else if let Err(e) = activate(p) {
+        } else if let Err(e) = activate_in(p, scope) {
             eprintln!("fontface: couldn't turn {path} back on: {e}");
             done.failed += 1;
         } else {
+            if scope == Scope::Session {
+                // Listed already; recorded like any other turn-on, so the list stays the truth.
+                if let Err(e) = state.write(|conn| record_scope(conn, path, scope)) {
+                    eprintln!("fontface: couldn't record {path} as on for this login: {e}");
+                }
+            }
             done.restored += 1;
         }
     }
     Ok(done)
+}
+
+/// Whether a file is still wanted on, and in which scope. `None`: it's off now, or only in a
+/// macOS font folder. Session scope if it's listed as temporary, else persistent. Launch never
+/// hands `reconcile` a temporary file (an ended login is recorded as off, and a live one is
+/// loaded), so only a temporary font whose folder moved (Locate…) comes back in session scope.
+pub fn wanted_scope(conn: &Connection, path: &str) -> AppResult<Option<Scope>> {
+    let (wanted, temporary): (bool, bool) = conn.query_row(
+        "SELECT COALESCE((SELECT MAX(fonts.activated) FROM fonts JOIN folders ON folders.id = fonts.folder_id
+                          WHERE fonts.path = ?1 AND folders.kind != 'system'), 0),
+                EXISTS(SELECT 1 FROM temporary_activations WHERE path = ?1)",
+        [path],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(wanted.then_some(if temporary { Scope::Session } else { Scope::Persistent }))
 }
 
 // ------------------------------------------------------------------ temporary activations
@@ -363,7 +372,7 @@ pub fn apply_launch(state: &AppState, plan: &LaunchPlan, on_missing: impl FnMut(
     if again.is_empty() {
         return Ok(Reactivated::default());
     }
-    reconcile(&state.db_path, &again, on_missing)
+    reconcile(state, &again, on_missing)
 }
 
 /// Temporary activations whose login session ended: recorded as off and taken off the list.

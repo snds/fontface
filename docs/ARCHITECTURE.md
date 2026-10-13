@@ -160,6 +160,12 @@ them and keeps their fonts' activation state. This guarantees each file belongs 
   keeps the list, sends `restore-pending`, and waits for `activation_restore_decide`; "never"
   records them as off. Missing files keep their intent under every policy and are retried
   after their folder's next scan, since a drive that hasn't mounted isn't the user's choice.
+- **Locate… keeps the scope:** moving a folder (`tags/relocate.rs`) moves its
+  `temporary_activations` rows with its fonts, and removes the old paths' registrations (both
+  scopes for a temporary font) under `activation::lock()`. Its fonts that were on are retried
+  after the rescan, and `activation::reconcile` turns each back on in the scope
+  `activation::wanted_scope` gives: session scope for a file listed as temporary, else
+  persistent. Launch never hands reconcile a temporary file, so only Locate… does that.
 - **Keep running (macOS):** closing the main window hides it, and clicking the Dock icon
   (`RunEvent::Reopen`) shows it again. Cmd+Q still quits. A window in full screen leaves full
   screen first and hides when macOS says it has (`NSWindowDidExitFullScreenNotification`, in

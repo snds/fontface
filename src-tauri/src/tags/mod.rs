@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS location_colors (
     location  TEXT PRIMARY KEY,
     color     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS folder_moves (
+    old_root  TEXT PRIMARY KEY,
+    new_root  TEXT NOT NULL,
+    moved_at  INTEGER NOT NULL
+);
 ";
 
 /// Creates the tag tables if they're missing. Idempotent; called once at launch, after db.rs

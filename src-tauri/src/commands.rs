@@ -139,7 +139,7 @@ pub async fn scan_folder(app: AppHandle, state: State<'_, AppState>, folder_id: 
             let _ = handle.emit("scan-progress", p);
         })?;
         if !report.cancelled {
-            retry_deferred(&handle, &db_path, folder_id);
+            retry_deferred(&handle, folder_id);
         }
         Ok(report)
     })
@@ -159,14 +159,15 @@ pub async fn scan_folder(app: AppHandle, state: State<'_, AppState>, folder_id: 
     result
 }
 
-/// Turns back on fonts in this folder that were active but unreachable at launch. Selected by
-/// folder ownership, not path prefix: a folder can list files that live elsewhere via symlinks.
-fn retry_deferred(app: &AppHandle, db_path: &Path, folder_id: i64) {
+/// Turns back on fonts in this folder that were active but unreachable at launch, or that were
+/// on when the folder was moved with Locate…. Selected by folder ownership, not path prefix: a
+/// folder can list files that live elsewhere via symlinks.
+fn retry_deferred(app: &AppHandle, folder_id: i64) {
     let state = app.state::<AppState>();
     if state.deferred().is_empty() {
         return;
     }
-    let owned: HashSet<String> = match db::open(db_path).and_then(|conn| {
+    let owned: HashSet<String> = match db::open(&state.db_path).and_then(|conn| {
         let mut stmt = conn.prepare("SELECT DISTINCT path FROM fonts WHERE folder_id = ?1")?;
         let rows = stmt.query_map([folder_id], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
@@ -179,7 +180,7 @@ fn retry_deferred(app: &AppHandle, db_path: &Path, folder_id: i64) {
         return;
     }
     state.deferred().retain(|p| !subset.contains(p));
-    if let Err(e) = activation::reconcile(db_path, &subset, |path| {
+    if let Err(e) = activation::reconcile(&state, &subset, |path| {
         state.deferred().insert(path);
     }) {
         eprintln!("fontface: retrying activations failed: {e}");
@@ -1050,7 +1051,7 @@ pub fn activation_restore_decide(state: State<'_, AppState>, restore: bool) -> A
     }
     let result = if restore {
         let wanted: HashSet<String> = paths.iter().cloned().collect();
-        activation::reconcile(&state.db_path, &wanted, |path| {
+        activation::reconcile(&state, &wanted, |path| {
             state.deferred().insert(path);
         })
         .map(|done| RestoreReport { restored: done.restored, failed: done.failed })

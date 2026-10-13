@@ -18,7 +18,7 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 - **Drag fonts onto a tag** in the sidebar to tag them (a row, or the selection it's in). A toast
   says what changed, with Undo. Dragging uses pointer events rather than HTML drag and drop, so it
   works the same on Windows, where the web view only allows HTML drops if the app gives up file
-  drops. Escape cancels a drag.
+  drops. Escape cancels a drag, and Cmd+, (Settings) does nothing until the drag ends.
 - **Tag many at once:** Cmd-click rows to add them to the selection, Shift-click to select a
   range. With the list focused, Cmd-A selects every row and Escape clears the selection. A bar
   appears with a "Tags…" button. Selected rows get a bar along their left edge.
@@ -65,9 +65,19 @@ screen readers hear the places).
 `Design/Fonts` becoming `Archive/Fonts`), its icon turns red. Right-click it and choose
 **Locate…** (or use the button that replaces Rescan) to pick where it is now. Fontface checks a
 sample of its fonts there first and asks before using a folder that has none of them. Then the
-folder's fonts, their on/off state, tags kept by file, and the colors of the folder and its
-subfolders all move to the new path, and the folder is rescanned (`tags/relocate.rs`). Folders
-still never overlap: a place inside another library folder is refused.
+folder's fonts, their on/off state (including which are on only until logout), tags kept by
+file, and the colors of the folder and its subfolders all move to the new path, and the folder
+is rescanned (`tags/relocate.rs`). Fonts that were on are turned off at the old path at once and
+back on at the new one after the rescan, each the way it was: on to stay, or on until logout.
+Folders still never overlap: a place inside another library folder is refused.
+
+Each move is remembered (`folder_moves`: old place, current place, when). Moving a folder again
+updates the earlier entries, so `A → B` then `B → C` takes both `A` and `B` to `C`, and a move
+back drops the entry for the place the folder is at now. A tags backup made before a move names
+the folder by its old path, so importing or restoring one first points those paths at the
+folder's current place: location colors, and fonts kept by file (`file:` keys). A path inside a
+library folder that's there now is left alone, and so is a file the library still lists. The
+preview and the import make the same change, so they always agree.
 
 Each folder you add can be opened (the arrow before its name) to show the folders inside it,
 built from where its fonts are. Each of those is a view with its own count and color. A folder
@@ -278,6 +288,9 @@ Export tags… exports every tag, or (from a tag's menu) one tag and the tags in
   `tags_import_apply` with `replace`, accepted only for a Fontface tags file). It deletes every
   tag, tag link and location color first, then brings back the ticked tags with the backup's
   colors and the backup's location colors, in one transaction.
+- Paths in a file made before a folder was moved with **Locate…** (location colors and `file:`
+  keys) are pointed at the folder's current place before matching (see **A folder that moved**).
+  If a color is listed for both the old and the current path, the current one wins.
 - A file whose `version` is higher than 1 is refused with a request to update Fontface.
 
 ### CSV
@@ -341,7 +354,9 @@ files and families), JSON round trips, CSV quoting, Typeface export, the Finder 
 tags on a temporary file.
 
 `cargo test tags::` also covers reading named styles from `fvar` (single files and collections),
-matching them and tidied names, Typeface format 5, and moving a folder with `Locate…`.
+matching them and tidied names, Typeface format 5, and moving a folder with `Locate…`: fonts on
+until logout keep that at the new path, moves chain, and a backup from before a move restores
+onto the new place.
 
 Three tests use real data and run on request:
 
