@@ -60,6 +60,15 @@ during a scan, so fonts appear while it runs. One scan per folder at a time, and
 cancelled. Rows are removed only after a complete walk, so an unreachable folder (cloud drive
 offline, permission denied, disk unplugged) never wipes the library.
 
+**A click never fails behind a background writer.**
+Scans and the preview backfill write through their own connections. A UI write
+(`AppState::write`) raises a gate they check after each file: they commit and wait until it's
+done. Every transaction is IMMEDIATE (`db::open` sets it): it takes SQLite's write lock at
+BEGIN, waiting in the 10 s busy timeout until the background writer has committed. A DEFERRED
+transaction that reads before it writes (adding a tag checks the tag first) can't wait like
+that: if another connection holds the write lock at its first write, SQLite fails it at once
+with "database is locked". The scanner and the backfill begin with `BEGIN IMMEDIATE` too.
+
 **Online-only files never stall a scan.**
 A single Google Drive download was measured at 15 seconds to over 10 minutes. So the 8 reader
 threads use `setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, thread, OFF)`, which makes
@@ -166,7 +175,9 @@ row counts only while its file size, modified time and `rev` match the font and
 - **The backfill** (`preview::backfill`, at launch) covers fonts scanned before profiles
   existed: two reader threads that fail fast on online-only files (which it skips, along with
   Creative Cloud's files and files over 96 MB), reading each collection once; one writer
-  committing about every 400 ms through the scan write turn, stepping aside for UI writes. The
+  saving what they've read about every 400 ms through the scan write turn, stepping aside for
+  UI writes. What's been read waits in memory between saves: no transaction stays open while
+  the writer waits for the readers, so SQLite's write lock is free almost all the time. The
   turn is held from BEGIN until the COMMIT (or the ROLLBACK after an error) has run. Each
   batch goes to the UI as a `preview-profiles` event; the last one says how many profiles the
   run saved, and the list reloads only if that's more than 0 (missing and online-only files are
@@ -327,7 +338,8 @@ sync. Font files, settings and the database never sync. Full details: [SYNC.md](
   tried again next time, and one whose file is missing is recorded as on and retried after its
   folder's next scan, like launch does.
 - **Hooks elsewhere are one line each:** `AppState::write` wakes sync after a UI write, and
-  `set_activation` records the switch. Sync's own tables (`sync_meta`, `sync_outbox`) come from
+  `set_activation` records the switch. `AppState::write_cache` (preview profiles, a cache) is
+  the same write without waking sync. Sync's own tables (`sync_meta`, `sync_outbox`) come from
   an idempotent `ensure_schema`, like the tag tables.
 - **Threads:** all file work runs on a sync thread with no lock held, since a cloud folder may
   download on read. Lock order: cycle lock, engine lock, database mutex.

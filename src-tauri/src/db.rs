@@ -121,9 +121,16 @@ CREATE INDEX skipped_folder ON skipped_files(folder_id);
 PRAGMA user_version = 3;
 ";
 
+/// Opens the library. Every `transaction()` on the connection is IMMEDIATE: it takes SQLite's
+/// write lock at BEGIN, waiting up to the busy timeout if a scan or the preview backfill has it
+/// (they commit as soon as they see the UI write gate). A DEFERRED transaction that reads before
+/// it writes can't wait like that: if another connection holds the write lock when it reaches
+/// its first write, SQLite fails it at once with "database is locked", busy timeout or not.
+/// Every transaction the app opens writes; one that only reads should ask for DEFERRED.
 pub fn open(path: &Path) -> AppResult<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     conn.busy_timeout(Duration::from_secs(10))?;
+    conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
     // journal_mode returns a row, so it can't go through execute_batch.
     conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
     // The bundled SQLite turns foreign keys ON by default. Migrations rebuild tables, and with

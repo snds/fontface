@@ -27,6 +27,7 @@ import {
   type StatusFilter,
 } from "@/library";
 import { faceName } from "@/fontLoader";
+import { newestWins } from "@/newestWins";
 import { listenForProfiles } from "@/previewProfiles";
 import {
   AlertDialog,
@@ -124,10 +125,9 @@ export default function App() {
   foldersRef.current = folders;
   const servicesRef = useRef<ServiceInfo[]>([]);
   servicesRef.current = services;
-  // A font list reflects the moment it was requested. `listSeq` drops all but the newest
+  // A font list reflects the moment it was requested. `loadFonts` shows only the newest
   // response, and `mutationEpoch` re-asks if an on/off change or removal happened meanwhile,
   // so a slow, stale list never flips a switch back.
-  const listSeq = useRef(0);
   const mutationEpoch = useRef(0);
   // On/off requests run one after another, in click order.
   const activationQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -148,14 +148,10 @@ export default function App() {
     });
   }, []);
 
-  const loadFonts = useCallback(async (): Promise<void> => {
-    const seq = ++listSeq.current;
-    const epoch = mutationEpoch.current;
-    const list = await api.listFonts();
-    if (seq !== listSeq.current) return; // a newer request is on its way
-    if (epoch !== mutationEpoch.current) return loadFonts(); // something changed mid-flight
-    setFonts(list);
-  }, []);
+  // A request overtaken by a newer one (say the preview backfill's reload during the launch
+  // load) settles only when the newest list is on screen, so after `await refresh()` the fonts
+  // are really there (launch checks the saved view against them).
+  const [loadFonts] = useState(() => newestWins(() => api.listFonts(), setFonts, () => mutationEpoch.current));
 
   const refresh = useCallback(async () => {
     const [f, svc] = await Promise.all([api.listFolders(), api.listServices(), loadFonts()]);

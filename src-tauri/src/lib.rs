@@ -91,13 +91,41 @@ impl AppState {
     }
 
     /// A UI-initiated write: takes the DB mutex first, then asks running scans to yield
-    /// SQLite's write lock for exactly as long as this write needs it.
+    /// SQLite's write lock for exactly as long as this write needs it. Wakes sync afterwards,
+    /// since local tags may have changed.
     pub fn write<T>(&self, f: impl FnOnce(&mut Connection) -> AppResult<T>) -> AppResult<T> {
-        let mut conn = self.conn()?;
-        let _gate = db::UiWriteGate::raise();
-        let out = f(&mut conn);
+        let out = self.write_cache(f);
         sync::note_local_write();
         out
+    }
+
+    /// `write`, for data Fontface works out by itself rather than a choice the user made
+    /// (preview profiles). Sync shares none of it, so it isn't woken.
+    pub fn write_cache<T>(&self, f: impl FnOnce(&mut Connection) -> AppResult<T>) -> AppResult<T> {
+        let mut conn = self.conn()?;
+        let _gate = db::UiWriteGate::raise();
+        f(&mut conn)
+    }
+}
+
+#[cfg(test)]
+impl AppState {
+    /// The app's state over this library, without a window, settings from disk or threads.
+    pub(crate) fn for_tests(db_path: &std::path::Path, data_dir: &std::path::Path) -> AppResult<AppState> {
+        Ok(AppState {
+            db: Mutex::new(db::open(db_path)?),
+            db_path: db_path.to_path_buf(),
+            data_dir: data_dir.to_path_buf(),
+            scans: Mutex::default(),
+            deferred: Mutex::default(),
+            seen_loaded: Mutex::default(),
+            service_ops: Mutex::default(),
+            purchase_watcher: Mutex::default(),
+            purchase_watch_failed: Mutex::default(),
+            settings: Mutex::new(settings::AppSettings::default()),
+            pending_restore: Mutex::default(),
+            launch_checked: tokio::sync::watch::channel(false).0,
+        })
     }
 }
 

@@ -1006,10 +1006,11 @@ fn character_grid_hides_placeholders_and_empty_slots() {
 mod stored {
     use std::{
         path::{Path, PathBuf},
-        sync::{atomic::AtomicBool, Arc},
+        sync::{atomic::AtomicBool, mpsc, Arc, Mutex},
+        time::Duration,
     };
 
-    use rusqlite::Connection;
+    use rusqlite::{Connection, TransactionBehavior};
 
     use super::latin_except;
     use crate::{db, preview, scanner, test_fonts::FontBuilder};
@@ -1240,6 +1241,92 @@ mod stored {
         assert!(!writer.in_transaction());
         assert_eq!(lib.rows(), 1);
         let _turn = db::scan_write_turn(); // free again
+    }
+
+    /// A UI write that reads before it writes (adding a tag checks the tag is there first; a
+    /// new tag checks its name), sent while the backfill's writer is mid-batch: it waits for the
+    /// batch to commit, then goes through. A DEFERRED transaction would fail at once with
+    /// "database is locked", whatever the busy timeout.
+    #[test]
+    fn a_ui_write_waits_for_a_backfill_batch_instead_of_failing() {
+        let lib = Library::new("uiwait");
+        two_fonts(&lib);
+        lib.scan();
+        let mut ui = lib.conn();
+        crate::tags::ensure_schema(&ui).unwrap();
+        let tag = crate::tags::create_tag(&mut ui, "Headlines", None).unwrap();
+        let mut writer = preview::Writer { conn: lib.conn(), turn: None };
+        writer.begin().unwrap();
+        writer.conn.execute("DELETE FROM face_previews WHERE font_id = 1", []).unwrap();
+        let click = std::thread::spawn(move || {
+            let _gate = db::UiWriteGate::raise(); // as AppState::write does
+            let added = crate::tags::assign(&mut ui, &[tag.id], &["ps:PlainSans|static|r".to_string()], true);
+            let created = crate::tags::create_tag(&mut ui, "Body", None).map(|t| t.name);
+            (added, created)
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(!click.is_finished(), "the click waits for the batch rather than failing");
+        writer.commit().unwrap();
+        let (added, created) = click.join().unwrap();
+        assert_eq!(added.unwrap(), 1);
+        assert_eq!(created.unwrap(), "Body");
+        assert_eq!(lib.rows(), 1, "the batch was saved too");
+    }
+
+    /// While the backfill waits for a slow file, it holds no transaction: profiles already read
+    /// wait in memory, so even a DEFERRED read-then-write from elsewhere goes through.
+    #[test]
+    fn the_backfill_holds_no_write_lock_while_files_are_read() {
+        let lib = Library::new("idle");
+        two_fonts(&lib);
+        lib.scan();
+        lib.conn().execute("DELETE FROM face_previews", []).unwrap();
+        let (reading, slow_file) = mpsc::channel();
+        let (go, wait) = mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let db_path = lib.db();
+        let backfill = std::thread::spawn(move || {
+            let read = move |rows: &[preview::FaceRow]| {
+                if rows[0].path.ends_with("Plain.ttf") {
+                    let _ = reading.send(());
+                    let _ = wait.lock().unwrap().recv();
+                }
+                preview::profiles_for_file(rows)
+            };
+            preview::backfill_with(&db_path, 1, read, |_| {})
+        });
+        // Kleemax.ttf has been read and handed over; Plain.ttf is still being read.
+        slow_file.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let mut conn = lib.conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred).unwrap();
+        let fonts: i64 = tx.query_row("SELECT COUNT(*) FROM fonts", [], |r| r.get(0)).unwrap();
+        tx.execute("UPDATE fonts SET designer = 'Someone' WHERE id = 1", []).expect("the write lock is free");
+        tx.commit().unwrap();
+        go.send(()).unwrap();
+        let report = backfill.join().unwrap().unwrap();
+        assert_eq!((fonts, report.files, report.written), (2, 2, 2));
+        assert_eq!(lib.rows(), 2);
+    }
+
+    /// Profiles saved by `preview_profiles` are a cache: saving them doesn't wake sync, which
+    /// would otherwise compare every font and tag while the user scrolls.
+    #[test]
+    fn saving_profiles_on_demand_does_not_wake_sync() {
+        let lib = Library::new("quiet");
+        two_fonts(&lib);
+        lib.scan();
+        lib.conn().execute("DELETE FROM face_previews", []).unwrap();
+        let state = crate::AppState::for_tests(&lib.db(), &lib.dir).unwrap();
+        let before = crate::sync::local_writes_noted();
+        let answers =
+            preview::on_demand(|| preview::rows_for_ids(&*state.conn()?, &[1, 2]), |fresh| crate::commands::save_profiles(&state, fresh))
+                .unwrap();
+        assert!(answers.len() == 2 && answers.iter().all(|a| a.preview.is_some()));
+        assert_eq!(lib.rows(), 2, "saved");
+        assert_eq!(crate::sync::local_writes_noted(), before, "saving a cache doesn't wake sync");
+        state.write(|_| Ok(())).unwrap();
+        assert_eq!(crate::sync::local_writes_noted(), before + 1, "the window's other writes still do");
     }
 
     #[test]

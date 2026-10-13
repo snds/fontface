@@ -654,7 +654,9 @@ fn write_turn() -> db::ScanWriteTurn {
 
 /// The backfill's connection, inside a write transaction or not. A transaction holds the scan
 /// write turn from BEGIN until its COMMIT or ROLLBACK has run, never longer: the turn is
-/// released only after the transaction has ended, on success and on error alike.
+/// released only after the transaction has ended, on success and on error alike. Transactions
+/// are opened only to save what's already been read (`save_read`), never left open while
+/// waiting for the readers.
 struct Writer {
     conn: Connection,
     turn: Option<db::ScanWriteTurn>,
@@ -664,12 +666,15 @@ impl Writer {
     fn begin(&mut self) -> AppResult<()> {
         if self.turn.is_none() {
             let turn = write_turn();
-            self.conn.execute_batch("BEGIN")?;
+            // IMMEDIATE: if a UI write took the write lock since `write_turn` checked the gate,
+            // wait for it here rather than fail at the first write.
+            self.conn.execute_batch("BEGIN IMMEDIATE")?;
             self.turn = Some(turn);
         }
         Ok(())
     }
 
+    #[cfg(test)]
     fn in_transaction(&self) -> bool {
         self.turn.is_some()
     }
@@ -696,11 +701,27 @@ impl Drop for Writer {
     }
 }
 
+/// Profiles worked out for one file, waiting to be saved: the file version they describe, and
+/// each face's profile.
+type FileProfiles = ((i64, i64), Vec<(i64, Profile)>);
+
 /// Works out the missing profiles once, at launch: `threads` readers (failing fast on
-/// online-only files, which are skipped), one writer committing about every 400 ms through the
-/// scan write turn, stepping aside for UI writes like the scanner does. `emit` gets each
-/// committed batch, then a final one with `done` set. Also removes orphaned rows.
-pub fn backfill(db_path: &Path, threads: usize, mut emit: impl FnMut(Batch)) -> AppResult<BackfillReport> {
+/// online-only files, which are skipped), one writer saving what they've read about every
+/// 400 ms through the scan write turn. No transaction stays open while it waits for the
+/// readers, and a save steps aside for UI writes like the scanner does, so a click never finds
+/// the database locked. `emit` gets each saved batch, then a final one with `done` set. Also
+/// removes orphaned rows.
+pub fn backfill(db_path: &Path, threads: usize, emit: impl FnMut(Batch)) -> AppResult<BackfillReport> {
+    backfill_with(db_path, threads, profiles_for_file, emit)
+}
+
+/// `backfill`, reading each file's rows with `read` (tests pass their own).
+fn backfill_with(
+    db_path: &Path,
+    threads: usize,
+    read: impl Fn(&[FaceRow]) -> Result<Vec<(i64, Profile)>, Unreadable> + Send + Sync + 'static,
+    mut emit: impl FnMut(Batch),
+) -> AppResult<BackfillReport> {
     let conn = db::open(db_path)?;
     ensure_schema(&conn)?;
     let mut report = BackfillReport::default();
@@ -715,15 +736,16 @@ pub fn backfill(db_path: &Path, threads: usize, mut emit: impl FnMut(Batch)) -> 
         return Ok(report);
     }
     let next = Arc::new(AtomicUsize::new(0));
+    let read = Arc::new(read);
     let (tx, rx) = mpsc::channel::<(usize, Result<Vec<(i64, Profile)>, Unreadable>)>();
     for _ in 0..threads.clamp(1, jobs.len()) {
-        let (jobs, next, tx) = (jobs.clone(), next.clone(), tx.clone());
+        let (jobs, next, tx, read) = (jobs.clone(), next.clone(), tx.clone(), read.clone());
         std::thread::spawn(move || {
             cloud::fail_fast_on_this_thread();
             loop {
                 let i = next.fetch_add(1, Relaxed);
                 let Some(rows) = jobs.get(i) else { break };
-                if tx.send((i, profiles_for_file(rows))).is_err() {
+                if tx.send((i, read(rows))).is_err() {
                     break;
                 }
             }
@@ -731,41 +753,59 @@ pub fn backfill(db_path: &Path, threads: usize, mut emit: impl FnMut(Batch)) -> 
     }
     drop(tx);
 
-    let mut pending: Vec<Fresh> = Vec::new();
-    let mut last_commit = Instant::now();
-    // Commits, then tells the UI what was saved.
-    let mut commit = |writer: &mut Writer, pending: &mut Vec<Fresh>, written: usize| -> AppResult<()> {
-        writer.commit()?;
-        if !pending.is_empty() {
-            emit(Batch { profiles: std::mem::take(pending), done: false, written });
-        }
-        Ok(())
-    };
+    // Read, not saved yet. Kept in memory between saves, so SQLite's write lock is free while
+    // the readers work.
+    let mut ready: Vec<FileProfiles> = Vec::new();
+    let mut last_save = Instant::now();
     loop {
-        match rx.recv_timeout(Duration::from_millis(250)) {
-            Ok((i, result)) => match result {
-                Ok(profiles) => {
-                    writer.begin()?;
-                    let stamp = jobs[i][0].stamp();
-                    for (id, p) in profiles {
-                        if store(&writer.conn, id, stamp.0, stamp.1, &p)? {
-                            report.written += 1;
-                            pending.push(Fresh { id, file_size: stamp.0, mtime: stamp.1, preview: PreviewInfo::from_profile(&p) });
-                        }
-                    }
-                }
-                Err(Unreadable::Cloud) => report.cloud += 1,
-                Err(_) => report.other += 1,
-            },
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
+        let finished = match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok((i, Ok(profiles))) => {
+                ready.push((jobs[i][0].stamp(), profiles));
+                false
+            }
+            Ok((_, Err(Unreadable::Cloud))) => {
+                report.cloud += 1;
+                false
+            }
+            Ok((_, Err(_))) => {
+                report.other += 1;
+                false
+            }
+            Err(RecvTimeoutError::Timeout) => false,
+            Err(RecvTimeoutError::Disconnected) => true,
+        };
+        if !ready.is_empty() && (finished || last_save.elapsed() >= COMMIT_EVERY) {
+            let saved = save_read(&mut writer, std::mem::take(&mut ready))?;
+            report.written += saved.len();
+            if !saved.is_empty() {
+                emit(Batch { profiles: saved, done: false, written: report.written });
+            }
+            last_save = Instant::now();
         }
-        if writer.in_transaction() && (last_commit.elapsed() >= COMMIT_EVERY || db::ui_write_waiting() || db::scan_writer_waiting()) {
-            commit(&mut writer, &mut pending, report.written)?;
-            last_commit = Instant::now();
+        if finished {
+            break;
         }
     }
-    commit(&mut writer, &mut pending, report.written)?;
     emit(Batch { profiles: vec![], done: true, written: report.written });
     Ok(report)
+}
+
+/// Saves what the readers have read, file by file. When a UI write or a scan is waiting, it
+/// commits after the current file and lets them go first (`Writer::begin` waits for them).
+/// Returns what was saved, all of it committed.
+fn save_read(writer: &mut Writer, ready: Vec<FileProfiles>) -> AppResult<Vec<Fresh>> {
+    let mut saved = Vec::new();
+    for ((file_size, mtime), profiles) in ready {
+        writer.begin()?;
+        for (id, p) in profiles {
+            if store(&writer.conn, id, file_size, mtime, &p)? {
+                saved.push(Fresh { id, file_size, mtime, preview: PreviewInfo::from_profile(&p) });
+            }
+        }
+        if db::ui_write_waiting() || db::scan_writer_waiting() {
+            writer.commit()?;
+        }
+    }
+    writer.commit()?;
+    Ok(saved)
 }

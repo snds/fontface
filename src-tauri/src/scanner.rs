@@ -508,7 +508,10 @@ pub fn scan_folder(
                                 std::thread::sleep(Duration::from_millis(2));
                             }
                             turn = Some(db::scan_write_turn());
-                            conn.execute_batch("BEGIN")?;
+                            // IMMEDIATE: if a UI write took the write lock since the check
+                            // above, wait for it here. A plain BEGIN would read first and then
+                            // fail at its first write with "database is locked".
+                            conn.execute_batch("BEGIN IMMEDIATE")?;
                             in_tx = true;
                         }
                         match result {

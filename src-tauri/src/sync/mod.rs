@@ -178,10 +178,28 @@ fn wake(local: bool, remote: bool) {
     sh.cv.notify_all();
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests only: local writes noted on this thread that wake sync when it's on.
+    static NOTED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Tests only: how many local writes on this thread would have woken sync.
+#[cfg(test)]
+pub(crate) fn local_writes_noted() -> usize {
+    NOTED.with(Cell::get)
+}
+
 /// After every write the UI makes to the database (`AppState::write`): local tags may have
-/// changed. Cheap: it only wakes the sync thread, which compares and writes later.
+/// changed. Cheap: it only wakes the sync thread, which compares and writes later. Cache writes
+/// (`AppState::write_cache`, preview profiles) don't come here.
 pub fn note_local_write() {
-    if ENABLED.load(Ordering::Relaxed) && !QUIET.with(Cell::get) {
+    if QUIET.with(Cell::get) {
+        return;
+    }
+    #[cfg(test)]
+    NOTED.with(|n| n.set(n.get() + 1));
+    if ENABLED.load(Ordering::Relaxed) {
         wake(true, false);
     }
 }

@@ -279,22 +279,24 @@ pub async fn preview_profiles(app: AppHandle, ids: Vec<i64>) -> AppResult<Vec<pr
     let asked = ids.clone();
     let answer = preview::PROFILE_LANE.run(move || {
         let state = app.state::<AppState>();
-        preview::on_demand(
-            || preview::rows_for_ids(&*state.conn()?, &ids),
-            |fresh| {
-                state.write(|conn| {
-                    let tx = conn.transaction()?;
-                    for (row, profile) in fresh {
-                        preview::store(&tx, row.id, row.file_size, row.mtime, profile)?;
-                    }
-                    tx.commit()?;
-                    Ok(())
-                })
-            },
-        )
+        preview::on_demand(|| preview::rows_for_ids(&*state.conn()?, &ids), |fresh| save_profiles(&state, fresh))
     })
     .await?;
     answer.unwrap_or_else(|| Ok(preview::OnDemand::skipped(&asked)))
+}
+
+/// Saves profiles `preview_profiles` worked out. They're a cache, not the user's data, so
+/// saving them doesn't wake sync (it would compare every font and tag for nothing while the
+/// user scrolls past rows without a profile).
+pub(crate) fn save_profiles(state: &AppState, fresh: &[(preview::FaceRow, preview::Profile)]) -> AppResult<()> {
+    state.write_cache(|conn| {
+        let tx = conn.transaction()?;
+        for (row, profile) in fresh {
+            preview::store(&tx, row.id, row.file_size, row.mtime, profile)?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
 }
 
 /// Every real character of a face, by Unicode block, for the detail panel's character grid.
