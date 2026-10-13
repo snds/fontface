@@ -198,12 +198,18 @@ fn record_latest(data_dir: &Path, answers: Vec<(String, Option<String>)>) {
 /// carrying the ETag it was downloaded with; nothing is downloaded, and the answer is usually a
 /// small "not modified". At most one request per icon family (8). Stops at the first failure.
 fn check_icon_files(data_dir: &Path) {
+    let started = std::time::Instant::now();
     let (by_id, _) = installed_index(data_dir);
     let mut answers = Vec::new();
     'families: for icon in icons::FAMILIES {
         let Some(installed) = by_id.get(icon.id) else { continue };
         for (name, url) in icons::source(icon).fonts {
             let Some(recorded) = installed.upstream.get(&name) else { continue };
+            // The Google page waits for this, so it gets a few seconds in all. Files not asked
+            // about this time keep the catalog's date rule (icon_changed gives None for them).
+            if started.elapsed() > ICON_CHECK_BUDGET {
+                break 'families;
+            }
             match super::current_etag(&url, &recorded.etag) {
                 Ok(tag) => answers.push((url, tag)),
                 Err(Fetch::NotFound) => answers.push((url, None)),
@@ -213,6 +219,10 @@ fn check_icon_files(data_dir: &Path) {
     }
     record_latest(data_dir, answers);
 }
+
+/// How long one catalog refresh spends asking whether icon files changed (one small request per
+/// installed icon file, one after another).
+const ICON_CHECK_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Whether an installed icon family's files changed upstream: the ETag each was downloaded with,
 /// against the newest one the server gave (`read_latest`). None when that isn't known for every
@@ -309,6 +319,7 @@ pub fn catalog(data_dir: &Path, refresh: bool) -> AppResult<Catalog> {
         (fresh || backing_off, !fresh)
     };
     let cached = read_cache(data_dir);
+    let mut fetched = false;
     // Fast path: a usable saved copy is returned without waiting on any fetch in progress.
     let (data, stale) = match cached {
         Some(c) if !refresh && usable(&c).0 => {
@@ -329,7 +340,7 @@ pub fn catalog(data_dir: &Path, refresh: bool) -> AppResult<Catalog> {
             };
             match fetch_catalog(data_dir) {
                 Ok(c) => {
-                    check_icon_files(data_dir);
+                    fetched = true;
                     (c, false)
                 }
                 Err(e) => {
@@ -342,6 +353,10 @@ pub fn catalog(data_dir: &Path, refresh: bool) -> AppResult<Catalog> {
             }
         }
     };
+    // After the fetch lock is let go, so a refresh or an install isn't held up by these requests.
+    if fetched {
+        check_icon_files(data_dir);
+    }
     Ok(build(data_dir, data, stale))
 }
 
