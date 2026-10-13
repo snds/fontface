@@ -139,7 +139,24 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Menu bar quick toggle | ⬜ | ⬜ |
 | Launch at login | 🟡 | ⬜ |
 | Auto-activate fonts a design file needs | ⬜ | ⬜ |
-| Sync library between machines | ⬜ | ⬜ |
+| Sync tags and on/off choices between computers | 🟡 | ⬜ |
+
+## Sync (2026-10-12)
+
+Through a folder another app keeps in sync. Details in [SYNC.md](SYNC.md). Covered by tests
+with two and three simulated computers; not yet checked in the running app.
+
+| Feature | macOS | Windows | Notes |
+|---|---|---|---|
+| Choose a sync folder (iCloud Drive, Dropbox, OneDrive, Google Drive, Syncthing, Nextcloud, rclone) | 🟡 | ⬜ | Settings › Sync. Each computer writes only its own folder inside `Fontface Sync` |
+| Tags, nesting, colors and tags on fonts sync | 🟡 | ⬜ | Renames and moves carry over; tags with the same name merge; fonts without a PostScript name don't sync |
+| Which fonts are on syncs | 🟡 | ⬜ | Each computer turns on its own copy; fonts it lacks are listed and turn on when they arrive |
+| On this Mac: Follow sync / Always on here / Never on here | 🟡 | ⬜ | In a font's right-click menu. Device groups are in the data; no menu for group exceptions yet |
+| Status: last sync, other computers, problems, Sync Now, Turn Off Sync | 🟡 | ⬜ | Suggests keeping a cloud sync folder downloaded |
+| Safe with half-synced, conflicted or newer-version files | 🟡 | ⬜ | Skipped and retried; newer versions are refused in plain words |
+| Copied app data gets its own device id | 🟡 | ⬜ | Hardware id hash (`IOPlatformUUID`; Windows `MachineGuid`) |
+| Direct connections (WebDAV, S3, Google Drive, OneDrive, Dropbox, iCloud) | ⬜ | ⬜ | Behind the `Transport` interface; planned with Apache OpenDAL |
+| Encrypted sync files | ⬜ | ⬜ | |
 
 ## Validation method
 

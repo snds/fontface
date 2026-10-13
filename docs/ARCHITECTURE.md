@@ -190,6 +190,34 @@ them and keeps their fonts' activation state. This guarantees each file belongs 
   before the page's first paint, so a dark launch doesn't flash white; a later macOS change is
   the page's to follow.
 
+## Sync
+
+Sync shares choices (tags, tags on fonts, which fonts are on, per-computer exceptions) between
+the user's computers through a folder another app keeps in sync. Font files, settings and the
+database never sync. Full details: [SYNC.md](SYNC.md).
+
+- **Each computer writes only its own folder** (`Fontface Sync/v1/devices/<device id>/`):
+  `device.json`, change files that are never edited, and a snapshot. So a plain file-sync
+  service can't create conflicts. Files are written whole and renamed into place; anything
+  unreadable is skipped and tried again, never acted on.
+- **Merging** (`sync/merge.rs`, pure data): a hybrid logical clock orders changes; single
+  values are "latest wins"; deletes are final; tags on fonts are an add-wins set. Any order,
+  any number of times, gives the same result.
+- **Local tags ↔ changes** (`sync/engine.rs`): local edits are found by comparing the tables
+  with what sync last wrote into them, so applying other computers' changes never echoes back.
+  On/off changes come only from the user's switch (`set_activation` calls
+  `sync::activation_chosen`); synced choices are switched through `commands::switch`, once each.
+- **Hooks elsewhere are one line each:** `AppState::write` wakes sync after a UI write, and
+  `set_activation` records the switch. Sync's own tables (`sync_meta`, `sync_outbox`) come from
+  an idempotent `ensure_schema`, like the tag tables.
+- **Threads:** all file work runs on a sync thread with no lock held, since a cloud folder may
+  download on read. Lock order: cycle lock, engine lock, database mutex.
+- **Storage is behind `Transport`** (`sync/transport.rs`), so direct connections (Apache
+  OpenDAL: WebDAV, S3, Google Drive, OneDrive, Dropbox, iCloud) can be added without touching
+  the merge rules.
+- **Copied app data** (Migration Assistant, a restored backup) is caught with a hash of the
+  hardware id, and the copy takes a new device id.
+
 ## Windows plan (architected, not built)
 
 Windows-specific code is isolated behind `#[cfg(target_os = "windows")]`:

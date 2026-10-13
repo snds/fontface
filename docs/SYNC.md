@@ -1,0 +1,220 @@
+# Sync
+
+Sync shares your *choices* between your computers: your tags, which fonts carry them, which
+fonts are on, and exceptions for one computer. It works through any folder that something else
+keeps in sync: iCloud Drive, OneDrive, Google Drive, Dropbox, the Nextcloud or Seafile client,
+Syncthing, or an rclone mount. Font files never sync. Each computer uses its own copies.
+
+Code: `src-tauri/src/sync/` (Rust) and `src/sync/` (interface). The plan it comes from is in
+[MOBILE-AND-SYNC.md](MOBILE-AND-SYNC.md).
+
+## What syncs
+
+| Item | Syncs | Notes |
+|---|---|---|
+| Tags: names, nesting, colors | Yes | Each tag has its own sync id, so renames and moves carry over |
+| Which fonts carry which tags | Yes | By the font's key (PostScript name, variable or static, slant) |
+| Which fonts are on | Yes | As a wish. Each computer turns on its own copy, if it has one |
+| Exceptions for one computer | Yes | Always on here, Never on here, Follow sync |
+| Exceptions for a device group | Yes | In the data; no menu for them yet |
+| Fonts without a PostScript name | No | Their key is a file path, which means nothing on another computer |
+| Font files | No | Purchased, Adobe and system fonts never will ([INTEGRATIONS.md](INTEGRATIONS.md)) |
+| Settings | No | They belong to one computer |
+| Folders and their colors | No | Paths differ between computers |
+| The library database | Never | Only small change files go in the folder |
+
+## Using it
+
+1. **Settings › Sync › Choose Folder…** and pick a folder your sync app keeps up to date.
+   Fontface makes a `Fontface Sync` folder inside it. Picking `Fontface Sync` itself works too.
+2. Do the same on each computer, with the same folder.
+3. Each computer shares its tags and the fonts it has on. Tags with the same name become one
+   tag, with the fonts from both. Joining only adds: it never turns another computer's fonts off.
+
+After that:
+
+- **Changes go out** about two seconds after you make them.
+- **Changes come in** when your sync app delivers them. Fontface notices new files in the
+  folder, checks when its window comes to the front, and checks every five minutes anyway.
+- **Sync Now** reads and writes at once.
+- **On this Mac** in a font's right-click menu: *Follow sync*, *Always on here* or *Never on
+  here*. With an exception set, that font's switch changes only this computer's exception.
+- **Name** and **Device group** set how this computer appears to the others. Computers in
+  the same group (say "Work Macs") can share exceptions.
+- **Turn Off Sync** stops sharing. Tags and fonts here stay as they are, and so do the files
+  in the folder. Turning it back on later starts fresh and merges again.
+
+The page shows when sync last ran, the other computers and when each was last seen, problems in
+plain words, and fonts that are on elsewhere but aren't on this computer.
+
+**A cloud folder that can be online-only** (iCloud Drive, Google Drive, OneDrive, Dropbox):
+reading a file there may download it first. Sync does that on its own thread, so the window
+never waits, but it can make a sync slow. The page suggests keeping the folder downloaded
+("Keep Downloaded" in Finder).
+
+## Which fonts are on
+
+- **Each computer decides from the same rule.** Its own exception first, then its device
+  group's, then the shared choice.
+- **Your switch is the choice.** Turning a font on or off shares it. If this computer has an
+  exception for that font, the switch changes the exception instead, so the two never disagree.
+- **A font this computer doesn't have** keeps its choice and is listed under "Not on this
+  computer". It turns on when it arrives (from Google Fonts, a purchase, or a drive you connect).
+  This is how an unmounted drive already works.
+- **Each synced choice is carried out once.** If you turn a font off here in another app, sync
+  doesn't keep turning it back on. It acts again only when someone changes that font's choice.
+- **Other ways a font goes off aren't shared:** Turn Off All, "Leave them off" at launch,
+  another app turning a font off, a folder being removed, temporary fonts ending at logout.
+  They only affect this computer.
+- **Turning on picks one copy:** one already on, or else a file with only that font in it.
+  Turning off skips a collection file that also holds a font that should stay on.
+- **Different fonts with the same name** aren't merged. If both computers know a font's content
+  fingerprint (today: fonts in Purchases) and none match, and the family names differ too, the
+  font's tags and on/off stay local. Same family with another fingerprint counts as another
+  version of the same font, and is matched.
+
+## The folder
+
+```
+<the folder you picked>/
+  Fontface Sync/
+    v1/
+      devices/
+        3f2a…/                 one folder per computer, named by its device id
+          device.json          name, group, app version, last seen
+          changes-000001.jsonl changes, never edited once written
+          changes-000002.jsonl
+          snapshot.json        that computer's changes, squeezed
+        9b1c…/
+          …
+```
+
+**The safety rule: each computer writes only its own folder.** No two computers ever write the
+same file, so a plain file-sync service can't create conflicts or mix two versions of a file.
+
+- Every file is written whole to a temporary file in the same folder, then renamed into place.
+  Readers see the old file or the new one, never half of one.
+- **Change files** are JSON Lines: a header line, then one change per line. A file is written
+  once and never changed.
+- **Snapshots:** after 24 change files, a computer writes `snapshot.json` (its own changes,
+  keeping only the latest value of each) and deletes the change files it covers.
+- **`device.json`** is rewritten when something changes, and otherwise at most once an hour,
+  so computers don't wake each other up in a loop.
+- **Anything else is ignored:** "conflicted copy" files from Dropbox or OneDrive, temporary
+  files, notes, folders that aren't device ids.
+- **A file that can't be read yet** (still downloading, cut short, damaged) is skipped and tried
+  again next time. Later files are still read, because changes apply in any order. Nothing
+  local is ever changed or wiped because of a bad file. The page names the computer whose file
+  it is.
+- **Format versions.** Every file says its format and version. A file from a newer major
+  version is refused with "Update Fontface here to sync with it". A `v2` folder next to `v1`
+  shows the same message. Smaller additions (a new field, a new kind of change) keep the
+  version; older apps skip what they don't know and keep fields they don't understand.
+
+### A change file
+
+```json
+{"format":"fontface-sync-changes","version":1,"device":"3f2a…","seq":7}
+{"hlc":"1760280000000.0.3f2a…","op":"tag","id":"9b1c…","set":{"name":"Star Trek","parent":"77aa…","color":"blue"}}
+{"hlc":"1760280000000.1.3f2a…","op":"add","tag":"9b1c…","key":"ps:Okuda|static|r"}
+{"hlc":"1760280000001.0.3f2a…","op":"remove","tag":"9b1c…","key":"ps:Inter|var|r","dots":["1760270000000.0.77aa…"]}
+{"hlc":"1760280000002.0.3f2a…","op":"face","key":"ps:Okuda|static|r","set":{"on":true,"family":"Okuda","style":"Regular"}}
+{"hlc":"1760280000003.0.3f2a…","op":"tagDel","id":"55e0…"}
+```
+
+| Change | Fields |
+|---|---|
+| `tag` | `id` (sync id) and `set`: `name` (its own level only), `parent` (a sync id, or null), `color` |
+| `tagDel` | `id`. Final |
+| `add` | `tag`, `key`. Its clock value is its id |
+| `remove` | `tag`, `key`, and `dots`: the adds it saw |
+| `face` | `key` and `set`: `on`; `family` and `style` (for "Not on this computer"); `prints` (fingerprints); `x:<device id>` and `xg:<group>` exceptions, `"on"`, `"off"` or null |
+
+`set` is a field map on purpose. **Tag groups** ("My tags" / "Built-in") will add a `group`
+field to `tag`. It already syncs like any other field; applying it to the local tables is the
+one thing to add when tag groups land (`write_tags` in `sync/engine.rs`, and the diff in
+`local_changes`; `merge::TAG_GROUP` marks the spot).
+
+## How changes merge
+
+- **Clock.** Every change carries a hybrid logical clock value: wall time in milliseconds, a
+  counter, and the device id. It orders changes; the device id breaks ties. A computer that
+  sees a change from the future (a clock set wrong) moves its own clock past it, so its next
+  change still comes later. A wrong clock can win early, but not for ever.
+- **Single values** (a tag's name, parent and color; a font's on/off; each exception): the
+  latest change wins, field by field. Renaming on one computer and recoloring on another keeps both.
+- **Deletes** are final (tombstones). A tag deleted on one computer and renamed on another at
+  the same time stays deleted. Tags inside a deleted tag go too, as they do locally.
+- **Tags on fonts** are an add-wins set. Each add has its own id; a remove lists the adds it
+  saw. If one computer removes a tag from a font while another adds it, the add wins.
+- **Order doesn't matter.** Changes can arrive in any order, any number of times. A remove
+  before its add, a tag before its parent, the same file twice: the result is the same.
+- **Same name, two tags.** Two computers that each had "Sci-Fi" before they first synced have
+  two sync ids for it. They show as one tag with both ids. Renames, colors and deletes go to both.
+- **A loop of moves** (A into B on one computer, B into A on another): the later move is
+  dropped, the same way everywhere.
+- **No echoes.** Local tag changes are found by comparing the tags now with the tags as sync
+  last left them, never with the merged state. Writing other computers' changes into the
+  library never counts as a change here. On/off changes come only from your switch.
+
+## Identity
+
+- **Device id:** random, made when sync first starts.
+- **Copied app data.** Migration Assistant or a backup restored onto a new Mac copies the
+  device id. Two computers with one id would write the same folder. So each computer keeps a
+  hash of its hardware id (macOS: `IOPlatformUUID`; Windows: `MachineGuid`) with its sync
+  settings and in `device.json`. If the hash doesn't match this computer, or the folder's
+  `device.json` for this id was written by another computer, this one takes a new id and says
+  so on the page. Changes it hadn't written yet move to the new id.
+- **Tag sync ids** are random too, and kept apart from the database's own ids.
+
+## Where it runs
+
+- All file work happens on a sync thread, never while a lock is held. Lock order: the cycle
+  lock, the engine lock, then the database mutex. Fonts are switched through the same code as the
+  window's switches (`commands::switch`), with no sync lock held.
+- **What wakes it:** any write the window makes to the database (it then compares tags, after
+  1.5 s of quiet), an on/off switch, the window coming to the front, a file event in the folder
+  (after 3 s of quiet; its own writes are ignored), and every five minutes.
+- **Stored locally**, outside the numbered migrations, like the tag tables: `sync_meta` (this
+  computer's sync settings, and the merged state as JSON) and `sync_outbox` (changes not yet
+  written to the folder, so nothing is lost if the folder is unreachable or Fontface quits).
+- **`Transport`** (`sync/transport.rs`) is the only part that touches files: list, read,
+  write whole, remove. `FolderTransport` is the folder. A direct connection through Apache
+  OpenDAL (WebDAV, S3, Google Drive, OneDrive, Dropbox, iCloud) only needs another `Transport`.
+
+## Choices to review
+
+- **Joining adds, it never removes.** A computer's fonts that are on are shared as on when it
+  joins, even if another computer turned that font off earlier. The opposite would turn fonts
+  off on a new computer by surprise.
+- **Delete beats a rename made at the same time.** A rename doesn't bring a deleted tag back.
+- **A tag inside a deleted tag goes too,** even one just made on another computer.
+- **Fingerprints only come from Purchases.** Hashing every font in a big library on each
+  computer would take minutes and download online-only files. So "different font with the same
+  name" is caught for purchased fonts only, and only when the family names differ.
+
+## Not built yet
+
+- Menus for device-group exceptions (the data supports them).
+- Encryption of the sync files with a passphrase (tag names can be revealing).
+- Direct connections (OpenDAL), and a way to remove another computer from the folder.
+- Windows: the code is cross-platform; the hardware id uses `MachineGuid`. Not tried yet.
+- Not yet checked in the running app: the tests cover the merge rules and the files, not the window.
+
+## Tests
+
+`cargo test sync::` covers:
+
+- **Merge rules:** concurrent add and remove, rename against delete, a deleted parent, clock
+  skew, changes out of order and twice, a child before its parent, loops of moves, tags with
+  the same name, bad names and colors, exceptions (device, group, shared, back to follow), and
+  snapshots holding the same state.
+- **Files:** round trips, unfinished files, files in the wrong folder, newer versions, unknown
+  kinds of change, and which names count.
+- **Two or three computers sharing a temporary folder**, each with its own library: tags,
+  renames, moves, recolors, deletes; tags both had before joining; concurrent renames; on/off
+  with exceptions; a font one computer lacks until it arrives; joining; no echoes; a half-
+  downloaded file and a conflicted copy; a damaged local state rebuilt from the folder; a newer
+  format; copied app data; snapshots for a computer that joins later; and different fonts that
+  share a name.
