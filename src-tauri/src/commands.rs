@@ -270,9 +270,14 @@ fn notice_turned_off_elsewhere(state: &AppState, fonts: &mut [FontSummary]) {
 /// rest are worked out from their files (never downloading online-only ones, never reading
 /// Creative Cloud's) and saved. Runs on the preview reader threads: reading files here would
 /// tie up one of Tauri's async workers, which the switches and the list also need.
+///
+/// Latest wins (`preview::PROFILE_LANE`): the UI sends the next call only once the last has
+/// settled or it has stopped waiting for it, so a call still queued when the next one comes is
+/// skipped; its ids come back as "ask again later".
 #[tauri::command]
 pub async fn preview_profiles(app: AppHandle, ids: Vec<i64>) -> AppResult<Vec<preview::OnDemand>> {
-    preview::on_reader(move || {
+    let asked = ids.clone();
+    let answer = preview::PROFILE_LANE.run(move || {
         let state = app.state::<AppState>();
         preview::on_demand(
             || preview::rows_for_ids(&*state.conn()?, &ids),
@@ -288,15 +293,18 @@ pub async fn preview_profiles(app: AppHandle, ids: Vec<i64>) -> AppResult<Vec<pr
             },
         )
     })
-    .await?
+    .await?;
+    answer.unwrap_or_else(|| Ok(preview::OnDemand::skipped(&asked)))
 }
 
 /// Every real character of a face, by Unicode block, for the detail panel's character grid.
 /// Worked out from the file each time, with the same safeguards as previews, on the preview
-/// reader threads.
+/// reader threads. Latest wins (`preview::CHARACTER_LANE`): a grid asked for while browsing
+/// past fonts is skipped if another was asked for before its turn came (only the detail panel
+/// asks, for the face it shows, and it ignores answers for faces it has moved on from).
 #[tauri::command]
 pub async fn font_characters(app: AppHandle, font_id: i64) -> AppResult<preview::characters::FontCharacters> {
-    preview::on_reader(move || {
+    let answer = preview::CHARACTER_LANE.run(move || {
         let row = preview::face_row_by_id(&*app.state::<AppState>().conn()?, font_id)?
             .ok_or_else(|| AppError::NotFound(format!("font {font_id}")))?;
         let data = preview::read_file(&row.path, Some(row.stamp())).map_err(|why| AppError::Invalid(why.message()))?;
@@ -307,7 +315,8 @@ pub async fn font_characters(app: AppHandle, font_id: i64) -> AppResult<preview:
                 .map_err(|_| AppError::Invalid("This font's characters can't be read.".into()))
         })
     })
-    .await?
+    .await?;
+    answer.unwrap_or_else(|| Err(AppError::Other("Another font's characters were asked for, so these weren't read.".into())))
 }
 
 #[tauri::command(async)]

@@ -825,17 +825,156 @@ fn glyphs_drawing_too_many_segments_are_stopped() {
 
 #[test]
 fn reader_threads_answer_and_outlive_a_failed_job() {
+    let readers = super::readers();
     tauri::async_runtime::block_on(async {
-        assert_eq!(super::on_reader(|| 2 + 2).await.unwrap(), 4);
-        let failed = super::on_reader(|| -> i32 { std::panic::resume_unwind(Box::new("damaged font")) }).await;
+        assert_eq!(readers.run_if(|| true, || 2 + 2).await.unwrap(), Some(4));
+        let failed = readers.run_if(|| true, || -> i32 { std::panic::resume_unwind(Box::new("damaged font")) }).await;
         assert!(failed.is_err());
-        let answers = futures_join(super::on_reader(|| 1), super::on_reader(|| 2)).await;
-        assert_eq!(answers, (1, 2), "the threads carry on");
+        let (one, two) = (readers.run_if(|| true, || 1), readers.run_if(|| true, || 2));
+        assert_eq!((one.await.unwrap(), two.await.unwrap()), (Some(1), Some(2)), "the threads carry on");
     });
 }
 
-async fn futures_join<A, B>(a: impl std::future::Future<Output = crate::error::AppResult<A>>, b: impl std::future::Future<Output = crate::error::AppResult<B>>) -> (A, B) {
-    (a.await.unwrap(), b.await.unwrap())
+/// `threads` reader threads of their own, `held` of them busy with a job until its gate is
+/// opened (or dropped): jobs sent meanwhile wait for a free thread. Keep the returned futures
+/// until then, since a job nobody waits for is skipped.
+#[allow(clippy::type_complexity)]
+fn held_readers(
+    threads: usize,
+    held: usize,
+) -> (super::Readers, Vec<std::sync::mpsc::Sender<()>>, Vec<impl std::future::Future<Output = crate::error::AppResult<Option<()>>>>) {
+    let readers = super::Readers::start(threads, "fontface-test-reader");
+    let (gates, holds) = (0..held)
+        .map(|_| {
+            let (open, wait) = std::sync::mpsc::channel::<()>();
+            let hold = readers.run_if(|| true, move || {
+                let _ = wait.recv();
+            });
+            (open, hold)
+        })
+        .unzip();
+    (readers, gates, holds)
+}
+
+#[test]
+fn a_lane_skips_jobs_replaced_before_they_started() {
+    static LANE: super::Lane = super::Lane::new();
+    let (readers, gates, holds) = held_readers(1, 1);
+    let ran = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    // Holding an arrow key through five fonts while the only reader is busy.
+    let asked: Vec<_> = (0..5)
+        .map(|i| {
+            let ran = ran.clone();
+            LANE.run_on(&readers, move || {
+                ran.lock().unwrap().push(i);
+                i
+            })
+        })
+        .collect();
+    drop(gates);
+    tauri::async_runtime::block_on(async {
+        for hold in holds {
+            hold.await.unwrap();
+        }
+        let mut answers = Vec::new();
+        for job in asked {
+            answers.push(job.await.unwrap());
+        }
+        assert_eq!(answers, vec![None, None, None, None, Some(4)], "only the latest is answered");
+        // A job sent after the latest has run is the new latest, and runs.
+        let ran2 = ran.clone();
+        assert_eq!(LANE.run_on(&readers, move || ran2.lock().unwrap().push(5)).await.unwrap(), Some(()));
+    });
+    assert_eq!(*ran.lock().unwrap(), vec![4, 5], "replaced jobs read nothing");
+}
+
+#[test]
+fn a_job_nobody_waits_for_is_skipped() {
+    let (readers, gates, holds) = held_readers(1, 1);
+    let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = ran.clone();
+    // Sent, then given up on before its turn (its caller went away).
+    drop(readers.run_if(|| true, move || flag.store(true, std::sync::atomic::Ordering::SeqCst)));
+    let unwanted = readers.run_if(|| false, || panic!("not wanted, so never run"));
+    drop(gates);
+    tauri::async_runtime::block_on(async {
+        for hold in holds {
+            hold.await.unwrap();
+        }
+        assert_eq!(unwanted.await.unwrap(), None);
+        // One thread takes jobs in order: once this answers, the dropped job has had its turn.
+        assert_eq!(readers.run_if(|| true, || 7).await.unwrap(), Some(7));
+    });
+    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst), "a job nobody waits for reads nothing");
+}
+
+#[test]
+fn a_hung_read_holds_up_only_its_own_thread() {
+    // One of two readers is stuck (a network share that stopped answering); the other carries on.
+    let (readers, gates, holds) = held_readers(2, 1);
+    let (done, finished) = std::sync::mpsc::channel();
+    let jobs: Vec<_> = (0..4)
+        .map(|i| {
+            let done = done.clone();
+            readers.run_if(|| true, move || done.send(i).unwrap())
+        })
+        .collect();
+    let mut answered: Vec<i32> =
+        (0..4).map(|_| finished.recv_timeout(Duration::from_secs(5)).expect("the other thread answers")).collect();
+    answered.sort();
+    assert_eq!(answered, vec![0, 1, 2, 3]);
+    drop(gates);
+    tauri::async_runtime::block_on(async {
+        for hold in holds {
+            hold.await.unwrap();
+        }
+        for job in jobs {
+            assert_eq!(job.await.unwrap(), Some(()));
+        }
+    });
+}
+
+#[test]
+fn reads_never_run_more_than_two_at_once() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering::SeqCst},
+        Arc,
+    };
+    assert_eq!(super::READER_THREADS, 2);
+    let running = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let read = |running: Arc<AtomicUsize>, peak: Arc<AtomicUsize>| {
+        move || {
+            peak.fetch_max(running.fetch_add(1, SeqCst) + 1, SeqCst);
+            std::thread::sleep(Duration::from_millis(10));
+            running.fetch_sub(1, SeqCst);
+        }
+    };
+    // Profile calls, character grids and other reads all share the app's two reader threads.
+    let mut jobs = Vec::new();
+    for _ in 0..6 {
+        jobs.push(super::readers().run_if(|| true, read(running.clone(), peak.clone())));
+    }
+    let profiles = super::PROFILE_LANE.run(read(running.clone(), peak.clone()));
+    let characters = super::CHARACTER_LANE.run(read(running.clone(), peak.clone()));
+    tauri::async_runtime::block_on(async {
+        for job in jobs {
+            assert_eq!(job.await.unwrap(), Some(()));
+        }
+        assert_eq!(profiles.await.unwrap(), Some(()));
+        assert_eq!(characters.await.unwrap(), Some(()));
+    });
+    let peak = peak.load(SeqCst);
+    assert!((1..=2).contains(&peak), "{peak} reads at once");
+}
+
+#[test]
+fn a_skipped_profile_call_asks_for_its_ids_again_later() {
+    let ids: Vec<i64> = (1..=70).collect();
+    let answers = super::OnDemand::skipped(&ids);
+    assert_eq!(answers.len(), super::MAX_ON_DEMAND, "no more than a call carries");
+    assert!(answers.iter().all(|a| a.preview.is_none() && a.retry));
+    assert_eq!(answers[0].id, 1);
 }
 
 // ------------------------------------------------------------------------------- characters

@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FontSummary, PreviewInfo } from "@/api";
 import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
-import { isSampleKind, kindFor, missingCharacters, usePreviewProfile, type ProfileState } from "@/previewProfiles";
+import { isSampleKind, kindFor, missingCharacters, usePreviewProfile, useProfileWait, type ProfileState } from "@/previewProfiles";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -308,9 +308,6 @@ const UNAVAILABLE: Record<string, { icon: string; text: string }> = {
   "too-large": { icon: "data_usage", text: "Too large to preview" },
 };
 
-/** How long a preview waits for its profile before drawing the name anyway. */
-const PROFILE_WAIT_MS = 300;
-
 /**
  * A row's preview: the typed text, else the profile's text (the name, tidied, or a sample of
  * the font's real characters), else the name. Hidden until the font has loaded and the profile
@@ -320,14 +317,7 @@ function Preview({ font, preview, typed, own, size }: { font: FontSummary; previ
   const state = useFontFace(font);
   const { profile, pending } = preview;
   const face = faceName(font);
-  // The wait belongs to one face: a row that starts showing another font waits afresh.
-  const [waitedFor, setWaitedFor] = useState<string>();
-  useEffect(() => {
-    if (!pending) return;
-    const timer = setTimeout(() => setWaitedFor(face), PROFILE_WAIT_MS);
-    return () => clearTimeout(timer);
-  }, [pending, face]);
-  const waited = waitedFor === face;
+  const waited = useProfileWait(pending, face);
   const unavailable = UNAVAILABLE[state];
   if (unavailable) {
     return (

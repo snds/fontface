@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { api, type FontSummary, type GoogleCatalog, type GoogleFamily } from "@/api";
 import { faceName, useFontFace } from "@/fontLoader";
-import { isSampleKind, usePreviewProfile } from "@/previewProfiles";
+import { isSampleKind, usePreviewProfile, useProfileWait } from "@/previewProfiles";
 import { PreviewText } from "./PreviewText";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,10 +43,12 @@ type Show = "all" | "installed" | "updates";
 const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 
 /** Installed families preview in their own font (from the local files), fitted like the library
- *  list (icon families show their icons). Others show their name. */
+ *  list (icon families show their icons). Others show their name. Like the list, a preview waits
+ *  for its profile at most 300 ms, then draws the name. */
 function FamilyPreview({ family, font, text }: { family: GoogleFamily; font: FontSummary | undefined; text: string }) {
   const state = useFontFace(font);
   const { profile, pending } = usePreviewProfile(font);
+  const waited = useProfileWait(pending, font ? faceName(font) : "");
   // Not downloaded, or its preview can't load: show the name in the interface font.
   if (!font || state === "error" || state === "cloud" || state === "too-large") {
     return <div className="truncate text-lg font-medium">{family.family}</div>;
@@ -57,7 +59,7 @@ function FamilyPreview({ family, font, text }: { family: GoogleFamily; font: Fon
       face={faceName(font)}
       text={text || profile?.familyText || family.family}
       size={22}
-      ready={state === "ready" && !pending}
+      ready={state === "ready" && (!pending || waited)}
       profile={profile}
       ownText={!text && !!profile && font.family === family.family}
       sample={!text && isSampleKind(profile)}

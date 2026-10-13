@@ -175,12 +175,21 @@ row counts only while its file size, modified time and `rev` match the font and
   any other profile, so it isn't retried every launch.
 - **On demand:** a row on screen whose profile is still missing asks `preview_profiles`, with
   the same safeguards. The UI keeps one call in flight with at most 64 ids, newest rows first,
-  and drops rows that scrolled away before their turn (`src/previewQueue.ts`). Nothing ever
-  downloads a cloud file or reads Creative Cloud's files to make a profile.
+  and drops rows that scrolled away before their turn (`src/previewQueue.ts`). Each row's want
+  has its own token, so a row whose request already went can't drop a newer row's request for
+  the same face. A call that takes longer than 3 s stops holding the queue: its rows draw their
+  names (a late answer still counts) and the next call goes, so one stuck file read can't stop
+  later rows getting profiles. Nothing ever downloads a cloud file or reads Creative Cloud's
+  files to make a profile.
 - `font_characters` works out the detail panel's character grid on demand and stores nothing.
-- Both commands read files on two long-lived preview reader threads (`preview::on_reader`),
-  not on Tauri's async workers: a slow disk or a stalled network share then can't hold up the
-  other commands, such as the on/off switches.
+- Both commands read files on two long-lived preview reader threads (`preview::Readers`), not
+  on Tauri's async workers: a slow disk or a stalled network share then can't hold up the
+  other commands, such as the on/off switches. At most two reads run at once. Each command
+  goes through its own latest-wins lane (`preview::Lane`): a job still queued when a newer one
+  of the same command arrives is skipped when a thread takes it, reading nothing, and so is a
+  job nobody waits for any more. Holding an arrow key through the list then reads only the
+  latest character grid, and a profile call the UI has given up on doesn't hold up the call it
+  sent instead. A job that has started runs to the end; a stuck one holds only its own thread.
 
 **Fitting previews: no clipping, aligned baselines.** A list preview is a 1.3 em box that hides
 overflow (for the ellipsis), and fonts with tall ink (LI Glyphs, Zapfino, Christiana) were cut
@@ -196,9 +205,10 @@ the profile's own text the ink is the larger of the canvas's and Rust's per-glyp
 line metrics are the fallback when the canvas reports none. Nothing is measured before the
 row's own face has loaded (`isFaceLoaded`), and a row whose font changes reads as loading at
 once, so a fallback-font measurement is never taken or cached. The detail panel's waterfall
-never shrinks: a row grows to fit the ink. A preview stays hidden until its font has loaded
-and its profile is known, or 300 ms have passed; in the detail panel, a face that fails to load
-draws in the fallback font, and the character grid then shows only its summary.
+never shrinks: a row grows to fit the ink. A preview (in the list and on the Google Fonts page)
+stays hidden until its font has loaded and its profile is known, or 300 ms have passed; in the
+detail panel, a face that fails to load draws in the fallback font, and the character grid then
+shows only its summary.
 
 **Purchases.**
 `services/purchases.rs` and `services/purchase_watch.rs` handle font downloads.

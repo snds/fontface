@@ -19,7 +19,8 @@
 //! are never downloaded for a profile (reads fail fast instead), and files over 96 MB are
 //! skipped, the same rules as `protocol.rs`. Each face gets a bounded amount of work
 //! (`font::limits`), so a damaged file can't stall a scan. Commands read files on two reader
-//! threads (`on_reader`), never on Tauri's async workers.
+//! threads (`Readers`), never on Tauri's async workers, each command through its own
+//! latest-wins `Lane`, so a call nobody waits for any more is skipped instead of read.
 
 pub mod characters;
 pub mod font;
@@ -34,7 +35,10 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering::Relaxed},
+        atomic::{
+            AtomicU64, AtomicUsize,
+            Ordering::{Relaxed, SeqCst},
+        },
         mpsc::{self, RecvTimeoutError},
         Arc, Mutex, OnceLock,
     },
@@ -384,22 +388,32 @@ fn by_file(rows: Vec<FaceRow>) -> Vec<Vec<FaceRow>> {
 
 // ----------------------------------------------------------------------------- reader threads
 
-/// How many files commands read at once for previews and the character grid.
-const READER_THREADS: usize = 2;
+/// How many files commands read at once for previews and the character grid: every lane below
+/// shares these threads, so no more than this many reads ever run together.
+pub const READER_THREADS: usize = 2;
 
 type Job = Box<dyn FnOnce() + Send>;
 
-/// The reader threads' queue. They're started on first use, fail fast on online-only files
-/// (so a read never starts a download), and take jobs in the order they were sent.
-fn readers() -> &'static Mutex<Option<mpsc::Sender<Job>>> {
-    static READERS: OnceLock<Mutex<Option<mpsc::Sender<Job>>>> = OnceLock::new();
-    READERS.get_or_init(|| {
+fn reader_failed() -> AppError {
+    AppError::Other("reading font files for previews failed".into())
+}
+
+/// Threads that read font files for commands. They fail fast on online-only files (so a read
+/// never starts a download) and take jobs in the order they were sent. A job that nobody wants
+/// any more by the time a thread takes it is skipped without reading anything (`run_if`).
+pub struct Readers {
+    tx: Mutex<Option<mpsc::Sender<Job>>>,
+}
+
+impl Readers {
+    /// Starts `threads` reader threads. They stop once this is dropped and their queue is empty.
+    pub fn start(threads: usize, name: &str) -> Readers {
         let (tx, rx) = mpsc::channel::<Job>();
         let rx = Arc::new(Mutex::new(rx));
         let mut started = 0;
-        for i in 0..READER_THREADS {
+        for i in 0..threads {
             let rx = rx.clone();
-            let spawned = std::thread::Builder::new().name(format!("fontface-preview-reader-{i}")).spawn(move || {
+            let spawned = std::thread::Builder::new().name(format!("{name}-{i}")).spawn(move || {
                 cloud::fail_fast_on_this_thread();
                 loop {
                     // The queue is locked only while waiting for the next job.
@@ -416,23 +430,85 @@ fn readers() -> &'static Mutex<Option<mpsc::Sender<Job>>> {
             started += spawned.is_ok() as usize;
         }
         // No thread to run them: callers get an error instead of waiting forever.
-        Mutex::new((started > 0).then_some(tx))
-    })
+        Readers { tx: Mutex::new((started > 0).then_some(tx)) }
+    }
+
+    /// Sends `f` to a reader thread now; the future waits for its answer without holding the
+    /// calling thread. When a thread takes the job, it's skipped (the answer is `None`, and
+    /// nothing is read) if `wanted()` says no, or if nobody waits for the answer any more.
+    pub fn run_if<T: Send + 'static>(
+        &self,
+        wanted: impl FnOnce() -> bool + Send + 'static,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> impl std::future::Future<Output = AppResult<Option<T>>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let job: Job = Box::new(move || {
+            if tx.is_closed() || !wanted() {
+                let _ = tx.send(None);
+                return;
+            }
+            let _ = tx.send(Some(f()));
+        });
+        let sent = match self.tx.lock() {
+            Ok(guard) => guard.as_ref().is_some_and(|sender| sender.send(job).is_ok()),
+            Err(_) => false,
+        };
+        async move {
+            if !sent {
+                return Err(reader_failed());
+            }
+            rx.await.map_err(|_| reader_failed())
+        }
+    }
 }
 
-/// Runs `f` on one of the reader threads and waits for its answer without holding the calling
-/// thread: commands that read font files use this, so a slow disk or a stalled network share
-/// never ties up Tauri's async workers (and with them the switches and the list). At most
-/// `READER_THREADS` jobs run at once; the rest wait their turn.
-pub async fn on_reader<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> AppResult<T> {
-    let failed = || AppError::Other("reading font files for previews failed".into());
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let job: Job = Box::new(move || {
-        let _ = tx.send(f());
-    });
-    readers().lock().map_err(|_| failed())?.as_ref().ok_or_else(failed)?.send(job).map_err(|_| failed())?;
-    rx.await.map_err(|_| failed())
+/// The app's reader threads, started on first use. Commands that read font files run there
+/// (through a `Lane`), so a slow disk or a stalled network share never ties up Tauri's async
+/// workers (and with them the switches and the list). At most `READER_THREADS` jobs run at
+/// once; the rest wait their turn.
+fn readers() -> &'static Readers {
+    static READERS: OnceLock<Readers> = OnceLock::new();
+    READERS.get_or_init(|| Readers::start(READER_THREADS, "fontface-preview-reader"))
 }
+
+/// Latest wins: of the jobs sent through one lane, one that hasn't started by the time a newer
+/// one is sent is skipped when a reader thread takes it. So holding an arrow key through the
+/// list doesn't queue a character grid for every font passed, and a profile call the UI has
+/// given up on (`src/previewQueue.ts` sends the next one only after the last settles or times
+/// out) doesn't hold up the one it sent instead. A job that has started runs to the end.
+pub struct Lane {
+    latest: AtomicU64,
+}
+
+impl Lane {
+    pub const fn new() -> Lane {
+        Lane { latest: AtomicU64::new(0) }
+    }
+
+    /// Runs `f` on the app's reader threads, unless a newer job is sent through this lane before
+    /// it starts: then the answer is `None`.
+    pub fn run<T: Send + 'static>(
+        &'static self,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> impl std::future::Future<Output = AppResult<Option<T>>> {
+        self.run_on(readers(), f)
+    }
+
+    /// `run`, on the given threads.
+    pub fn run_on<T: Send + 'static>(
+        &'static self,
+        readers: &Readers,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> impl std::future::Future<Output = AppResult<Option<T>>> {
+        let mine = self.latest.fetch_add(1, SeqCst) + 1;
+        readers.run_if(move || self.latest.load(SeqCst) == mine, f)
+    }
+}
+
+/// `preview_profiles` calls.
+pub static PROFILE_LANE: Lane = Lane::new();
+/// `font_characters` calls.
+pub static CHARACTER_LANE: Lane = Lane::new();
 
 // ---------------------------------------------------------------------------------- on demand
 
@@ -446,9 +522,16 @@ pub struct OnDemand {
     pub retry: bool,
 }
 
+impl OnDemand {
+    /// The answer for a call skipped before it started (a newer one replaced it): ask again later.
+    pub fn skipped(ids: &[i64]) -> Vec<OnDemand> {
+        ids.iter().take(MAX_ON_DEMAND).map(|&id| OnDemand { id, preview: None, retry: true }).collect()
+    }
+}
+
 /// Profiles for the given font ids (at most `MAX_ON_DEMAND`): current stored ones as they are,
 /// the rest worked out from their files and saved with `write`. Reads files, so run it on a
-/// thread that fails fast on online-only files (`on_reader`).
+/// thread that fails fast on online-only files (`Readers`).
 pub fn on_demand(
     conn: impl FnOnce() -> AppResult<Vec<(FaceRow, Option<PreviewInfo>)>>,
     write: impl FnOnce(&[(FaceRow, Profile)]) -> AppResult<()>,
