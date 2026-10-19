@@ -58,7 +58,9 @@ function PickerBody({ request, families, onClose }: { request: PickRequest; fami
   const listId = useId();
   const opensPage = useRef(false);
   const excluded = useMemo(() => new Set(request.exclude ?? []), [request.exclude]);
-  const shown = useMemo(() => searchFamilies(families, query, SHOWN).filter((f) => !excluded.has(f.id)), [families, query, excluded]);
+  // Families already on the page aren't offered, and don't count toward the first SHOWN either.
+  const offered = useMemo(() => (excluded.size ? families.filter((f) => !excluded.has(f.id)) : families), [families, excluded]);
+  const shown = useMemo(() => searchFamilies(offered, query, SHOWN), [offered, query]);
   const at = Math.min(active, Math.max(0, shown.length - 1));
   const optionId = (i: number) => `${listId}-${i}`;
 
@@ -132,10 +134,18 @@ function PickerBody({ request, families, onClose }: { request: PickRequest; fami
             onChoose={() => choose(family)}
           />
         ))}
-        {shown.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">No fonts in your library match “{query.trim()}”.</p>}
+        {shown.length === 0 && (
+          <p className="px-2 py-1.5 text-xs text-muted-foreground">
+            {offered.length === 0
+              ? "Every font in your library is already here."
+              : query.trim()
+                ? `No fonts in your library match “${query.trim()}”.`
+                : "No fonts to show."}
+          </p>
+        )}
       </div>
-      {!query.trim() && families.length > SHOWN && (
-        <p className="text-[11px] text-muted-foreground">Showing the first {SHOWN} of {families.length.toLocaleString()} families. Type to find others.</p>
+      {!query.trim() && offered.length > SHOWN && (
+        <p className="text-[11px] text-muted-foreground">Showing the first {SHOWN} of {offered.length.toLocaleString()} families. Type to find others.</p>
       )}
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>

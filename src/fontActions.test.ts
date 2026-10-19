@@ -248,6 +248,9 @@ const key = (k: string, mods: Partial<ShortcutKey> = {}): ShortcutKey => ({ key:
 test("font shortcuts: Cmd+I, Cmd+T, Cmd+Return, Option-Cmd+Return, Shift-Cmd+Return", () => {
   assert.equal(fontShortcut(key("i", { metaKey: true }), true), "info");
   assert.equal(fontShortcut(key("ˆ", { metaKey: true, code: "KeyI" }), true), "info", "the physical I key");
+  assert.equal(fontShortcut(key("c", { metaKey: true, code: "KeyI" }), true), null, "Dvorak's Cmd+C (on QWERTY's I key) stays Copy");
+  assert.equal(fontShortcut(key("и", { metaKey: true, code: "KeyI" }), true), "info", "a non-Latin layout uses the key's place");
+  assert.equal(fontShortcut(key("y", { metaKey: true, code: "KeyT" }), true), null, "Dvorak's Cmd+Y isn't Tags");
   assert.equal(fontShortcut(key("i", { metaKey: true, shiftKey: true }), true), null);
   assert.equal(fontShortcut(key("i", { ctrlKey: true }), false), "info", "Ctrl on Windows");
   assert.equal(shortcutText("info", true), "⌘I");

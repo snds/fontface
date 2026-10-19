@@ -221,8 +221,11 @@ export function fontShortcut(e: ShortcutKey, mac: boolean): ShortcutAction | nul
   const command = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (!command) return null;
   const plain = !e.altKey && !e.shiftKey;
-  if ((e.key.toLowerCase() === "i" || e.code === "KeyI") && plain) return "info";
-  if ((e.key.toLowerCase() === "t" || e.code === "KeyT") && plain) return "tags";
+  // The letter typed decides (Dvorak's Cmd+C sits where QWERTY's I is, and must stay Copy). The
+  // key's position counts only when the layout types no Latin letter there (Cyrillic, say).
+  const letter = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : e.code === "KeyI" ? "i" : e.code === "KeyT" ? "t" : "";
+  if (letter === "i" && plain) return "info";
+  if (letter === "t" && plain) return "tags";
   if (e.key !== "Enter") return null;
   if (e.altKey && e.shiftKey) return null;
   if (e.altKey) return "turnOnOther";
