@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   api,
   type ActivationMode,
+  type ActivationOutcome,
   type Folder,
   type RemoveReport,
   type FontPageTab,
@@ -686,7 +687,8 @@ export default function App() {
   /**
    * Turns fonts on or off. Resolves with the files that ended up on (useful to check a request).
    * `scope` turns them on that way instead of the saved activation mode, and `origin` says why
-   * (see bringIntoLibrary). Without them, it's the user's switch.
+   * (see bringIntoLibrary). Without them, it's the user's switch. `report` gets the outcomes (or
+   * the error) instead of a message per problem file: a tag switch sums them up (src/tags/switching.ts).
    */
   const setActivation = (
     ids: number[],
@@ -694,6 +696,7 @@ export default function App() {
     knownPaths?: string[],
     scope: ActivationMode | null = null,
     origin: SwitchOrigin = "switch",
+    report?: (outcomes: readonly ActivationOutcome[], error?: unknown) => void,
   ): Promise<Set<string>> => {
     if (ids.length === 0) return Promise.resolve(new Set());
     const paths = knownPaths ?? [...new Set(ids.map((id) => fontById.get(id)?.path).filter((p): p is string => !!p))];
@@ -705,13 +708,15 @@ export default function App() {
         const outcomes = await api.setActivation(ids, active, scope, origin);
         for (const o of outcomes) {
           if (o.active) on.add(o.path);
-          if (o.error) toast.error(fileName(o.path), { description: o.error });
+          if (o.error && !report) toast.error(fileName(o.path), { description: o.error });
         }
         // What the OS has and what Fontface recorded, which differ when another app keeps a font
         // on or macOS didn't load it: those states show now, not after the next reload.
         setFonts((list) => applyOutcomes(list, outcomes));
+        report?.(outcomes);
       } catch (e) {
-        toast.error(String(e));
+        if (report) report([], e);
+        else toast.error(String(e));
       } finally {
         mutationEpoch.current++;
         setBusy((b) => {
@@ -1807,6 +1812,7 @@ export default function App() {
         <TagDialogHost
           families={allFamilies}
           onDeleted={(ids) => setView((v) => (v.kind === "tag" && ids.includes(v.id) ? { kind: "all" } : v))}
+          switchFonts={(ids, on, scope, report) => setActivation(ids, on, undefined, scope, "switch", report)}
         />
         {/* The library search for Compare and Pair, and Remove from Library's confirmation. */}
         <FontPickerDialog request={picker} families={pickerFamilies} onClose={() => setPicker(null)} />

@@ -9,7 +9,7 @@ use tauri::{AppHandle, State};
 use super::{
     export,
     import::{self, ImportPreview, ImportResult, Source},
-    relocate, typeface, Organize, Tag,
+    relocate, typeface, Edit, Organize, Tag,
 };
 use crate::{
     activation::{self, Scope},
@@ -22,23 +22,35 @@ pub fn tags_list(state: State<'_, AppState>) -> AppResult<Organize> {
     super::organize(&*state.conn()?)
 }
 
+// Every change by hand is checked first: built-in tags are read-only (`super::check_edit`).
+
 #[tauri::command(async)]
 pub fn tags_create(state: State<'_, AppState>, name: String, color: Option<String>) -> AppResult<Tag> {
-    state.write(|conn| super::create_tag(conn, &name, color.as_deref()))
+    state.write(|conn| {
+        super::check_edit(conn, Edit::Create { name: &name })?;
+        super::create_tag(conn, &name, color.as_deref())
+    })
 }
 
 #[tauri::command(async)]
 pub fn tags_rename(state: State<'_, AppState>, tag_id: i64, name: String) -> AppResult<Tag> {
-    state.write(|conn| super::rename_tag(conn, tag_id, &name))
+    state.write(|conn| {
+        super::check_edit(conn, Edit::Rename { id: tag_id, to: &name })?;
+        super::rename_tag(conn, tag_id, &name)
+    })
 }
 
 #[tauri::command(async)]
 pub fn tags_recolor(state: State<'_, AppState>, tag_id: i64, color: String) -> AppResult<()> {
-    state.write(|conn| super::set_tag_color(conn, tag_id, &color))
+    state.write(|conn| {
+        super::check_edit(conn, Edit::Recolor { id: tag_id })?;
+        super::set_tag_color(conn, tag_id, &color)
+    })
 }
 
 /// Moves a tag's top-level tag, and everything nested under it, to Built-in (`builtin`) or to
-/// the user's own tags. Returns the top-level tag, so the UI can say which tag moved.
+/// the user's own tags. Returns the top-level tag, so the UI can say which tag moved. The UI
+/// uses it for "Make it my tag" (and its Undo).
 #[tauri::command(async)]
 pub fn tags_set_group(state: State<'_, AppState>, tag_id: i64, builtin: bool) -> AppResult<Tag> {
     state.write(|conn| super::set_group(conn, tag_id, builtin))
@@ -47,13 +59,19 @@ pub fn tags_set_group(state: State<'_, AppState>, tag_id: i64, builtin: bool) ->
 /// Deletes a tag and the tags nested under it. Returns the ids deleted.
 #[tauri::command(async)]
 pub fn tags_delete(state: State<'_, AppState>, tag_id: i64) -> AppResult<Vec<i64>> {
-    state.write(|conn| super::delete_tag(conn, tag_id))
+    state.write(|conn| {
+        super::check_edit(conn, Edit::Delete { id: tag_id })?;
+        super::delete_tag(conn, tag_id)
+    })
 }
 
 /// Adds (`on`) or removes tags on fonts, given by face key.
 #[tauri::command(async)]
 pub fn tags_assign(state: State<'_, AppState>, tag_ids: Vec<i64>, keys: Vec<String>, on: bool) -> AppResult<usize> {
-    state.write(|conn| super::assign(conn, &tag_ids, &keys, on))
+    state.write(|conn| {
+        super::check_edit(conn, Edit::Fonts { tag_ids: &tag_ids })?;
+        super::assign(conn, &tag_ids, &keys, on)
+    })
 }
 
 #[tauri::command(async)]
