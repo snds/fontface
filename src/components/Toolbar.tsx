@@ -31,8 +31,16 @@ interface Props {
   onLayout: (layout: LibraryLayout) => void;
   /** The View options button and its popover. */
   viewOptions: React.ReactNode;
-  /** On Google Fonts and Purchases: Browse, which opens the service's own page. */
+  /** On Purchases: Browse, which opens its own page. */
   browse?: React.ReactNode;
+  /** In place of All / Active / Inactive: the Google Fonts view's own filter. */
+  filter?: React.ReactNode;
+  /** What the search field searches, when it isn't the library: "Search Google Fonts". */
+  searchLabel?: string;
+  /** In place of the family and style count ("1,876 families"). */
+  countText?: string;
+  /** Layouts the view can't show, each with why (the layout switch greys them out). */
+  unavailableLayouts?: Partial<Record<LibraryLayout, string>>;
 }
 
 const STATUS: { value: StatusFilter; label: string }[] = [
@@ -59,6 +67,10 @@ export function Toolbar({
   onLayout,
   viewOptions,
   browse,
+  filter,
+  searchLabel = "Search fonts",
+  countText,
+  unavailableLayouts,
 }: Props) {
   const titleBar = useTitleBar();
   return (
@@ -66,17 +78,19 @@ export function Toolbar({
     // small window gives it well under 800px). So it gives way in steps as it narrows (container
     // queries on the width inside its padding): under 1120px the size slider and the preview
     // text box get shorter; under 990px the count goes (screen readers still hear it; on Google
-    // Fonts and Purchases, with Browse, under 1180px); under 960px Variable shows only its icon
-    // (Browse already does under 1000px); under 800px the layout switch folds into View options
+    // Fonts, with its wider filter, and Purchases, with Browse, under 1180px); under 960px
+    // Variable shows only its icon (Browse already does under 1000px); under 800px the layout
+    // switch folds into View options
     // and search gets narrower; under 620px the preview text box goes, and under 520px the
     // slider. Search always keeps room to type, and nothing paints past the window's edge.
     <header
       className="@container/toolbar flex h-13 shrink-0 items-center gap-3 overflow-hidden border-b px-4 select-none"
       {...dragRegion(titleBar)}
     >
-      {/* All / Active / Inactive and Variable narrow whatever view is selected in the sidebar. */}
+      {/* All / Active / Inactive and Variable narrow whatever view is selected in the sidebar
+          (Google Fonts has its own filter instead). */}
       <div className="flex shrink-0 items-center gap-1.5">
-        {showStatus && <ChoiceGroup label="Show fonts" value={status} options={STATUS} onChange={onStatus} />}
+        {filter ?? (showStatus && <ChoiceGroup label="Show fonts" value={status} options={STATUS} onChange={onStatus} />)}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -105,14 +119,21 @@ export function Toolbar({
         <Input
           id={LIBRARY_SEARCH_ID}
           type="search"
-          placeholder="Search fonts"
-          aria-label="Search fonts"
+          placeholder={searchLabel}
+          aria-label={searchLabel}
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           className="pl-8"
         />
       </div>
-      <div className="relative min-w-32 flex-1 @max-[1120px]/toolbar:min-w-24 @max-[800px]/toolbar:min-w-20 @max-[620px]/toolbar:hidden">
+      {/* Google Fonts' filter is about 100px wider, so there the preview text box and the
+          slider give way that much sooner. */}
+      <div
+        className={cn(
+          "relative min-w-32 flex-1 @max-[1120px]/toolbar:min-w-24 @max-[800px]/toolbar:min-w-20 @max-[620px]/toolbar:hidden",
+          filter && "@max-[720px]/toolbar:hidden",
+        )}
+      >
         <Icon name="text_fields" size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           placeholder="Type to preview…"
@@ -124,7 +145,7 @@ export function Toolbar({
       </div>
       {/* Tauri doesn't see a slider as clickable, so keep it from moving the window. */}
       <div
-        className="flex w-44 shrink-0 items-center gap-2 @max-[1120px]/toolbar:w-32 @max-[520px]/toolbar:hidden"
+        className={cn("flex w-44 shrink-0 items-center gap-2 @max-[1120px]/toolbar:w-32 @max-[520px]/toolbar:hidden", filter && "@max-[620px]/toolbar:hidden")}
         {...NO_DRAG}
       >
         <Icon name="format_size" size={16} className="text-muted-foreground" />
@@ -139,15 +160,15 @@ export function Toolbar({
       </div>
       {browse}
       {viewOptions}
-      <LayoutSwitch value={layout} onChange={onLayout} className="@max-[800px]/toolbar:hidden" />
-      {/* Google Fonts and Purchases have one more control (Browse): their count goes sooner. */}
+      <LayoutSwitch value={layout} onChange={onLayout} unavailable={unavailableLayouts} className="@max-[800px]/toolbar:hidden" />
+      {/* Purchases has one more control (Browse), and Google Fonts a wider filter: their count goes sooner. */}
       <span
         className={cn(
           "font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums @max-[990px]/toolbar:sr-only",
-          browse && "@max-[1180px]/toolbar:sr-only",
+          (browse || filter) && "@max-[1180px]/toolbar:sr-only",
         )}
       >
-        {familyCount.toLocaleString()} fam · {fontCount.toLocaleString()} styles
+        {countText ?? `${familyCount.toLocaleString()} fam · ${fontCount.toLocaleString()} styles`}
       </span>
     </header>
   );

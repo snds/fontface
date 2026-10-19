@@ -495,7 +495,9 @@ pub fn sweep_leftovers(data_dir: &Path) {
         let Ok(entries) = std::fs::read_dir(services_root(data_dir).join(name)) else { continue };
         for entry in entries.flatten() {
             let n = entry.file_name().to_string_lossy().into_owned();
-            if n.starts_with(".download-") || n.starts_with(".old-") {
+            // Also Google Fonts families removed last time, held for Undo (google::hold_removed)
+            // and not deleted at quit.
+            if n.starts_with(".download-") || n.starts_with(".old-") || n.starts_with(".removed-") {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }

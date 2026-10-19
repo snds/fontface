@@ -338,6 +338,13 @@ test("menu state: the list's commands only while it shows; Back only with a page
   const byFormat = nativeMenuState({ ...base, list: true, back: false, sort: { key: "format", desc: false } });
   assert.ok(!Object.values(SORT_ITEMS).some((id) => byFormat.checked.includes(id!)), "a Table-only sort checks no key item");
 
+  // The Google Fonts view: one layout and the catalog's order, so only the size steps.
+  const catalog = nativeMenuState({ ...base, list: true, catalog: true, back: false });
+  assert.ok(catalog.enabled.includes(BIGGER_ITEM) && catalog.enabled.includes(SMALLER_ITEM));
+  assert.ok(!catalog.enabled.includes(LAYOUT_ITEMS.tiles) && !catalog.enabled.includes(LAYOUT_ITEMS.rows) && !catalog.enabled.includes(GROUP_ITEM));
+  assert.ok(!catalog.enabled.some((id) => id.startsWith("sort.")));
+  assert.ok(catalog.enabled.includes(FONT_ITEMS.open), "the font menu follows the selected family");
+
   assert.equal(menuStateKey(list), menuStateKey({ ...list, enabled: [...list.enabled].reverse() }), "order doesn't matter");
   assert.notEqual(menuStateKey(list), menuStateKey(page));
 });

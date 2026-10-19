@@ -102,12 +102,10 @@ test("Cmd+[ works from a text field, but not from a menu, and nothing works whil
 });
 
 test("a service's page opens over its list once, and Back closes it like any page", () => {
-  const catalog = { kind: "catalog", service: "google", returnTo: "browse" } as const;
+  const catalog = { kind: "catalog", service: "purchases", returnTo: "browse" } as const;
   const one = open(EMPTY_NAV, catalog);
   assert.equal(top(one)?.kind, "catalog");
   assert.equal(open(one, catalog), one, "Browse twice: still one page");
-  const purchases = open(one, { ...catalog, service: "purchases" });
-  assert.equal(purchases.pages.length, 2, "another service's page is a new page");
   // A font page over a catalog, then Back to the catalog.
   const font = open(one, page("ps:Inter-Regular"));
   assert.equal(top(navReducer(font, { type: "back" }))?.kind, "catalog");
@@ -115,18 +113,16 @@ test("a service's page opens over its list once, and Back closes it like any pag
   assert.equal(navReducer(one, { type: "update", id: top(one)!.id, patch: { tab: "info" } }), one);
 });
 
-test("Cmd+F: the list's Search, leaving a font page, or the Google catalog's own search", () => {
+test("Cmd+F: the toolbar's Search, leaving a font page, or nothing on Purchases", () => {
+  // No page: the toolbar's Search (on the Google Fonts view, it searches the catalog).
   assert.equal(findIntent(top(EMPTY_NAV)), "list");
   const font = open(EMPTY_NAV, page("ps:Inter-Regular"));
   assert.equal(findIntent(top(font)), "leave");
-  // The catalog keeps its query, filters and scroll: Cmd+F searches it instead.
-  const google = open(EMPTY_NAV, { kind: "catalog", service: "google", returnTo: "browse" });
-  assert.equal(findIntent(top(google)), "page");
   // The Purchases page has no search field: Cmd+F leaves it as it is.
   const purchases = open(EMPTY_NAV, { kind: "catalog", service: "purchases", returnTo: "browse" });
   assert.equal(findIntent(top(purchases)), null);
-  // A font page opened over the catalog goes back to the list's Search.
-  assert.equal(findIntent(top(open(google, page("ps:Inter-Regular")))), "leave");
+  // A font page opened over it goes back to the toolbar's Search.
+  assert.equal(findIntent(top(open(purchases, page("ps:Inter-Regular")))), "leave");
 });
 
 test("Family groups: one page at a time, its filter changes in place, and Cmd+F goes to its search", () => {

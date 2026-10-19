@@ -101,7 +101,8 @@ export interface Family {
  * with a copy of your own ("yours"), added in the last 30 days ("recent"), on now ("active") and
  * with none of your own tags ("untagged"). The sources say where fonts come from: the OS's own
  * font folders ("installed", Font Book), a folder you added ("folder"), or a service ("service":
- * Google Fonts and Purchases list your library's fonts from them; Adobe Fonts has its own page).
+ * Purchases lists your library's fonts from it; Google Fonts and Adobe Fonts have their own
+ * views: the Google catalog, and Adobe's page).
  * A "tag" lists the fonts with that tag, or one nested under it.
  *
  * Older saved views ("folder" for a macOS or service folder, "location" for a folder inside a

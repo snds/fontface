@@ -289,6 +289,7 @@ pub fn run() {
             commands::google_catalog,
             commands::google_install,
             commands::google_remove,
+            commands::google_restore,
             commands::google_preview,
             commands::google_preview_cache,
             commands::clear_google_preview_cache,
@@ -390,6 +391,8 @@ pub fn run() {
         }
         tauri::RunEvent::Exit => {
             let Some(state) = app.try_state::<AppState>() else { return };
+            // Google Fonts families removed this session were kept for Undo until now.
+            services::google::purge_removed(&state.data_dir);
             let clear = state.settings().clear_temporary_on_quit;
             if clear {
                 if let Err(e) = activation::clear_temporary(&state) {

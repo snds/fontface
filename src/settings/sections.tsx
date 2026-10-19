@@ -222,7 +222,7 @@ const SIDEBAR_GROUPS: { id: string; title: string; rows: { key: SidebarKey; labe
     title: "Sources",
     rows: [
       { key: "fontBook", label: INSTALLED_LABEL, description: `Fonts installed in ${OS}, from its font folders as one source.`, keywords: "installed system folders" },
-      { key: "google", label: "Google Fonts", description: "Your Google Fonts, and Browse to download more.", keywords: "service catalog download" },
+      { key: "google", label: "Google Fonts", description: "Google's free fonts: get them, turn them on and off, update or remove them.", keywords: "service catalog download" },
       { key: "adobe", label: "Adobe Fonts", description: "Fonts Creative Cloud has turned on.", keywords: "service creative cloud" },
       { key: "purchases", label: "Purchases", description: "Fonts you bought, found in your downloads.", keywords: "service store downloads" },
     ],

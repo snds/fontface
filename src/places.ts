@@ -12,8 +12,9 @@ import type { LibraryView, SmartKind } from "./library";
  *
  * Saved views from before (`lastView`) still open: a macOS font folder's view becomes Font Book,
  * a service folder's view becomes that service's row, and a folder inside a source (from the
- * toolbar's old folder picker) becomes that source (`migrateView`). "service:google" used to
- * open the catalog; it now lists your Google fonts, and the catalog opens from there (Browse).
+ * toolbar's old folder picker) becomes that source (`migrateView`). "service:google" is the
+ * Google Fonts catalog itself (GoogleFontsPanel), as it first was; for a while it listed your
+ * Google fonts with the catalog a page over them, and those saved views open the catalog.
  */
 
 export interface SmartEntry {

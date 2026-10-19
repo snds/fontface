@@ -19,15 +19,31 @@ const CMD = IS_MAC ? "⌘" : "Ctrl+";
 
 /**
  * The toolbar's layout switch: Tiles, Rows, Table (Cmd+1, Cmd+2, Cmd+3). A radio group, so it's
- * one Tab stop and the arrow keys move the choice.
+ * one Tab stop and the arrow keys move the choice. `unavailable`: layouts the view can't show,
+ * each with why; they're greyed out, say why on hover, and the arrow keys pass over them.
  */
-export function LayoutSwitch({ value, onChange, className }: { value: LibraryLayout; onChange: (layout: LibraryLayout) => void; className?: string }) {
+export function LayoutSwitch({
+  value,
+  onChange,
+  className,
+  unavailable = {},
+}: {
+  value: LibraryLayout;
+  onChange: (layout: LibraryLayout) => void;
+  className?: string;
+  unavailable?: Partial<Record<LibraryLayout, string>>;
+}) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const current = Math.max(0, LAYOUTS.findIndex((l) => l.id === value));
-  const move = (to: number) => {
-    const i = (to + LAYOUTS.length) % LAYOUTS.length;
-    onChange(LAYOUTS[i].id);
-    refs.current[i]?.focus();
+  const move = (to: number, step = 1) => {
+    // The next one along that the view can show (none: stay).
+    for (let n = 0; n < LAYOUTS.length; n++) {
+      const i = (((to + n * step) % LAYOUTS.length) + LAYOUTS.length) % LAYOUTS.length;
+      if (unavailable[LAYOUTS[i].id]) continue;
+      onChange(LAYOUTS[i].id);
+      refs.current[i]?.focus();
+      return;
+    }
   };
   return (
     <div
@@ -38,15 +54,16 @@ export function LayoutSwitch({ value, onChange, className }: { value: LibraryLay
         const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
         if (step !== undefined) {
           e.preventDefault();
-          move(current + step);
+          move(current + step, step);
         } else if (e.key === "Home" || e.key === "End") {
           e.preventDefault();
-          move(e.key === "Home" ? 0 : LAYOUTS.length - 1);
+          move(e.key === "Home" ? 0 : LAYOUTS.length - 1, e.key === "Home" ? 1 : -1);
         }
       }}
     >
       {LAYOUTS.map((l, i) => {
         const checked = i === current;
+        const why = unavailable[l.id];
         return (
           <Tooltip key={l.id}>
             <TooltipTrigger
@@ -59,20 +76,28 @@ export function LayoutSwitch({ value, onChange, className }: { value: LibraryLay
                   role="radio"
                   aria-checked={checked}
                   aria-label={l.label}
-                  aria-keyshortcuts={IS_MAC ? `Meta+${l.digit}` : `Control+${l.digit}`}
+                  aria-keyshortcuts={why ? undefined : IS_MAC ? `Meta+${l.digit}` : `Control+${l.digit}`}
+                  // Greyed out, it still takes the pointer and focus, so it can say why.
+                  aria-disabled={why ? true : undefined}
+                  aria-description={why}
                   tabIndex={checked ? 0 : -1}
-                  onClick={() => onChange(l.id)}
+                  onClick={() => !why && onChange(l.id)}
                   className={cn(
                     "flex h-6 w-7 items-center justify-center rounded-md",
                     checked ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:text-foreground",
+                    why && "opacity-40 hover:text-muted-foreground",
                   )}
                 />
               }
             >
               <Icon name={l.icon} size={16} filled={checked} />
             </TooltipTrigger>
-            <TooltipContent>
-              {l.label} <span className="text-muted-foreground">{`${CMD}${l.digit}`}</span>
+            <TooltipContent className="max-w-xs">
+              {why ?? (
+                <>
+                  {l.label} <span className="text-muted-foreground">{`${CMD}${l.digit}`}</span>
+                </>
+              )}
             </TooltipContent>
           </Tooltip>
         );

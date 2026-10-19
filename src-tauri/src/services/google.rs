@@ -758,6 +758,71 @@ pub fn installed_dir(data_dir: &Path, id: &str) -> Option<PathBuf> {
     by_id.remove(id).or_else(|| by_repo.remove(&slug(id))).map(|i| PathBuf::from(i.dir))
 }
 
+/// What a removed family's folder is renamed to while Remove can still be undone: hidden, so
+/// scans and the installed list skip it. Deleted when Fontface quits (`purge_removed`).
+const REMOVED_PREFIX: &str = ".removed-";
+
+/// Sets a removed family's folder aside so Remove can be undone: it's renamed to
+/// `.removed-<its name>` beside where it was. An earlier held copy of that folder goes first.
+/// Returns the held folder.
+pub fn hold_removed(dir: &Path) -> AppResult<PathBuf> {
+    let name = dir.file_name().ok_or_else(|| AppError::Invalid(format!("{} isn't a family folder", dir.display())))?;
+    let held = dir.with_file_name(format!("{REMOVED_PREFIX}{}", name.to_string_lossy()));
+    if held.exists() {
+        std::fs::remove_dir_all(&held)?;
+    }
+    std::fs::rename(dir, &held)?;
+    Ok(held)
+}
+
+/// A family put back by Undo: its folder (real path) and its font files' names.
+pub struct Restored {
+    pub dir: String,
+    pub files: Vec<String>,
+}
+
+/// Undo for Remove: the family's held folder (found by the catalog id in its install details)
+/// gets its name back, so it's installed again exactly as it was. Refused when a folder of that
+/// name is back already (it was downloaded again meanwhile), or when nothing is held (Fontface
+/// quit since, which deleted it).
+pub fn restore_removed(data_dir: &Path, id: &str) -> AppResult<Restored> {
+    let root = service_dir(data_dir, "google").ok_or_else(|| AppError::Other("Google Fonts folder missing".into()))?;
+    let held = std::fs::read_dir(&root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(REMOVED_PREFIX)))
+        .find(|p| read_sidecar(p).is_some_and(|s| s.id == id))
+        .ok_or_else(|| AppError::NotFound("Its files are gone, so it can't be put back. Get it again instead.".into()))?;
+    let name = held.file_name().unwrap_or_default().to_string_lossy()[REMOVED_PREFIX.len()..].to_string();
+    let dest = held.with_file_name(&name);
+    if name.is_empty() || dest.exists() || installed_dir(data_dir, id).is_some() {
+        return Err(AppError::Invalid("It was downloaded again, so there's nothing to put back.".into()));
+    }
+    std::fs::rename(&held, &dest)?;
+    let files = std::fs::read_dir(&dest)?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| scanner::is_font_file(Path::new(n)))
+        .collect();
+    let real = std::fs::canonicalize(&dest).unwrap_or(dest);
+    Ok(Restored { dir: real.to_string_lossy().into_owned(), files })
+}
+
+/// Deletes every removed family's held folder: when Fontface quits, and at launch in case it
+/// didn't quit cleanly.
+pub fn purge_removed(data_dir: &Path) {
+    let Some(root) = service_dir(data_dir, "google") else { return };
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(REMOVED_PREFIX) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Percent-encodes the characters Google's file names use that aren't safe in a URL path.
 fn urlencode_path(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -885,6 +950,72 @@ mod tests {
                 entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with('.')).collect()
             })
             .unwrap_or_default()
+    }
+
+    /// An installed family as `commit` leaves it: a folder named for the family, with a font
+    /// file, its license and its install details. Returns the folder.
+    fn installed_family(data: &Path, id: &str, family: &str) -> PathBuf {
+        let dir = service_dir(data, "google").unwrap().join(family);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{family}-Regular.ttf")), font(family, "abc")).unwrap();
+        std::fs::write(dir.join("OFL.txt"), b"SIL Open Font License").unwrap();
+        let sidecar = Sidecar { id: id.into(), family: family.into(), last_modified: "2024-01-02".into(), source: "google/fonts:ofl/x".into(), upstream: BTreeMap::new() };
+        std::fs::write(dir.join(SIDECAR), serde_json::to_vec(&sidecar).unwrap()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn removed_families_are_held_for_undo_until_quit() {
+        let data = data_dir("remove-undo");
+        let dir = installed_family(&data, "inter", "Inter");
+        let other = installed_family(&data, "lora", "Lora");
+
+        // Remove: out of the installed list and hidden from scans, but not deleted yet.
+        let held = hold_removed(&dir).unwrap();
+        assert!(!dir.exists() && held.exists());
+        assert_eq!(leftovers(&data), vec![".removed-Inter".to_string()]);
+        assert!(installed_dir(&data, "inter").is_none());
+        assert!(installed_dir(&data, "lora").is_some(), "other families stay");
+
+        // Undo: back under its own name, installed as before, with its font files named.
+        let back = restore_removed(&data, "inter").unwrap();
+        assert_eq!(back.files, vec!["Inter-Regular.ttf".to_string()]);
+        assert_eq!(Path::new(&back.dir).file_name().unwrap(), "Inter");
+        assert!(installed_dir(&data, "inter").is_some());
+        assert!(leftovers(&data).is_empty());
+        assert!(read_sidecar(Path::new(&back.dir)).is_some_and(|s| s.id == "inter"), "install details kept");
+
+        // Removed again and again: only the latest copy is held.
+        hold_removed(&dir).unwrap();
+        installed_family(&data, "inter", "Inter");
+        hold_removed(&dir).unwrap();
+        assert_eq!(leftovers(&data), vec![".removed-Inter".to_string()]);
+
+        // Quitting deletes what's held; Undo then says it's gone. Other families are untouched.
+        purge_removed(&data);
+        assert!(leftovers(&data).is_empty());
+        assert!(matches!(restore_removed(&data, "inter"), Err(AppError::NotFound(_))));
+        assert!(other.join("Lora-Regular.ttf").exists());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn undo_never_replaces_a_family_downloaded_again() {
+        let data = data_dir("remove-redownload");
+        let dir = installed_family(&data, "inter", "Inter");
+        hold_removed(&dir).unwrap();
+        // Downloaded again before Undo: the new copy stays, the held one isn't put back.
+        installed_family(&data, "inter", "Inter");
+        assert!(matches!(restore_removed(&data, "inter"), Err(AppError::Invalid(_))));
+        assert!(dir.join(SIDECAR).exists());
+        assert_eq!(leftovers(&data), vec![".removed-Inter".to_string()]);
+        // Nothing held for a family that was never removed.
+        assert!(matches!(restore_removed(&data, "lora"), Err(AppError::NotFound(_))));
+        // A launch after a crash clears what was held, like other leftovers.
+        super::super::sweep_leftovers(&data);
+        assert!(leftovers(&data).is_empty());
+        assert!(installed_dir(&data, "inter").is_some());
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]

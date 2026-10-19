@@ -272,7 +272,11 @@ export function Sidebar(props: Props) {
             count={folder ? (folderCounts.get(folder.id) ?? 0) : 0}
             badge={!google && newPurchases > 0 ? { text: `${n(newPurchases)} new`, said: `${n(newPurchases)} new ${newPurchases === 1 ? "download" : "downloads"} to review` } : undefined}
             selected={selected}
-            hint={google ? "Google Fonts in your library. Browse to download more." : "Fonts you bought, added from your downloads. Browse to review new downloads."}
+            hint={
+              google
+                ? "Google's free fonts: get them, turn them on and off, update or remove them. The number counts the styles you downloaded."
+                : "Fonts you bought, added from your downloads. Browse to review new downloads."
+            }
             onOpen={open}
             actions={scanButton(list, !!scan, google ? "Google Fonts" : "Purchases")}
           />

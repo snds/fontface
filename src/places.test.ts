@@ -100,7 +100,7 @@ test("saved views from before still open, in today's terms", () => {
   assert.deepEqual(migrate({ kind: "location", path: "/Users/me/Library/Application Support/fontface/google/Inter" }), { kind: "service", id: "google" });
   assert.deepEqual(migrate({ kind: "location", path: "/Users/me/Type/Alpha/Sans" }), { kind: "folder", id: 11 });
   assert.deepEqual(migrate({ kind: "location", path: "/Elsewhere/x" }), { kind: "all" }, "no source holds it any more");
-  // Unchanged: your folders, Font Book, services (Google Fonts now lists your Google fonts), tags.
+  // Unchanged: your folders, Font Book, services (Google Fonts' row now opens the catalog itself), tags.
   for (const v of [
     { kind: "folder", id: 10 },
     { kind: "folder", id: 99 },
@@ -147,6 +147,18 @@ test("a saved view opens if it's still there, else All Fonts", () => {
   assert.deepEqual(restoreView({ kind: "recent" }, ctx({ recent: false })), { kind: "all" }, "hidden in the sidebar");
   assert.deepEqual(restoreView({ kind: "folder", id: 2 }, ctx({ fontBook: false })), { kind: "all" });
   assert.ok(stillThere({ kind: "service", id: "google" }, ctx()));
+});
+
+test("Google Fonts saved from before opens its catalog view", () => {
+  // Its row's view, saved when it listed your Google fonts (the catalog was a page over it,
+  // and pages aren't saved): the same view, which is the catalog now. Also from its folder.
+  for (const saved of [{ kind: "service", id: "google" }, { kind: "folder", id: 4 }, { kind: "location", path: "/Users/me/Library/Application Support/fontface/google/Inter" }] as SavedView[]) {
+    assert.deepEqual(restoreView(saved, ctx()), { kind: "service", id: "google" });
+  }
+  // Nothing downloaded yet (no folder): still there.
+  assert.deepEqual(restoreView({ kind: "service", id: "google" }, { ...ctx(), services: [{ id: "google", folderId: null }] }), { kind: "service", id: "google" });
+  // Hidden in the sidebar: All Fonts.
+  assert.deepEqual(restoreView({ kind: "service", id: "google" }, ctx({ google: false })), { kind: "all" });
 });
 
 test("Back says where it goes back to", () => {

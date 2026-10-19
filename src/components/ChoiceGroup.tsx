@@ -1,5 +1,6 @@
 import { useId, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { Tip } from "./google/tipShim";
 
 interface Props<T extends string> {
   /** The group's name for screen readers. Leave it out when `labelledBy` names it. */
@@ -9,8 +10,9 @@ interface Props<T extends string> {
   /** Id of an element that describes the group. */
   describedBy?: string;
   value: T;
-  /** `description` shows only with the "cards" look. */
-  options: { value: T; label: React.ReactNode; description?: React.ReactNode }[];
+  /** `description` shows only with the "cards" look. `tip`: the option's tooltip, what picking
+   *  it does ("Shows fonts as a grid of cards"); also its description for screen readers. */
+  options: { value: T; label: React.ReactNode; description?: React.ReactNode; tip?: string }[];
   onChange: (value: T) => void;
   /** "segments": joined buttons in a frame. "chips": separate rounded pills. "cards": one
    *  full-width row per choice, with a radio dot and a description. */
@@ -19,7 +21,7 @@ interface Props<T extends string> {
 
 /**
  * A single-choice control (WAI-ARIA radio group): one tab stop, arrow keys move the choice,
- * Home/End jump to the ends.
+ * Home/End jump to the ends. An option with a `tip` has a design-system tooltip.
  */
 export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, value, options, onChange, look = "segments" }: Props<T>) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -67,9 +69,18 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
         const ref = (el: HTMLButtonElement | null) => {
           refs.current[i] = el;
         };
+        // With a tip, the option is wrapped in its tooltip (the button itself is unchanged).
+        const tipped = (button: React.ReactElement) =>
+          o.tip ? (
+            <Tip key={o.value} tip={o.tip}>
+              {button}
+            </Tip>
+          ) : (
+            button
+          );
         if (look === "cards") {
           const id = `${base}-${i}`;
-          return (
+          return tipped(
             <button
               key={o.value}
               ref={ref}
@@ -104,10 +115,10 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
                   </span>
                 )}
               </span>
-            </button>
+            </button>,
           );
         }
-        return (
+        return tipped(
           <button
             key={o.value}
             ref={ref}
@@ -124,7 +135,7 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
             )}
           >
             {o.label}
-          </button>
+          </button>,
         );
       })}
     </div>

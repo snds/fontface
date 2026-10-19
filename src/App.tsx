@@ -12,6 +12,7 @@ import {
   type FontPageTab,
   type FontSummary,
   type GoogleFamily,
+  type GoogleRemoved,
   type LibraryLayout,
   type PreviewOptions,
   type PurchaseFind,
@@ -96,7 +97,10 @@ import { PreviewStyleContext, usePreviewStyleValue } from "@/components/PreviewS
 import { FontPage } from "@/components/fontPage/FontPage";
 import { BackButton } from "@/components/fontPage/PageHeader";
 import { StateWordingContext, type SwitchWording } from "@/components/ActivationSwitch";
-import { GOOGLE_SEARCH_ID, GoogleFontsPanel } from "@/components/GoogleFontsPanel";
+import { CatalogViewOptions, GoogleFontsPanel } from "@/components/GoogleFontsPanel";
+import { useGoogleView } from "@/components/google/useGoogleView";
+import { ChoiceGroup } from "@/components/ChoiceGroup";
+import { CATALOG_SHOWS, countText } from "@/googleCatalog";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
 import { IS_MAC, type PageBack } from "@/components/TitleBar";
@@ -126,8 +130,13 @@ const LIVE_REFRESH_MS = 4000;
 const ANNOUNCE_MS = 15000;
 /** Recently Added starts newest first, whatever the library's sort is (see `chooseSort`). */
 const RECENT_SORT: SortOrder = { key: "added", desc: true };
-/** The Browse button on Google Fonts and Purchases: focus comes back to it from their page. */
+/** The Browse button on Purchases: focus comes back to it from its page. */
 const BROWSE_ID = "browse-service";
+/** The layouts the Google Fonts view can't show yet, and why (the toolbar greys them out). */
+const GOOGLE_LAYOUTS = {
+  tiles: "Google Fonts shows as rows. Tiles aren't available here yet.",
+  table: "Google Fonts shows as rows. The table isn't available here yet.",
+} as const;
 
 /** Unix seconds now, to the hour: Recently Added's 30 days move on while Fontface stays open. */
 function useHourNow(): number {
@@ -204,7 +213,7 @@ export default function App() {
   /** Google Fonts families with a download or removal in progress (kept here, so leaving and
    *  returning to the Google page still shows them). */
   const [googleBusy, setGoogleBusy] = useState<Set<string>>(new Set());
-  /** Bumped after each Google Fonts change, so the page reloads its catalog. */
+  /** Bumped after each Google Fonts change, so the Google Fonts view reloads its catalog. */
   const [googleVersion, setGoogleVersion] = useState(0);
   const [googleUpdatingAll, setGoogleUpdatingAll] = useState(false);
   /** The same busy set, readable synchronously (so two clicks can't both start). */
@@ -387,7 +396,7 @@ export default function App() {
     },
     [clearPages],
   );
-  /** Browse on Google Fonts or Purchases: that service's own page, over its list. */
+  /** Browse on Purchases: its own page, over its list. */
   const openCatalog = useCallback(
     (service: CatalogPageEntry["service"]) => {
       openPage({ kind: "catalog", service, returnTo: BROWSE_ID });
@@ -395,9 +404,10 @@ export default function App() {
     },
     [openPage, announce],
   );
-  // ⌘F (Ctrl+F on Windows) goes to Search, leaving a font page if one is open. On the Google
-  // Fonts catalog it goes to the catalog's own search, and on Purchases (no search) it does
-  // nothing, so neither page closes and loses its place (nav.findIntent).
+  // ⌘F (Ctrl+F on Windows) goes to Search, leaving a font page if one is open (on the Google
+  // Fonts view, Search searches the catalog). On Family groups it goes to that page's own
+  // search, and on Purchases (no search) it does nothing, so neither page closes and loses its
+  // place (nav.findIntent).
   const onTop = nav.pages[nav.pages.length - 1];
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -414,7 +424,7 @@ export default function App() {
           break;
         case "page": {
           e.preventDefault();
-          const field = document.getElementById(onTop?.kind === "groups" ? GROUPS_SEARCH_ID : GOOGLE_SEARCH_ID);
+          const field = document.getElementById(GROUPS_SEARCH_ID);
           if (field instanceof HTMLInputElement) {
             field.focus();
             field.select();
@@ -996,18 +1006,53 @@ export default function App() {
     }
   };
 
-  /** Turns a Google Fonts family off, deletes its files, and updates the library. */
-  const removeGoogle = (id: string) =>
-    googleOp(id, async () => {
+  /**
+   * Turns a downloaded Google Fonts family off, deletes its files (Fontface keeps them aside
+   * until it quits, for Undo) and updates the library. Asked first on the Google Fonts view.
+   * The message after it offers Undo, as Remove from Library does.
+   */
+  const removeGoogle = async (fam: GoogleFamily) => {
+    const removed = await googleOp(fam.id, async () => {
       mutationEpoch.current++;
       try {
-        await api.googleRemove(id);
+        return await api.googleRemove(fam.id);
       } finally {
         mutationEpoch.current++;
+        const folder = googleFolderNow();
+        if (folder) await rescan(folder).catch(() => {});
       }
-      const folder = googleFolderNow();
-      if (folder) await rescan(folder);
     });
+    announce(`Removed ${fam.family}`);
+    toast.success(`Removed ${fam.family}`, {
+      description: "Its downloaded files were turned off and deleted.",
+      action: { label: "Undo", onClick: () => void undoRemoveGoogle(fam, removed) },
+      // As long as Remove from Library's Undo.
+      duration: 10_000,
+    });
+  };
+
+  /** Undo for Remove: the family's files go back, and what was on turns back on the same way
+   *  (until logout, or to stay). */
+  const undoRemoveGoogle = async (fam: GoogleFamily, removed: GoogleRemoved) => {
+    try {
+      await googleOp(fam.id, async () => {
+        const result = await api.googleRestore(fam.id);
+        const wasOn = new Set(removed.wasActiveFiles);
+        const temporary = new Set(removed.temporaryFiles);
+        await bringIntoLibrary(
+          "google",
+          result.dir,
+          result.files,
+          (name) => wasOn.has(name),
+          (name) => (temporary.has(name) ? "temporary" : "persistent"),
+        );
+      });
+      announce(`Put back ${fam.family}`);
+      toast.success(`Put back ${fam.family}`);
+    } catch (e) {
+      toast.error(`Couldn't put back ${fam.family}`, { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   // Group the whole library once; views filter faces, so each Face keeps all of its copies.
   // Families group by name (unless that's off in View options), and by your choices (familyGroups.ts).
@@ -1105,6 +1150,9 @@ export default function App() {
   // and Back, they wait while a menu, dialog or popover is open (the list it hands focus back to
   // would be gone) and during a drag (the rows being dragged would change under it).
   const adobePage = view.kind === "service" && view.id === "adobe";
+  // Google Fonts' own view: the catalog, under the same toolbar (GoogleFontsPanel). It has one
+  // layout and the catalog's own order, so only the size shortcuts work there.
+  const googleView = view.kind === "service" && view.id === "google";
   const listShowing = !settingsOpen && !pageOpen && !adobePage;
   useEffect(() => {
     if (!listShowing) return;
@@ -1115,7 +1163,7 @@ export default function App() {
         e.preventDefault();
         // Holding the keys down picks it once; the View menu's item for the same press doesn't
         // pick it again.
-        if (!e.repeat && shortcutGuard.allow(`layout:${next}`, "key", performance.now())) chooseLayout(next);
+        if (!googleView && !e.repeat && shortcutGuard.allow(`layout:${next}`, "key", performance.now())) chooseLayout(next);
         return;
       }
       const step = sizeShortcut(e, IS_MAC);
@@ -1126,7 +1174,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [listShowing, chooseLayout, stepPreviewSize, shortcutGuard]);
+  }, [listShowing, googleView, chooseLayout, stepPreviewSize, shortcutGuard]);
   // A font page finds its family by face key, whatever the list shows (filters don't apply there).
   const familyOfFace = useMemo(() => {
     const map = new Map<string, Family>();
@@ -1162,10 +1210,10 @@ export default function App() {
   const source = sourceOf(view, folders, services);
   const sourceKey = source ? `${source}:${sourceFolders(source, folders, services).map((f) => `${f.id}=${f.path}`).join(",")}` : "";
   const sourceRoots = useMemo(() => (source ? sourceFolders(source, folders, services) : []), [sourceKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const browseService = source === "google" || source === "purchases" ? source : null;
-  // A source's view shows only its own folders' scans: Google Fonts or Purchases with nothing in
-  // the library yet (no folder) keeps offering Browse while another folder is scanned. Other
-  // places can gain fonts from any scan.
+  const browsePurchases = source === "purchases";
+  // A source's view shows only its own folders' scans: Purchases with nothing in the library yet
+  // (no folder) keeps offering Browse while another folder is scanned. Other places can gain
+  // fonts from any scan.
   const viewScan = source ? sourceRoots.map((f) => scans.get(f.id)).find(Boolean) : [...scans.values()][0];
   const resetKey = `${viewKey(view)}:${listStatus}:${variableOnly}:${query}`;
   // Empty list with filters on: say which fonts were asked for, e.g. "No active variable fonts here."
@@ -1239,6 +1287,24 @@ export default function App() {
   /** Cmd+T on a font page opens its Tags popover: the page asked for, and a count that only grows. */
   const [tagsAsk, setTagsAsk] = useState({ page: 0, n: 0 });
   const allFaces = useMemo(() => allFamilies.flatMap((f) => f.faces), [allFamilies]);
+  // The Google Fonts view's catalog and filters: the toolbar shows and changes them, the view
+  // lists the families they keep. The toolbar's search and Variable work on it too.
+  const google = useGoogleView({ shown: googleView, version: googleVersion, faces: allFaces, query, variableOnly });
+  const familyOfFaceKey = useCallback((key: string) => familyOfFace.get(key), [familyOfFace]);
+  const googleShows = CATALOG_SHOWS.map((o) => ({
+    value: o.value,
+    tip: o.tip,
+    // How many have an update, so it's seen without picking the filter.
+    label:
+      o.value === "updates" && google.counts.updates > 0 ? (
+        <span className="flex items-center gap-1">
+          {o.label}
+          <span className="rounded-full bg-primary px-1.5 font-mono text-[11px] text-primary-foreground tabular-nums">{google.counts.updates.toLocaleString()}</span>
+        </span>
+      ) : (
+        o.label
+      ),
+  }));
   const faceOf = useCallback(
     (key: string): FaceRef | undefined => {
       const family = familyOfFace.get(key);
@@ -1454,6 +1520,8 @@ export default function App() {
       return;
     }
     if (!listShowing) return;
+    // The Google Fonts view: only the size (the menus have the rest greyed out).
+    if (googleView && c.kind !== "size") return;
     switch (c.kind) {
       case "layout":
         return chooseLayout(c.layout);
@@ -1475,8 +1543,9 @@ export default function App() {
   const syncMenus = () => {
     const state = nativeMenuState({
       list: listShowing,
+      catalog: googleView,
       back: nav.pages.length > 0 && !settingsOpen,
-      layout,
+      layout: googleView ? "rows" : layout,
       groupStyles,
       sort,
       size,
@@ -1595,10 +1664,18 @@ export default function App() {
                 onSize={setSize}
                 familyCount={filtered.length}
                 fontCount={styleCount}
-                layout={layout}
-                onLayout={chooseLayout}
-                browse={browseService ? <BrowseButton service={browseService} newPurchases={newPurchases} onBrowse={openCatalog} /> : undefined}
+                // The Google Fonts view: its own filter, search words and count, and one layout.
+                filter={googleView ? <ChoiceGroup label="Show families" value={google.show} options={googleShows} onChange={google.setShow} /> : undefined}
+                searchLabel={googleView ? "Search Google Fonts" : undefined}
+                countText={googleView ? (google.catalog ? countText(google.visible.length, google.catalog.families.length) : "") : undefined}
+                layout={googleView ? "rows" : layout}
+                onLayout={googleView ? () => {} : chooseLayout}
+                unavailableLayouts={googleView ? GOOGLE_LAYOUTS : undefined}
+                browse={browsePurchases ? <BrowseButton newPurchases={newPurchases} onBrowse={() => openCatalog("purchases")} /> : undefined}
                 viewOptions={
+                  googleView ? (
+                    <CatalogViewOptions preview={previewOptions} onPreview={choosePreview} dark={dark} />
+                  ) : (
                   <ViewOptions
                     layout={layout}
                     onLayout={chooseLayout}
@@ -1617,9 +1694,41 @@ export default function App() {
                     onPreview={choosePreview}
                     dark={dark}
                   />
+                  )
                 }
               />
-              {families.length > 0 ? (
+              {googleView ? (
+                <PreviewStyleContext.Provider value={previewStyle}>
+                  <GoogleFontsPanel
+                    ref={listRef}
+                    view={google}
+                    fonts={fonts}
+                    previewText={previewText}
+                    size={size}
+                    onlinePreviews={settings?.googlePreviews ?? false}
+                    onOpenSettings={() => {
+                      setSettingsSection("general");
+                      openSettings();
+                    }}
+                    yoursFirst={settings?.catalogYoursFirst ?? DEFAULT_SETTINGS.catalogYoursFirst}
+                    onYoursFirst={(on) => updateSettings({ catalogYoursFirst: on })}
+                    busy={googleBusy}
+                    switching={busy}
+                    updatingAll={googleUpdatingAll}
+                    onInstall={installGoogle}
+                    onRemove={removeGoogle}
+                    onUpdateAll={updateAllGoogle}
+                    onActivate={(ids, on, scope) => void setActivation(ids, on, undefined, scope)}
+                    onOpen={openFont}
+                    onTarget={(target) => {
+                      listTarget.current = target;
+                      scheduleMenus();
+                    }}
+                    familyOfFace={familyOfFaceKey}
+                    resetKey={`${query}:${google.category}:${google.show}:${variableOnly}`}
+                  />
+                </PreviewStyleContext.Provider>
+              ) : families.length > 0 ? (
                 <PreviewStyleContext.Provider value={previewStyle}>
                 <LibraryPane
                   ref={listRef}
@@ -1694,40 +1803,19 @@ export default function App() {
                       />
                     ) : page.kind === "catalog" ? (
                       <CatalogPage placeName={placeName} onBack={nav.back}>
-                        {(back) =>
-                          page.service === "google" ? (
-                            <GoogleFontsPanel
-                              fonts={fonts}
-                              previewText={previewText}
-                              onlinePreviews={settings?.googlePreviews ?? false}
-                              yoursFirst={settings?.catalogYoursFirst ?? DEFAULT_SETTINGS.catalogYoursFirst}
-                              onYoursFirst={(on) => updateSettings({ catalogYoursFirst: on })}
-                              onOpenSettings={() => {
-                                setSettingsSection("general");
-                                openSettings();
-                              }}
-                              busy={googleBusy}
-                              version={googleVersion}
-                              updatingAll={googleUpdatingAll}
-                              onInstall={installGoogle}
-                              onRemove={removeGoogle}
-                              onUpdateAll={updateAllGoogle}
-                              back={back}
-                            />
-                          ) : (
-                            <PurchasesPanel
-                              version={purchasesVersion}
-                              busy={purchaseBusy}
-                              onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
-                              onImport={importPurchase}
-                              onImportPath={importPurchasePath}
-                              onReplace={replacePurchase}
-                              onRemove={removePurchase}
-                              onSubscriptionEnded={purchaseSubscriptionEnded}
-                              back={back}
-                            />
-                          )
-                        }
+                        {(back) => (
+                          <PurchasesPanel
+                            version={purchasesVersion}
+                            busy={purchaseBusy}
+                            onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
+                            onImport={importPurchase}
+                            onImportPath={importPurchasePath}
+                            onReplace={replacePurchase}
+                            onRemove={removePurchase}
+                            onSubscriptionEnded={purchaseSubscriptionEnded}
+                            back={back}
+                          />
+                        )}
                       </CatalogPage>
                     ) : page.kind === "compare" ? (
                       <ComparePage
@@ -1855,11 +1943,10 @@ export default function App() {
   );
 }
 
-/** Browse, on Google Fonts and Purchases: opens the service's own page (the catalog, or new
- *  downloads and imports) over the list, with Back. Purchases shows how many downloads are new. */
-function BrowseButton({ service, newPurchases, onBrowse }: { service: CatalogPageEntry["service"]; newPurchases: number; onBrowse: (service: CatalogPageEntry["service"]) => void }) {
-  const google = service === "google";
-  const fresh = !google && newPurchases > 0;
+/** Browse, on Purchases: opens its own page (new downloads and imports) over the list, with
+ *  Back. It shows how many downloads are new. */
+function BrowseButton({ newPurchases, onBrowse }: { newPurchases: number; onBrowse: () => void }) {
+  const fresh = newPurchases > 0;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -1869,12 +1956,12 @@ function BrowseButton({ service, newPurchases, onBrowse }: { service: CatalogPag
             variant="outline"
             size="sm"
             className="shrink-0"
-            aria-label={google ? "Browse Google Fonts" : `Browse purchases${fresh ? `, ${newPurchases.toLocaleString()} new ${newPurchases === 1 ? "download" : "downloads"}` : ""}`}
-            onClick={() => onBrowse(service)}
+            aria-label={`Browse purchases${fresh ? `, ${newPurchases.toLocaleString()} new ${newPurchases === 1 ? "download" : "downloads"}` : ""}`}
+            onClick={onBrowse}
           />
         }
       >
-        <Icon name={google ? "travel_explore" : "storefront"} size={16} />
+        <Icon name="storefront" size={16} />
         <span className="@max-[1000px]/toolbar:hidden">Browse</span>
         {fresh && (
           <span aria-hidden className="rounded-full bg-primary px-1.5 font-mono text-[11px] text-primary-foreground tabular-nums">
@@ -1882,7 +1969,7 @@ function BrowseButton({ service, newPurchases, onBrowse }: { service: CatalogPag
           </span>
         )}
       </TooltipTrigger>
-      <TooltipContent>{google ? "Browse and download Google Fonts" : "Review new downloads, import fonts you bought, and manage watched folders"}</TooltipContent>
+      <TooltipContent>Review new downloads, import fonts you bought, and manage watched folders</TooltipContent>
     </Tooltip>
   );
 }
@@ -1901,20 +1988,18 @@ function EmptyPlace({
   onBrowse: (service: CatalogPageEntry["service"]) => void;
 }) {
   const quiet = (text: string) => <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">{text}</div>;
-  if (view.kind === "service" && view.id !== "adobe") {
-    const google = view.id === "google";
+  // (Google Fonts never gets here: its view is the catalog.)
+  if (view.kind === "service" && view.id === "purchases") {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-        <Icon name={google ? "cloud" : "shopping_bag"} size={40} weight={300} className="text-muted-foreground" />
-        <h2 className="text-lg font-semibold">{google ? "No Google Fonts in your library yet" : "No purchased fonts in your library yet"}</h2>
+        <Icon name="shopping_bag" size={40} weight={300} className="text-muted-foreground" />
+        <h2 className="text-lg font-semibold">No purchased fonts in your library yet</h2>
         <p className="max-w-sm text-sm text-muted-foreground">
-          {google
-            ? "Browse Google Fonts to download free fonts. They're added here and turned on."
-            : "Browse your purchases to add fonts you bought, from your downloads or from a zip or folder."}
+          Browse your purchases to add fonts you bought, from your downloads or from a zip or folder.
         </p>
-        <Button onClick={() => onBrowse(view.id as CatalogPageEntry["service"])}>
-          <Icon name={google ? "travel_explore" : "storefront"} size={16} />
-          {google ? "Browse Google Fonts" : "Browse Purchases"}
+        <Button onClick={() => onBrowse("purchases")}>
+          <Icon name="storefront" size={16} />
+          Browse Purchases
         </Button>
       </div>
     );
