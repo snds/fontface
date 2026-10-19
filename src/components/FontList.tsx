@@ -231,9 +231,11 @@ export function FontList({ ref, ...props }: Props) {
   // renders (its range changes, or a scroll starts or ends). While a reveal is on its way, the
   // row is about to be in sight, so the list doesn't flash its own ring meanwhile.
   const scrollTop = virtualizer.scrollOffset ?? 0;
+  const revealPending = reveal !== revealed.current;
   const activeOnScreen =
-    activeItem !== undefined &&
-    (reveal !== revealed.current || (activeItem.end > scrollTop && activeItem.start < scrollTop + (virtualizer.scrollRect?.height ?? Infinity)));
+    activeIndex >= 0 &&
+    (revealPending ||
+      (activeItem !== undefined && activeItem.end > scrollTop && activeItem.start < scrollTop + (virtualizer.scrollRect?.height ?? Infinity)));
 
   const pageSize = () => Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / (Math.round(size * 1.35) + 44)));
 
@@ -337,8 +339,12 @@ export function FontList({ ref, ...props }: Props) {
                 setKeyboard(fromKeyboard);
                 sel.ensureFocus(firstOnScreen());
                 // Tab (or Back) into the list: its active row comes into view, so the ring,
-                // the active descendant and Space all have a row you can see.
-                if (fromKeyboard) revealActive();
+                // the active descendant and Space all have a row you can see. Focus coming back
+                // from a menu or dialog the list opened (or from another window) leaves the
+                // scroll where it was: the user was working there.
+                const from = e.relatedTarget as HTMLElement | null;
+                const fromPopup = !from || !!from.closest('[role="menu"], [role="dialog"], [role="alertdialog"], [role="listbox"]');
+                if (fromKeyboard && !fromPopup) revealActive();
               }}
               onBlur={(e) => {
                 if (e.target === e.currentTarget) setFocused(false);

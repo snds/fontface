@@ -6,7 +6,10 @@
  *
  * Returns the index in `queue` (oldest first) to take, or -1 when it's empty.
  */
-export function nextLoad(queue: readonly { name: string }[], urgent: { has(name: string): boolean }): number {
+export function nextLoad(queue: readonly { name: string }[], urgent: { has(name: string): boolean; readonly size: number }): number {
+  // Nothing urgent (the library list): no need to walk the queue. Clearing out thousands of
+  // loads for rows scrolled away stays linear.
+  if (urgent.size === 0) return queue.length - 1;
   for (let i = queue.length - 1; i >= 0; i--) if (urgent.has(queue[i].name)) return i;
   return queue.length - 1;
 }
