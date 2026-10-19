@@ -284,6 +284,37 @@ export interface GoogleCatalog {
   stale: boolean;
 }
 
+/**
+ * What `google_preview` asks for. "row": what a catalog row shows (Rust picks the family's name,
+ * its icons, or a sample of its script). "alphabet": a fixed set of letters (printable ASCII and
+ * Latin-1), for drawing typed text, which never leaves the Mac.
+ */
+export type GooglePreviewKind = "row" | "alphabet";
+
+/**
+ * `google_preview`: an online preview of a family that isn't downloaded. Must match GooglePreview
+ * in src-tauri. "ready": the file is in the preview cache. "off": online previews are turned off
+ * in Settings. "offline": Google couldn't be reached (Rust waits a while before trying again).
+ * "unavailable": Google has no preview of it, or the file can't draw anything. "tooLarge": the
+ * file is over the size limit.
+ */
+export interface GooglePreview {
+  state: "ready" | "off" | "offline" | "unavailable" | "tooLarge";
+  /** "google/<id>/<token>/<file kind>": where `ff://` serves the cached file (fontLoader). */
+  path?: string;
+  /** What the row draws from the file: the family name, the icons or the script sample. */
+  text?: string;
+  /** `text` isn't the family name, so the View options' case doesn't apply to it. */
+  sample?: boolean;
+  /** The file's preview profile, as the library has for its fonts. */
+  profile?: PreviewInfo;
+}
+
+/** `google_preview_cache`: how much the online preview files take up. */
+export interface GooglePreviewCache {
+  bytes: number;
+}
+
 export interface GoogleInstallResult {
   dir: string;
   files: string[];
@@ -538,6 +569,10 @@ export interface AppSettings {
   tableDensity: TableDensity;
   /** The View options' preview styling, for every layout and the font page. */
   preview: PreviewOptions;
+  /** Settings › General › "Show previews of Google Fonts you haven't downloaded". On by default.
+   *  Off: nothing is sent to Google for previews, and those families show their names in the
+   *  interface font. */
+  googlePreviews: boolean;
 }
 
 /** Only the keys given change; `sidebar` and `preview` may be partial too. */
@@ -658,6 +693,11 @@ export const api = {
   googleCatalog: (refresh = false) => invoke<GoogleCatalog>("google_catalog", { refresh }),
   googleInstall: (id: string) => invoke<GoogleInstallResult>("google_install", { id }),
   googleRemove: (id: string) => invoke<void>("google_remove", { id }),
+  /** An online preview file of a family (googlePreviewStore.ts). The only call that may use the
+   *  network for previews, and only while `googlePreviews` is on. */
+  googlePreview: (id: string, kind: GooglePreviewKind) => invoke<GooglePreview>("google_preview", { id, kind }),
+  googlePreviewCache: () => invoke<GooglePreviewCache>("google_preview_cache"),
+  clearGooglePreviewCache: () => invoke<void>("clear_google_preview_cache"),
   adobeStatus: () => invoke<AdobeStatus>("adobe_status"),
   purchasesStatus: () => invoke<PurchasesStatus>("purchases_status"),
   purchasesSetWatching: (on: boolean) => invoke<void>("purchases_set_watching", { on }),

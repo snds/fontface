@@ -64,6 +64,9 @@ pub fn relocate(conn: &mut Connection, folder_id: i64, new_root: &Path, force: b
     if crate::services::adobe::is_adobe_path(&canonical) {
         return Err(AppError::Invalid("That folder holds Adobe Fonts synced by Creative Cloud, which Fontface doesn't use".into()));
     }
+    if crate::services::google::previews::is_preview_cache_path(&canonical) {
+        return Err(AppError::Invalid("That folder holds Fontface's previews of Google Fonts, not fonts for your library".into()));
+    }
     let new = canonical.to_string_lossy().into_owned();
     let old = folder.path.clone();
     if new == old {

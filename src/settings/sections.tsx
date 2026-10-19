@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
 import { api, type AppSettings, type FontSummary, type PurchasesStatus, type RemovedFile, type SidebarSections, type TagBackup, type TurnOffAllReport } from "@/api";
+import { formatBytes } from "@/familyFacts";
+import { refreshGooglePreviews } from "@/googlePreviewStore";
 import { INSTALLED_LABEL } from "@/library";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
 import { IS_MAC } from "@/components/TitleBar";
@@ -89,6 +91,9 @@ function useOutsideState(onPurchasesChanged: () => void) {
   const [backups, setBackups] = useState<TagBackup[] | null>(null);
   const [backingUp, setBackingUp] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
+  /** The Google Fonts preview cache's size in bytes; null until read (or if it can't be). */
+  const [previewCache, setPreviewCache] = useState<number | null>(null);
+  const [clearingCache, setClearingCache] = useState(false);
 
   const loadPurchases = useCallback(() => {
     api.purchasesStatus().then(
@@ -102,12 +107,19 @@ function useOutsideState(onPurchasesChanged: () => void) {
   const loadBackups = useCallback(() => {
     api.backupsList().then(setBackups, () => setBackups([]));
   }, []);
+  const loadPreviewCache = useCallback(() => {
+    api.googlePreviewCache().then(
+      (c) => setPreviewCache(c.bytes),
+      () => setPreviewCache(null),
+    );
+  }, []);
 
   useEffect(() => {
     loadPurchases();
     loadBackups();
+    loadPreviewCache();
     getVersion().then(setVersion, () => {});
-  }, [loadPurchases, loadBackups]);
+  }, [loadPurchases, loadBackups, loadPreviewCache]);
 
   const setWatching = async (on: boolean) => {
     setPurchases((p) => p && { ...p, watching: on });
@@ -136,7 +148,34 @@ function useOutsideState(onPurchasesChanged: () => void) {
     }
   };
 
-  return { purchases, purchasesError, watchBusy, setWatching, backups, backingUp, backUpNow, version };
+  const clearPreviewCache = async () => {
+    setClearingCache(true);
+    try {
+      await api.clearGooglePreviewCache();
+      toast.success("Preview cache cleared");
+    } catch (e) {
+      toast.error("Couldn't clear the preview cache", { description: String(e) });
+    } finally {
+      setClearingCache(false);
+      // Rows still showing a family ask again; fonts already on screen keep drawing.
+      refreshGooglePreviews();
+      loadPreviewCache();
+    }
+  };
+
+  return {
+    purchases,
+    purchasesError,
+    watchBusy,
+    setWatching,
+    backups,
+    backingUp,
+    backUpNow,
+    version,
+    previewCache,
+    clearingCache,
+    clearPreviewCache,
+  };
 }
 
 type SidebarKey = keyof SidebarSections;
@@ -324,6 +363,45 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 },
               ] satisfies RowDef[])
             : []),
+        ],
+      },
+      {
+        id: "google",
+        title: "Google Fonts",
+        rows: [
+          {
+            id: "googlePreviews",
+            label: "Show previews of Google Fonts you haven't downloaded",
+            description:
+              "Fontface downloads a tiny file with each family's name from fonts.googleapis.com and fonts.gstatic.com. Google sees your IP address and which families you view. Text you type is never sent.",
+            keywords: "google fonts preview previews online internet network privacy catalog browse ip address download",
+            labelsControl: true,
+            control: (ids) => flag("googlePreviews", ids),
+          },
+          {
+            id: "googlePreviewCache",
+            label: "Preview cache",
+            description: "The small preview files Fontface keeps, so previews show again without going online. Clearing it doesn't touch fonts you downloaded.",
+            keywords: "google fonts preview cache clear delete empty storage disk space",
+            control: (ids) => (
+              // Stays focusable when it disables itself after clearing.
+              <Button
+                size="sm"
+                variant="outline"
+                aria-describedby={ids.description}
+                disabled={outside.clearingCache || outside.previewCache === 0}
+                focusableWhenDisabled
+                onClick={outside.clearPreviewCache}
+              >
+                <Icon name={outside.clearingCache ? "progress_activity" : "delete_sweep"} size={16} className={cn(outside.clearingCache && "animate-spin")} />
+                {outside.previewCache === null
+                  ? "Clear preview cache"
+                  : outside.previewCache === 0
+                    ? "Preview cache is empty"
+                    : `Clear preview cache (${formatBytes(outside.previewCache)})`}
+              </Button>
+            ),
+          },
         ],
       },
     ],

@@ -3,6 +3,11 @@
 //! The UI builds URLs with `convertFileSrc(id, "ff")`, which handles the
 //! macOS (`ff://localhost/12`) vs Windows (`http://ff.localhost/12`) difference.
 //!
+//! One other path: `google/<id>/<token>/<file kind>` (`convertFileSrc` encodes its slashes)
+//! serves a Google Fonts online preview already saved in the preview cache, never anything
+//! from the network, and only while those previews are on (services/google/previews.rs).
+//! Anything else there is 404.
+//!
 //! Previews must never stall or balloon:
 //! - Online-only cloud files aren't downloaded for a preview: the read fails fast and the UI
 //!   is told "not downloaded" (503).
@@ -61,7 +66,25 @@ fn read_file(path: &str) -> Result<Vec<u8>, StatusCode> {
     })
 }
 
+/// A saved Google Fonts preview (see the notes at the top).
+fn load_google_preview(state: &AppState, rest: &str) -> Result<(Vec<u8>, &'static str), StatusCode> {
+    if !state.settings().google_previews {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let data = state.google_previews.serve(rest).ok_or(StatusCode::NOT_FOUND)?;
+    let mime = if data.starts_with(b"OTTO") { "font/otf" } else { "font/ttf" };
+    Ok((data, mime))
+}
+
+/// What follows `google/` in a request's path (decoded), if it's a Google preview's path.
+fn google_path(raw: &str) -> Option<String> {
+    crate::services::google::previews::decode_path(raw)?.strip_prefix("google/").map(str::to_string)
+}
+
 fn load<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(Vec<u8>, &'static str), StatusCode> {
+    if let Some(rest) = google_path(id) {
+        return load_google_preview(&app.state::<AppState>(), &rest);
+    }
     let id: i64 = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
     let state = app.state::<AppState>();
     let (path, face_index, mtime, size): (String, u32, i64, i64) = {
@@ -74,7 +97,10 @@ fn load<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(Vec<u8>, &'static s
         .map_err(|_| StatusCode::NOT_FOUND)?
     };
     // Never serve Creative Cloud's font files (Adobe's terms). They aren't scanned, so this is a backstop.
-    if crate::services::adobe::is_adobe_path(std::path::Path::new(&path)) {
+    // Nor the Google preview cache's files by library id: they aren't scanned either.
+    if crate::services::adobe::is_adobe_path(std::path::Path::new(&path))
+        || crate::services::google::previews::is_preview_cache_path(std::path::Path::new(&path))
+    {
         return Err(StatusCode::FORBIDDEN);
     }
     let key = (path.clone(), mtime, size);
@@ -102,4 +128,20 @@ fn load<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(Vec<u8>, &'static s
     };
     let mime = if data.starts_with(b"OTTO") { "font/otf" } else { "font/ttf" };
     Ok((data, mime))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::google_path;
+
+    #[test]
+    fn google_preview_paths_are_told_apart_from_library_ids() {
+        // convertFileSrc encodes the slashes; a plain path works too.
+        assert_eq!(google_path("google%2Finter%2F2026-01-01%2Fname").as_deref(), Some("inter/2026-01-01/name"));
+        assert_eq!(google_path("google/inter/2026-01-01/name").as_deref(), Some("inter/2026-01-01/name"));
+        // Library ids keep their own path, as before.
+        for id in ["12", "%31%32", "googlex", "google", "", "-1", "%zz"] {
+            assert_eq!(google_path(id), None, "{id}");
+        }
+    }
 }

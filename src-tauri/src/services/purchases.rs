@@ -27,7 +27,7 @@ use std::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use super::{adobe::is_adobe_path, service_dir};
+use super::{adobe::is_adobe_path, google::previews::is_preview_cache_path, service_dir};
 use crate::{
     activation::{self, Scope, TurnedOff},
     cloud,
@@ -271,7 +271,12 @@ fn visible_files(path: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
         .into_iter()
         .filter_entry(|e| {
             let n = e.file_name().to_string_lossy();
-            e.depth() == 0 || (!n.starts_with('.') && !is_partial(&n) && !is_adobe_path(e.path()) && !is_bundle(e.path()))
+            e.depth() == 0
+                || (!n.starts_with('.')
+                    && !is_partial(&n)
+                    && !is_adobe_path(e.path())
+                    && !is_preview_cache_path(e.path())
+                    && !is_bundle(e.path()))
         })
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
@@ -372,6 +377,10 @@ pub fn inspect(path: &Path) -> AppResult<Option<Contents>> {
     let meta = std::fs::symlink_metadata(path)?;
     let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if is_adobe_path(path) || is_adobe_path(&real) || !(meta.is_file() || meta.is_dir()) {
+        return Ok(None);
+    }
+    // Google Fonts previews aren't purchases.
+    if is_preview_cache_path(path) || is_preview_cache_path(&real) {
         return Ok(None);
     }
     let mut found: Vec<Candidate> = Vec::new();
@@ -618,6 +627,9 @@ pub fn validate_watch_folder(path: &Path) -> AppResult<String> {
     if is_adobe_path(&real) {
         return Err(AppError::Invalid("That folder holds Adobe Fonts synced by Creative Cloud".into()));
     }
+    if is_preview_cache_path(&real) {
+        return Err(AppError::Invalid("That folder holds Fontface's previews of Google Fonts".into()));
+    }
     Ok(real.to_string_lossy().into_owned())
 }
 
@@ -720,7 +732,7 @@ pub fn unit_for(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
 pub fn record(conn: &Connection, data_dir: &Path, path: &Path) -> AppResult<Option<i64>> {
     let Ok(meta) = std::fs::symlink_metadata(path) else { return Ok(None) };
     let kind_ok = (meta.is_file() && is_candidate_file(path)) || (meta.is_dir() && !is_bundle(path));
-    if !kind_ok || is_adobe_path(path) {
+    if !kind_ok || is_adobe_path(path) || is_preview_cache_path(path) {
         return Ok(None);
     }
     // "Family/" next to "Family.zip" is the zip opened by Finder: the same download, counted once.
@@ -1176,6 +1188,9 @@ pub fn prepare(data_dir: &Path, source: &Path, store_id: &str, origin_url: Optio
     let real = std::fs::canonicalize(source)?;
     if is_adobe_path(&real) {
         return Err(AppError::Invalid("That's an Adobe Fonts file managed by Creative Cloud".into()));
+    }
+    if is_preview_cache_path(&real) {
+        return Err(AppError::Invalid("That's one of Fontface's Google Fonts previews, not a purchase".into()));
     }
     let contents = inspect(&real)?.ok_or_else(|| {
         AppError::Invalid("Part of this download is still online-only in cloud storage. Download it fully, then try again.".into())

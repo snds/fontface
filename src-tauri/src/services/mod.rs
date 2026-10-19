@@ -6,6 +6,9 @@
 //!   `service`, scanned and activated like any other, so downloaded fonts appear everywhere.
 //! - **Managed by another app** (Adobe Fonts): read-only. Fontface lists what that app has
 //!   already turned on, through the OS font APIs, and never opens, copies or (de)activates its files.
+//! - **Online previews** (Google Fonts): tiny files that let the Google Fonts page show families
+//!   that aren't downloaded in their own font. Kept in the app's cache folder, never scanned or
+//!   turned on (see google/previews.rs, and `fetch_preview` here).
 
 pub mod adobe;
 pub mod google;
@@ -14,6 +17,7 @@ pub mod purchases;
 
 use std::{
     path::{Path, PathBuf},
+    sync::{Condvar, Mutex},
     time::Duration,
 };
 
@@ -71,6 +75,9 @@ pub enum Deadline {
     Small,
     /// Font files (some CJK families are tens of MB).
     Large,
+    /// Google Fonts previews: a tiny file each, asked for while the user scrolls, so a slow
+    /// answer is given up on quickly (see `fetch_preview`).
+    Preview,
 }
 
 impl Deadline {
@@ -78,6 +85,15 @@ impl Deadline {
         match self {
             Deadline::Small => Duration::from_secs(60),
             Deadline::Large => Duration::from_secs(10 * 60),
+            Deadline::Preview => Duration::from_secs(10),
+        }
+    }
+
+    /// How long connecting may take.
+    fn connect(self) -> Duration {
+        match self {
+            Deadline::Preview => Duration::from_secs(5),
+            _ => Duration::from_secs(15),
         }
     }
 }
@@ -117,10 +133,15 @@ impl From<Fetch> for AppError {
     }
 }
 
+/// The host a URL names, without its port.
+fn host_name(url: &str) -> &str {
+    url.split("://").nth(1).and_then(|r| r.split(['/', ':', '?']).next()).unwrap_or("")
+}
+
 fn agent(url: &str, deadline: Deadline) -> ureq::Agent {
-    let host = url.split("://").nth(1).and_then(|r| r.split(['/', ':']).next()).unwrap_or("");
+    let host = host_name(url);
     let mut builder = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(15))
+        .timeout_connect(deadline.connect())
         .timeout(deadline.duration())
         .user_agent(USER_AGENT);
     if let Some(proxy) = proxy_for(host) {
@@ -227,16 +248,127 @@ fn not_modified_unasked(url: &str) -> Fetch {
     Fetch::Failed(AppError::Other(format!("{} answered 304 to a plain request", host_of(url))))
 }
 
+// ------------------------------------------------------------------------------ previews
+
+/// At most this many preview requests run at once, whatever the UI asks for.
+pub const MAX_PREVIEW_FETCHES: usize = 6;
+
+/// Why a preview request failed (see `fetch_preview`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviewFetchError {
+    /// The server answered with this HTTP status.
+    Status(u16),
+    /// The answer was larger than allowed.
+    TooLarge,
+    /// The answer came from somewhere else: a redirect left the expected host.
+    Elsewhere,
+    /// The network: no connection, a DNS failure, a timeout, a proxy that refused, or a download
+    /// that broke off.
+    Network(String),
+}
+
+/// The agent preview requests to one host share. One agent keeps its connections open, so the
+/// many small requests of a scroll don't each start a new TLS handshake (`agent` builds a new
+/// one for every request, which is fine for the occasional catalog or install). Each host gets
+/// its own, with the proxy that applies to it (NO_PROXY may name one host and not the other).
+fn preview_agent(url: &str) -> ureq::Agent {
+    static AGENTS: Mutex<Vec<(String, ureq::Agent)>> = Mutex::new(Vec::new());
+    let host = host_name(url).to_ascii_lowercase();
+    let mut agents = AGENTS.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((_, agent)) = agents.iter().find(|(h, _)| *h == host) {
+        return agent.clone();
+    }
+    let built = agent(url, Deadline::Preview);
+    agents.push((host, built.clone()));
+    built
+}
+
+/// Preview requests running now.
+static PREVIEW_FETCHES: Mutex<usize> = Mutex::new(0);
+static PREVIEW_FETCH_DONE: Condvar = Condvar::new();
+
+/// A turn to make a preview request: waits while `MAX_PREVIEW_FETCHES` are running, and gives
+/// the turn back when dropped.
+struct PreviewTurn;
+
+impl PreviewTurn {
+    fn take() -> PreviewTurn {
+        let mut running = PREVIEW_FETCHES.lock().unwrap_or_else(|p| p.into_inner());
+        while *running >= MAX_PREVIEW_FETCHES {
+            running = PREVIEW_FETCH_DONE.wait(running).unwrap_or_else(|p| p.into_inner());
+        }
+        *running += 1;
+        PreviewTurn
+    }
+}
+
+impl Drop for PreviewTurn {
+    fn drop(&mut self) {
+        let mut running = PREVIEW_FETCHES.lock().unwrap_or_else(|p| p.into_inner());
+        *running = running.saturating_sub(1);
+        PREVIEW_FETCH_DONE.notify_one();
+    }
+}
+
+/// Downloads a small file for a Google Fonts preview: through the shared agent for its host,
+/// with the short `Deadline::Preview`, at most `MAX_PREVIEW_FETCHES` at once, refusing anything
+/// over `max` bytes. The answer must come from a URL starting with `expected` (a redirect
+/// elsewhere is refused). Blocks: never call it on the main thread or an async worker.
+pub fn fetch_preview(url: &str, max: u64, expected: &str) -> Result<Vec<u8>, PreviewFetchError> {
+    let _turn = PreviewTurn::take();
+    #[cfg(test)]
+    if let Some(answer) = fake_net::answer_preview(url) {
+        return match answer? {
+            bytes if bytes.len() as u64 > max => Err(PreviewFetchError::TooLarge),
+            bytes => Ok(bytes),
+        };
+    }
+    use std::io::Read;
+    if !url.starts_with(expected) {
+        return Err(PreviewFetchError::Elsewhere);
+    }
+    let response = match preview_agent(url).get(url).call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, _)) => return Err(PreviewFetchError::Status(code)),
+        Err(e) => return Err(PreviewFetchError::Network(format!("Couldn't reach {}: {e}", host_of(url)))),
+    };
+    if !response.get_url().starts_with(expected) {
+        return Err(PreviewFetchError::Elsewhere);
+    }
+    let mut body = Vec::new();
+    response
+        .into_reader()
+        .take(max + 1)
+        .read_to_end(&mut body)
+        .map_err(|e| PreviewFetchError::Network(format!("Download from {} failed: {e}", host_of(url))))?;
+    if body.len() as u64 > max {
+        return Err(PreviewFetchError::TooLarge);
+    }
+    Ok(body)
+}
+
 /// Tests only: answers requests from a table instead of the network, so tests never go online.
 #[cfg(test)]
 pub mod fake_net {
     use std::{cell::RefCell, collections::HashMap};
 
-    use super::{Fetch, Fetched};
+    use super::{Fetch, Fetched, PreviewFetchError};
+    use crate::error::AppError;
+
+    /// How a URL fails instead of answering (see `fail`).
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum Failure {
+        /// The server answers with this HTTP status.
+        Status(u16),
+        /// No answer at all: no connection, a DNS failure or a timeout.
+        Offline,
+    }
 
     thread_local! {
         /// URL → (body, ETag), while a test serves this thread.
         static ROUTES: RefCell<Option<HashMap<String, (Vec<u8>, Option<String>)>>> = const { RefCell::new(None) };
+        /// URL → how it fails instead of answering (see `fail`).
+        static FAILURES: RefCell<HashMap<String, Failure>> = RefCell::new(HashMap::new());
         /// Every request made: URL (after "HEAD " for a HEAD request) and the If-None-Match it
         /// carried.
         static LOG: RefCell<Vec<(String, Option<String>)>> = const { RefCell::new(Vec::new()) };
@@ -247,12 +379,25 @@ pub mod fake_net {
     pub fn serve(routes: Vec<(String, Vec<u8>, Option<&str>)>) -> Serving {
         let table = routes.into_iter().map(|(url, body, etag)| (url, (body, etag.map(str::to_string)))).collect();
         ROUTES.with(|r| *r.borrow_mut() = Some(table));
+        FAILURES.with(|f| f.borrow_mut().clear());
         LOG.with(|l| l.borrow_mut().clear());
         Serving
     }
 
+    /// From now on, `url` fails this way instead of answering (until `serve` starts again, or
+    /// `set` gives it an answer).
+    pub fn fail(url: &str, how: Failure) {
+        FAILURES.with(|f| f.borrow_mut().insert(url.to_string(), how));
+    }
+
+    /// The listed failure for a URL, if it has one.
+    fn failure(url: &str) -> Option<Failure> {
+        FAILURES.with(|f| f.borrow().get(url).copied())
+    }
+
     /// Adds or replaces one URL's answer (say, a newer file upstream).
     pub fn set(url: &str, body: Vec<u8>, etag: Option<&str>) {
+        FAILURES.with(|f| f.borrow_mut().remove(url));
         ROUTES.with(|r| {
             if let Some(table) = r.borrow_mut().as_mut() {
                 table.insert(url.to_string(), (body, etag.map(str::to_string)));
@@ -279,6 +424,7 @@ pub mod fake_net {
     impl Drop for Serving {
         fn drop(&mut self) {
             ROUTES.with(|r| *r.borrow_mut() = None);
+            FAILURES.with(|f| f.borrow_mut().clear());
             LOG.with(|l| l.borrow_mut().clear());
         }
     }
@@ -299,10 +445,28 @@ pub mod fake_net {
             let routes = r.borrow();
             let table = routes.as_ref()?;
             LOG.with(|l| l.borrow_mut().push((url.to_string(), if_none_match.map(str::to_string))));
-            Some(match table.get(url) {
-                None => Err(Fetch::NotFound),
-                Some((_, Some(etag))) if if_none_match == Some(etag.as_str()) => Ok(Fetched::NotModified),
-                Some((body, etag)) => Ok(Fetched::Body { bytes: body.clone(), etag: etag.clone() }),
+            Some(match (failure(url), table.get(url)) {
+                (Some(Failure::Status(404)), _) => Err(Fetch::NotFound),
+                (Some(how), _) => Err(Fetch::Failed(AppError::Other(format!("{how:?}")))),
+                (None, None) => Err(Fetch::NotFound),
+                (None, Some((_, Some(etag)))) if if_none_match == Some(etag.as_str()) => Ok(Fetched::NotModified),
+                (None, Some((body, etag))) => Ok(Fetched::Body { bytes: body.clone(), etag: etag.clone() }),
+            })
+        })
+    }
+
+    /// A preview request (`fetch_preview`): the listed body, the listed failure, or 404 for a
+    /// URL that isn't listed. Logged like any other request.
+    pub(super) fn answer_preview(url: &str) -> Option<Result<Vec<u8>, PreviewFetchError>> {
+        ROUTES.with(|r| {
+            let routes = r.borrow();
+            let table = routes.as_ref()?;
+            LOG.with(|l| l.borrow_mut().push((url.to_string(), None)));
+            Some(match (failure(url), table.get(url)) {
+                (Some(Failure::Status(code)), _) => Err(PreviewFetchError::Status(code)),
+                (Some(Failure::Offline), _) => Err(PreviewFetchError::Network("offline (test)".into())),
+                (None, None) => Err(PreviewFetchError::Status(404)),
+                (None, Some((body, _))) => Ok(body.clone()),
             })
         })
     }

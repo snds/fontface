@@ -520,6 +520,11 @@ pub fn invisible(cp: u32) -> bool {
     in_ranges(unicode::INVISIBLE, cp)
 }
 
+/// Every Unicode block as (first, last, name), sorted by first code point.
+pub fn blocks() -> &'static [(u32, u32, &'static str)] {
+    unicode::BLOCKS
+}
+
 /// The Unicode block a code point is in, or "No Block".
 pub fn block(cp: u32) -> &'static str {
     let t = unicode::BLOCKS;

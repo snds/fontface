@@ -605,10 +605,15 @@ fn reveal(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-/// Creative Cloud's font files are never revealed, read or switched (Adobe's terms).
+/// Creative Cloud's font files are never revealed, read or switched (Adobe's terms). Nor are the
+/// Google Fonts preview cache's files, which are only for that page.
 fn refuse_adobe(path: &Path) -> AppResult<()> {
     if services::adobe::is_adobe_path(path) || std::fs::canonicalize(path).is_ok_and(|p| services::adobe::is_adobe_path(&p)) {
         return Err(AppError::Invalid("That's an Adobe Fonts file managed by Creative Cloud".into()));
+    }
+    let previews = services::google::previews::is_preview_cache_path;
+    if previews(path) || std::fs::canonicalize(path).is_ok_and(|p| previews(&p)) {
+        return Err(AppError::Invalid("That's one of Fontface's Google Fonts previews, not a font in your library".into()));
     }
     Ok(())
 }
@@ -647,6 +652,42 @@ pub fn list_services(state: State<'_, AppState>) -> AppResult<Vec<ServiceInfo>> 
 pub async fn google_catalog(state: State<'_, AppState>, refresh: bool) -> AppResult<services::google::Catalog> {
     let data_dir = state.data_dir.clone();
     blocking(move || services::google::catalog(&data_dir, refresh)).await
+}
+
+/// A Google Fonts family's online preview: `kind` is "row" (what a row shows with no preview
+/// text: Rust picks the name, icons or a script sample) or "alphabet" (for typed preview text,
+/// which never leaves the Mac). The only command that sends anything to Google for a preview,
+/// and only while Settings › Google Fonts previews is on: off, it answers "off" and sends
+/// nothing. Runs on a blocking thread; see services/google/previews.rs.
+#[tauri::command]
+pub async fn google_preview(app: AppHandle, id: String, kind: String) -> AppResult<services::google::previews::GooglePreview> {
+    let ask = services::google::previews::Ask::parse(&kind)
+        .ok_or_else(|| AppError::Invalid(format!("“{kind}” isn't a kind of Google Fonts preview")))?;
+    blocking(move || {
+        let state = app.state::<AppState>();
+        // Asked before each request, so turning previews off stops them at once.
+        let enabled = || state.settings().google_previews;
+        state.google_previews.preview(&id, ask, &enabled)
+    })
+    .await
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewCacheSize {
+    bytes: u64,
+}
+
+/// How much the Google Fonts preview cache holds now, for Settings' "Clear preview cache".
+#[tauri::command]
+pub async fn google_preview_cache(app: AppHandle) -> AppResult<PreviewCacheSize> {
+    blocking(move || Ok(PreviewCacheSize { bytes: app.state::<AppState>().google_previews.size() })).await
+}
+
+/// Empties the Google Fonts preview cache (remembered failures too).
+#[tauri::command]
+pub async fn clear_google_preview_cache(app: AppHandle) -> AppResult<()> {
+    blocking(move || app.state::<AppState>().google_previews.clear()).await
 }
 
 /// Runs blocking work (network, disk) off the async worker threads.

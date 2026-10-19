@@ -364,12 +364,14 @@ pub fn scan_folder(
     let mut pending = Vec::new();
     let mut cloud = 0;
     // Creative Cloud's font store is never read (Adobe's terms), including through symlinks;
+    // nor is the Google Fonts preview cache (its files are previews, not fonts to turn on);
     // hidden entries are skipped too.
-    let adobe = crate::services::adobe::is_adobe_path;
+    let off_limits =
+        |p: &Path| crate::services::adobe::is_adobe_path(p) || crate::services::google::previews::is_preview_cache_path(p);
     for entry in WalkDir::new(root).follow_links(true).into_iter().filter_entry(|e| {
         !is_hidden(e)
-            && !adobe(e.path())
-            && !(e.path_is_symlink() && std::fs::canonicalize(e.path()).is_ok_and(|real| adobe(&real)))
+            && !off_limits(e.path())
+            && !(e.path_is_symlink() && std::fs::canonicalize(e.path()).is_ok_and(|real| off_limits(&real)))
     }) {
         if cancel.load(Relaxed) {
             report.cancelled = true;
@@ -402,8 +404,8 @@ pub fn scan_folder(
         // Store the real on-disk path (symlinks resolved), the same key the OS's list of loaded
         // fonts is normalized to, so "is it on?" comparisons match.
         let real = std::fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path().to_path_buf());
-        if adobe(&real) {
-            report.files -= 1; // reached Adobe's store through a link: never read
+        if off_limits(&real) {
+            report.files -= 1; // reached Adobe's store or the preview cache through a link: never read
             continue;
         }
         let path_str = real.to_string_lossy().into_owned();

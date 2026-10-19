@@ -25,6 +25,7 @@
 //! downloading and installing them.
 
 pub mod icons;
+pub mod previews;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -77,6 +78,11 @@ pub struct CatalogFamily {
     pub styles: Vec<String>,
     #[serde(default)]
     pub subsets: Vec<String>,
+    /// Fontsource's main subset for the family ("latin", "khmer", "japanese" …): online previews
+    /// use it to pick the script of a sample when the name can't be drawn. Empty in catalogs
+    /// saved before it was kept, until the next refresh.
+    #[serde(default)]
+    pub def_subset: String,
     #[serde(default)]
     pub license: String,
     #[serde(default, rename = "lastModified")]
@@ -360,12 +366,12 @@ pub fn catalog(data_dir: &Path, refresh: bool) -> AppResult<Catalog> {
     Ok(build(data_dir, data, stale))
 }
 
-/// Combines a fetched catalog with install state.
-fn build(data_dir: &Path, data: CachedCatalog, stale: bool) -> Catalog {
-    // Fontsource lists a few families twice under ids that map to one repository folder
-    // (e.g. "bj-cree" and "bjcree"). Keep the newest.
+/// The families the catalog shows, by repository folder: Fontsource lists a few families twice
+/// under ids that map to one folder (e.g. "bj-cree" and "bjcree"), and the newest is kept. The
+/// static Material Symbols is left out, and icon families are corrected (see `icons`).
+fn listed(families: Vec<CatalogFamily>) -> HashMap<String, CatalogFamily> {
     let mut by_slug: HashMap<String, CatalogFamily> = HashMap::new();
-    for f in data.families {
+    for f in families {
         // The static Material Symbols is a second copy of Outlined (see `icons`).
         if icons::hidden(&f.id) {
             continue;
@@ -380,6 +386,34 @@ fn build(data_dir: &Path, data: CachedCatalog, stale: bool) -> Catalog {
             }
         }
     }
+    by_slug
+}
+
+/// The saved catalog's families, as the catalog page lists them (see `listed`), and when it was
+/// fetched. Never touches the network: None if there's no saved catalog yet. Online previews
+/// use this, so asking for a preview never refreshes the catalog.
+pub fn saved_families(data_dir: &Path) -> Option<(u64, Vec<CatalogFamily>)> {
+    let cached = read_cache(data_dir)?;
+    Some((cached.fetched_at, listed(cached.families).into_values().collect()))
+}
+
+/// Tests only: saves `families` as the catalog, as if just fetched.
+#[cfg(test)]
+pub(crate) fn save_catalog_for_tests(data_dir: &Path, families: Vec<CatalogFamily>) {
+    let path = cache_path(data_dir);
+    std::fs::create_dir_all(path.parent().expect("cache file has a parent")).unwrap();
+    std::fs::write(path, serde_json::to_vec(&CachedCatalog { fetched_at: now(), families }).unwrap()).unwrap();
+}
+
+/// The saved catalog file's size and modified time, to tell when it changed. None if there's none.
+pub fn saved_catalog_stamp(data_dir: &Path) -> Option<(u64, SystemTime)> {
+    let meta = std::fs::metadata(cache_path(data_dir)).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// Combines a fetched catalog with install state.
+fn build(data_dir: &Path, data: CachedCatalog, stale: bool) -> Catalog {
+    let by_slug = listed(data.families);
 
     let (by_id, by_repo) = installed_index(data_dir);
     let latest = read_latest(data_dir);
@@ -749,6 +783,7 @@ mod tests {
             weights: vec![],
             styles: vec![],
             subsets: vec![],
+            def_subset: String::new(),
             license: license.into(),
             last_modified: String::new(),
         }

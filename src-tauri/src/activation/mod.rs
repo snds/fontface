@@ -100,8 +100,13 @@ impl From<ActivationMode> for Scope {
 /// Every on/off path in the app goes through these three functions, so this one check covers all.
 fn refuse_adobe(path: &Path) -> AppResult<()> {
     let real = std::fs::canonicalize(path).ok();
-    if crate::services::adobe::is_adobe_path(path) || real.is_some_and(|p| crate::services::adobe::is_adobe_path(&p)) {
+    if crate::services::adobe::is_adobe_path(path) || real.as_ref().is_some_and(|p| crate::services::adobe::is_adobe_path(p)) {
         return Err(crate::error::AppError::Invalid("Adobe Fonts are turned on and off in Creative Cloud".into()));
+    }
+    // The Google Fonts preview cache holds tiny previews, never fonts to turn on.
+    let previews = crate::services::google::previews::is_preview_cache_path;
+    if previews(path) || real.is_some_and(|p| previews(&p)) {
+        return Err(crate::error::AppError::Invalid("Google Fonts previews can't be turned on. Download the family instead".into()));
     }
     Ok(())
 }

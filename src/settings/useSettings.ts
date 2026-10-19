@@ -38,6 +38,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tableColumns: [],
   tableDensity: "regular",
   preview: DEFAULT_PREVIEW,
+  googlePreviews: true,
 };
 
 export interface Settings {

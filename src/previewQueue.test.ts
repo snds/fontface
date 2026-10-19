@@ -1,7 +1,7 @@
 // Run with `npm run test:ui`. The queue behind on-demand preview profiles (previewQueue.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RequestQueue } from "./previewQueue.ts";
+import { RequestQueue, TaskPool } from "./previewQueue.ts";
 
 /** A queue whose calls, frames and timers the test runs by hand. With `timeoutMs`, a call
  *  times out when the test runs `timeUp`. */
@@ -181,4 +181,93 @@ test("one stuck call after another never stops later rows being asked for", asyn
     timeUp();
   }
   assert.deepEqual(timedOut, [["f0"], ["f1"], ["f2"]]);
+});
+
+// ------------------------------------------------------------------------------ TaskPool
+
+/** A pool whose calls the test settles by hand. */
+function pool(limit = 2) {
+  const calls: { key: string; finish: () => void; fail: () => void }[] = [];
+  const p = new TaskPool<string>(
+    (key) =>
+      new Promise<void>((resolve, reject) => {
+        calls.push({ key, finish: resolve, fail: reject });
+      }),
+    limit,
+  );
+  const settle = async (i: number, how: "finish" | "fail" = "finish") => {
+    calls[i][how]();
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  return { p, calls, settle };
+}
+
+test("pool: starts at once up to the limit, the rest wait", () => {
+  const { p, calls } = pool(2);
+  p.want("a", "a");
+  p.want("b", "b");
+  p.want("c", "c");
+  assert.deepEqual(
+    calls.map((c) => c.key),
+    ["a", "b"],
+    "the rows a page opens with go at once",
+  );
+  assert.equal(p.active, 2);
+  assert.ok(p.has("c"));
+});
+
+test("pool: the newest want goes next; rows that left are dropped", async () => {
+  const { p, calls, settle } = pool(1);
+  p.want("a", "a");
+  const leaveB = p.want("b", "b");
+  p.want("c", "c");
+  p.want("d", "d");
+  leaveB();
+  assert.equal(p.size, 2);
+  await settle(0);
+  assert.equal(calls[1].key, "d");
+  await settle(1, "fail");
+  assert.equal(calls[2].key, "c", "a failed call frees its place too");
+  await settle(2);
+  assert.equal(calls.length, 3, "b was never asked for");
+  assert.equal(p.active, 0);
+});
+
+test("pool: a key wanted again moves to the front; one row leaving doesn't drop another's want", async () => {
+  const { p, calls, settle } = pool(1);
+  p.want("busy", "busy");
+  p.want("a", "a");
+  p.want("b", "b");
+  const leaveA1 = p.want("a", "a");
+  leaveA1();
+  assert.ok(p.has("a"), "the first row still wants it");
+  await settle(0);
+  assert.equal(calls[1].key, "a", "wanted again after b: the newest");
+  await settle(1);
+  assert.equal(calls[2].key, "b");
+});
+
+test("pool: releasing after the call started does nothing", async () => {
+  const { p, calls, settle } = pool(1);
+  const leave = p.want("a", "a");
+  leave();
+  leave();
+  assert.equal(calls.length, 1);
+  p.want("b", "b");
+  await settle(0);
+  assert.equal(calls[1].key, "b");
+});
+
+test("pool: a run that throws never stalls it", async () => {
+  let n = 0;
+  const p = new TaskPool<string>(() => {
+    n++;
+    throw new Error("boom");
+  }, 1);
+  p.want("a", "a");
+  await new Promise((r) => setTimeout(r, 0));
+  p.want("b", "b");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(n, 2);
+  assert.equal(p.active, 0);
 });

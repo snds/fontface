@@ -210,14 +210,20 @@ impl Drop for UiWriteGate {
     }
 }
 
-/// Rows for Creative Cloud's font files must never exist (Adobe's terms). Drops any, using the
-/// same path rule as the rest of the app, without touching the OS (Creative Cloud owns those
+/// Rows for Creative Cloud's font files must never exist (Adobe's terms), nor rows for the Google
+/// Fonts preview cache's files (previews, never fonts to turn on). Drops any, using the same path
+/// rules as the rest of the app, without touching the OS (Creative Cloud owns those
 /// registrations). Runs once at startup, before anything else writes.
 pub fn purge_adobe_rows(conn: &mut Connection) -> AppResult<usize> {
     let paths: Vec<String> = {
         let mut stmt = conn.prepare("SELECT DISTINCT path FROM fonts UNION SELECT path FROM skipped_files")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.filter_map(Result::ok).filter(|p| crate::services::adobe::is_adobe_path(Path::new(p))).collect()
+        rows.filter_map(Result::ok)
+            .filter(|p| {
+                crate::services::adobe::is_adobe_path(Path::new(p))
+                    || crate::services::google::previews::is_preview_cache_path(Path::new(p))
+            })
+            .collect()
     };
     if paths.is_empty() {
         return Ok(0);
@@ -337,6 +343,14 @@ pub fn insert_folder(conn: &mut Connection, path: &Path, kind: &str) -> AppResul
         return Err(AppError::Invalid(
             "That folder holds Adobe Fonts synced by Creative Cloud. Adobe's terms only allow using them through \
              Creative Cloud, so Fontface lists them under Services → Adobe Fonts instead."
+                .into(),
+        ));
+    }
+    // The Google Fonts preview cache: tiny preview files, never fonts to turn on.
+    if crate::services::google::previews::is_preview_cache_path(path) {
+        return Err(AppError::Invalid(
+            "That folder holds Fontface's previews of Google Fonts, which are only for the Google Fonts page. \
+             Download a family there to add it to your library."
                 .into(),
         ));
     }
@@ -619,7 +633,7 @@ const ADDED_AT_CHUNK: usize = 500;
 
 /// A file's creation date (or modified date) in Unix seconds, from its metadata only.
 fn file_date(path: &Path) -> Option<i64> {
-    if crate::services::adobe::is_adobe_path(path) {
+    if crate::services::adobe::is_adobe_path(path) || crate::services::google::previews::is_preview_cache_path(path) {
         return None;
     }
     let meta = std::fs::metadata(path).ok()?;

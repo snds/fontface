@@ -1033,6 +1033,7 @@ fn google_icons_live_install() {
             weights: vec![],
             styles: vec![],
             subsets: vec![],
+            def_subset: String::new(),
             license: icons::LICENSE_ID.into(),
             last_modified: "live".into(),
         };
@@ -1108,6 +1109,50 @@ fn adobe_font_store_is_never_scanned_or_switched() {
     assert!(crate::activation::activate_in(&dir.join("fonts/Proxima.otf"), crate::activation::Scope::Persistent).is_err(), "never registered");
     assert!(crate::activation::deactivate(&store.join("r/123.otf")).is_err(), "never unregistered");
     assert!(crate::db::insert_folder(&mut conn, &std::fs::canonicalize(&store).unwrap(), "user").is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The Google Fonts preview cache is never scanned, turned on, tagged, added as a folder or
+/// listed, even when the user adds a folder that holds it (say their Library folder), or links to it.
+#[test]
+fn google_preview_cache_is_never_scanned_or_switched() {
+    use std::sync::{atomic::AtomicBool, Arc};
+    let dir = std::env::temp_dir().join(format!("fontface-preview-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let cache = dir.join("Library/Caches/design.snds.fontface/google-previews/inter/2026-01-01");
+    std::fs::create_dir_all(&cache).unwrap();
+    let font = crate::test_fonts::FontBuilder::new().named("Inter").chars("Inter").build();
+    std::fs::write(cache.join("name.ttf"), &font).unwrap();
+    std::fs::create_dir_all(dir.join("Library/Fonts")).unwrap();
+    std::fs::write(dir.join("Library/Fonts/Mine.ttf"), &font).unwrap();
+    std::os::unix::fs::symlink(cache.join("name.ttf"), dir.join("Library/Fonts/Linked.ttf")).unwrap();
+    let db_path = dir.join("db.sqlite3");
+    let mut conn = crate::db::open(&db_path).unwrap();
+    let root = std::fs::canonicalize(dir.join("Library")).unwrap();
+    let folder = crate::db::insert_folder(&mut conn, &root, "user").unwrap();
+    let report = crate::scanner::scan_folder(&db_path, folder, &root, &Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
+    assert_eq!(report.files, 1, "only the user's own font");
+    let paths: Vec<String> =
+        conn.prepare("SELECT path FROM fonts").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(paths.len(), 1);
+    assert!(paths[0].ends_with("Mine.ttf"), "{paths:?}");
+    let real = std::fs::canonicalize(cache.join("name.ttf")).unwrap();
+    // Checked first, so a broken rule fails here instead of turning a test font on.
+    let linked_real = std::fs::canonicalize(dir.join("Library/Fonts/Linked.ttf")).unwrap();
+    assert!(crate::services::google::previews::is_preview_cache_path(&real));
+    assert!(crate::services::google::previews::is_preview_cache_path(&linked_real));
+    assert!(crate::activation::activate_in(&real, crate::activation::Scope::Persistent).is_err(), "never turned on");
+    assert!(crate::activation::activate_in(&dir.join("Library/Fonts/Linked.ttf"), crate::activation::Scope::Session).is_err());
+    assert!(crate::db::insert_folder(&mut conn, &std::fs::canonicalize(&cache).unwrap(), "user").is_err());
+    assert!(crate::preview::read_file(&real.to_string_lossy(), None).is_err(), "previews never read it by path");
+    // A row that slipped in (an older build) goes at startup.
+    conn.execute(
+        "INSERT INTO fonts (folder_id, path, file_size, mtime, family, subfamily, weight, width, italic,
+         monospace, variable, glyph_count, format, activated) VALUES (?1, ?2, 1, 1, 'F', 'R', 400, 5, 0, 0, 0, 1, 'TrueType', 0)",
+        rusqlite::params![folder, real.to_string_lossy()],
+    )
+    .unwrap();
+    assert_eq!(crate::db::purge_adobe_rows(&mut conn).unwrap(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

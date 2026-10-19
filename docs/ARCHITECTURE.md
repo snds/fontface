@@ -9,7 +9,10 @@ App / Sidebar / LibraryPane / FontPage
    │  invoke("list_fonts" …)  ───────────▶   commands.rs   ── db.rs (SQLite, WAL)
    │  listen("scan-progress") ◀───────────     │               scanner.rs (walk + parse)
    │  FontFace("ff://localhost/<id>") ───▶   protocol.rs   ── sfnt.rs (split .ttc faces)
+   │  FontFace("ff://localhost/google/…") ▶     │            ── services/google/previews.rs (cache)
    │  invoke("preview_profiles" …) ──────▶   preview/      (what previews draw; face_previews)
+   │  invoke("google_preview" …) ────────▶   services/google/previews.rs ── fonts.googleapis.com,
+   │                                                                       fonts.gstatic.com
                                                │
                                              activation/   ── macos.rs   (CoreText)  ✅
                                                             ─ windows.rs (GDI + HKCU) ⬜
@@ -50,6 +53,14 @@ The web view loads font bytes through a private `ff://` URL scheme, keyed by lib
 only serve files that are in the database. Each face becomes a page-only `FontFace` named
 `ff-<id>`, so an inactive font still previews. For collections, Rust extracts the single face
 first, because web engines can't select a face inside a `.ttc`.
+
+The one other `ff://` path is `ff://localhost/google/<id>/<token>/<kind>` (Windows:
+`http://ff.localhost/…`; `convertFileSrc` encodes its slashes, and Rust decodes them). It serves
+a Google Fonts online preview already saved in the preview cache, and nothing else: the id must
+be a family in the saved catalog, the token letters, digits and `-`, and the kind one of
+`name`, `icons`, `script` or `alphabet`. The file must be a plain file (not a link) inside the
+cache folder, at most 512 KB. Anything else, or previews turned off in Settings, is 404. It never
+uses the network. It's checked before the library-id path, which works exactly as before.
 
 **Scans are incremental, parallel, cancellable, and safe.**
 A scan runs off the UI thread with its own SQLite connection (WAL mode allows this).
@@ -235,6 +246,39 @@ apart from macOS dropping a font before its drive mounted, so launch still re-ap
 - Installed fonts load by PostScript name (`local()`).
 - Other fonts are fetched over `ff://`, 6 at a time, newest first. Rows that scroll away are dropped from the queue.
 - Online-only files are never downloaded for a preview; they show "Not downloaded yet". Files over 96 MB aren't previewed.
+
+**Google Fonts online previews: the preview cache.**
+The Google Fonts page shows families that aren't downloaded in their own font
+(`src-tauri/src/services/google/previews.rs`; the request details and privacy notes are in
+[INTEGRATIONS.md](INTEGRATIONS.md) §3.1, "Online previews (as built)").
+- **Who talks to Google.** Only the `google_preview(id, kind)` command, and only while the
+  `googlePreviews` setting is on (the default). It runs on a blocking thread, never the main
+  thread or an async worker. It asks Google's CSS2 API for a tiny `text=` file, downloads that
+  file from `fonts.gstatic.com`, checks it parses and profiles it like a library font. The web
+  view never contacts Google, so the content security policy (CSP) is unchanged: it loads the
+  saved file over `ff://` (above).
+- **Network plumbing** (`services/mod.rs`, `fetch_preview`). One shared `ureq` agent per host,
+  so a scroll's many small requests reuse connections; the proxy rules (`NO_PROXY` too) apply
+  per host. A 10-second deadline, 5 to connect (`Deadline::Preview`). At most 6 preview requests
+  at once, whatever the UI asks. The answer must come from the expected host. Tests never touch
+  the network: `services::fake_net` answers instead, and can fail a URL with a status or as if
+  offline.
+- **The cache** is in the app's cache folder: `~/Library/Caches/design.snds.fontface/google-previews/`
+  on macOS (Tauri's `app_cache_dir()`), never under the data folder's `Services/` (scanned and
+  turned on). Layout: `<id>/<token>/<kind>.ttf`, plus `<kind>.json` (the profile, the characters
+  the file holds, what a row draws and whether it's a sample) and, after a failure,
+  `<kind>.fail`. `<token>` is the family's catalog `lastModified`; when it changes, the old
+  folder goes, and families that leave the catalog go too (checked whenever the saved catalog
+  changes). Writes are a temporary file and a rename; two requests for one family take turns.
+  Past about 64 MB, the files used longest ago go (their modified time marks use, refreshed at
+  most hourly). Failures that are the family's are retried after 7 days; network trouble pauses
+  previews for 15 minutes instead. `google_preview_cache()` reports the size and
+  `clear_google_preview_cache()` empties it.
+- **Off limits.** `previews::is_preview_cache_path` sits next to every Adobe Fonts path check
+  (scanner, database, activation, reveal, tags, named styles, relocate, preview reads, purchases
+  and `ff://` by id), so the cache's files can't be scanned, listed, turned on, tagged or served
+  by library id, even if the user adds their Library folder. Rows that slipped in are dropped at
+  startup with the Adobe ones.
 
 **Preview profiles: what a preview draws.**
 A preview used to draw the font's name in the font itself. Icon, symbol, math, Expert and
@@ -537,7 +581,7 @@ Windows-specific code is isolated behind `#[cfg(target_os = "windows")]`:
 | Survives restart | OS handles it | Registry value is reloaded at sign-in |
 | Admin rights | None | None (per-user fonts, Windows 10 1809+) |
 | Reveal file | `open -R` | `explorer /select,` |
-| Preview URL | `ff://localhost/<id>` | `http://ff.localhost/<id>` (handled by `convertFileSrc`) |
+| Preview URL | `ff://localhost/<id>`, `ff://localhost/google/<id>/<token>/<kind>` | `http://ff.localhost/<id>`, `http://ff.localhost/google/…` (handled by `convertFileSrc`) |
 | Path display | `/` splitting in UI | Needs a separator-aware helper |
 
 Everything else (scanner, database, protocol, UI) is already cross-platform.

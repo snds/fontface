@@ -751,8 +751,6 @@ export default function App() {
 
   // ------------------------------------------------------------------ services
 
-  const googleFolder = folders.find((f) => f.id === services.find((s) => s.id === "google")?.folderId);
-
   /** Runs a Google Fonts operation with its busy state, then has the page reload. */
   const googleOp = async <T,>(id: string, op: () => Promise<T>): Promise<T> => {
     if (googleBusyRef.current.has(id)) throw new Error("Already working on that family");
@@ -1713,8 +1711,13 @@ export default function App() {
                         {(back) =>
                           page.service === "google" ? (
                             <GoogleFontsPanel
-                              fonts={googleFolder ? fonts.filter((f) => f.folderId === googleFolder.id) : []}
+                              fonts={fonts}
                               previewText={previewText}
+                              onlinePreviews={settings?.googlePreviews ?? false}
+                              onOpenSettings={() => {
+                                setSettingsSection("general");
+                                openSettings();
+                              }}
                               busy={googleBusy}
                               version={googleVersion}
                               updatingAll={googleUpdatingAll}

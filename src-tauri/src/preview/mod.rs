@@ -46,7 +46,7 @@ use std::{
 };
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     cloud, db,
@@ -115,8 +115,9 @@ pub const COLUMNS: &str =
 pub const COLUMN_COUNT: usize = 10;
 
 /// What the list needs from a profile (`FontSummary.preview`). Ordinary fonts send only
-/// `kind` and the four metrics.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+/// `kind` and the four metrics. Google Fonts' online previews save it with each file they keep
+/// (see services/google/previews.rs), so it reads back too.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewInfo {
     /// What the family row draws: name, trim, case, sample19, script, symbols, expert, partial
@@ -135,7 +136,7 @@ pub struct PreviewInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Printable ASCII characters the face can't draw.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ascii_missing: String,
     /// Line ascent and descent in em, as CoreText (and so the web view) lays the line out.
     pub ascent: f64,
@@ -273,10 +274,14 @@ impl Unreadable {
 }
 
 /// Files previews must never read: Creative Cloud's font store, by the app's path rule or any
-/// path through CoreSync or livetype.
+/// path through CoreSync or livetype. Also the Google Fonts preview cache, whose files are never
+/// library fonts (they reach the web view only through `ff://localhost/google/…`).
 pub fn never_read(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    crate::services::adobe::is_adobe_path(Path::new(path)) || lower.contains("coresync") || lower.contains("livetype")
+    crate::services::adobe::is_adobe_path(Path::new(path))
+        || lower.contains("coresync")
+        || lower.contains("livetype")
+        || crate::services::google::previews::is_preview_cache_path(Path::new(path))
 }
 
 /// Reads a library font file for a preview. `stamp` is the (size, modified time) the database

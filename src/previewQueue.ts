@@ -125,3 +125,88 @@ export class RequestQueue<T> {
     call.then(done, done);
   }
 }
+
+/**
+ * Calls made one key at a time, at most `limit` at once (google_preview's online previews, see
+ * googlePreviewStore.ts):
+ * - the newest want goes first, since rows on screen now beat rows scrolled past;
+ * - a key whose rows all left the screen before its turn is dropped (asked again if one comes
+ *   back). Each want has its own token, as in RequestQueue;
+ * - a key starts as soon as there's room, so the rows a page opens with go at once, top first.
+ * What a call answers is up to `run` (the store keeps it). Pure, so `node --test` covers it.
+ */
+export class TaskPool<T> {
+  /** Waiting to start, oldest first. Only keys some mounted row still wants. */
+  private readonly waiting = new Map<string, T>();
+  /** The mounted rows wanting each waiting key, one token per want. */
+  private readonly wanted = new Map<string, Set<symbol>>();
+  private running = 0;
+  private readonly run: (key: string, item: T) => Promise<unknown>;
+  private readonly limit: number;
+
+  /**
+   * @param run makes the call for one key; another can start when it settles.
+   * @param limit how many calls may run at once.
+   */
+  constructor(run: (key: string, item: T) => Promise<unknown>, limit: number) {
+    this.run = run;
+    this.limit = limit;
+  }
+
+  /** A mounted row wants `key`. Returns what to call when the row unmounts. */
+  want(key: string, item: T): () => void {
+    const token = Symbol(key);
+    const tokens = this.wanted.get(key) ?? new Set<symbol>();
+    tokens.add(token);
+    this.wanted.set(key, tokens);
+    this.waiting.delete(key); // re-added as the newest
+    this.waiting.set(key, item);
+    this.pump();
+    return () => {
+      // Not there: released already, or started (its wants end with it).
+      const tokens = this.wanted.get(key);
+      if (!tokens?.delete(token)) return;
+      if (!tokens.size) {
+        this.wanted.delete(key);
+        this.waiting.delete(key);
+      }
+    };
+  }
+
+  /** Waiting for its turn (not started). */
+  has(key: string): boolean {
+    return this.waiting.has(key);
+  }
+
+  /** Keys waiting. */
+  get size(): number {
+    return this.waiting.size;
+  }
+
+  /** Calls running now. */
+  get active(): number {
+    return this.running;
+  }
+
+  private pump() {
+    while (this.running < this.limit && this.waiting.size) {
+      const key = [...this.waiting.keys()].pop() as string;
+      const item = this.waiting.get(key) as T;
+      this.waiting.delete(key);
+      this.wanted.delete(key);
+      this.running++;
+      let call: Promise<unknown>;
+      // A run that throws counts as settled, so the pool never stalls.
+      try {
+        call = this.run(key, item);
+      } catch {
+        call = Promise.resolve();
+      }
+      const done = () => {
+        this.running--;
+        this.pump();
+      };
+      call.then(done, done);
+    }
+  }
+}

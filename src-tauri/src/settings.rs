@@ -261,6 +261,10 @@ pub struct AppSettings {
     pub table_density: TableDensity,
     /// The View options' preview styling (alignment, case, outline, underline, colors, features).
     pub preview: PreviewOptions,
+    /// Settings › "Show previews of Google Fonts you haven't downloaded": the Google Fonts page
+    /// draws each family in its own font from a tiny file with its name, downloaded from Google
+    /// (services/google/previews.rs). On by default. Off, nothing at all is sent to Google.
+    pub google_previews: bool,
 }
 
 impl Default for AppSettings {
@@ -288,6 +292,7 @@ impl Default for AppSettings {
             table_columns: Vec::new(),
             table_density: TableDensity::Regular,
             preview: PreviewOptions::default(),
+            google_previews: true,
         }
     }
 }
@@ -389,6 +394,7 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
                 choice(value, "Table density", &[("compact", TableDensity::Compact), ("regular", TableDensity::Regular)])?
         }
         "preview" => s.preview = preview_options(&s.preview, value)?,
+        "googlePreviews" => s.google_previews = flag(value, "Show previews of Google Fonts you haven't downloaded")?,
         // A setting from a newer Fontface, or a typo: ignored.
         _ => {}
     }

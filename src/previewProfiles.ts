@@ -110,15 +110,15 @@ export interface ProfileState {
 /** How long a preview waits for its profile before drawing the name anyway. */
 export const PROFILE_WAIT_MS = 300;
 
-/** Whether a pending preview of `face` has waited long enough (300 ms) to draw the name anyway.
- *  The wait belongs to one face: a row that starts showing another font waits afresh. */
-export function useProfileWait(pending: boolean, face: string): boolean {
+/** Whether a pending preview of `face` has waited long enough (300 ms, or `ms`) to draw the
+ *  name anyway. The wait belongs to one face: a row that starts showing another font waits afresh. */
+export function useProfileWait(pending: boolean, face: string, ms = PROFILE_WAIT_MS): boolean {
   const [waitedFor, setWaitedFor] = useState<string>();
   useEffect(() => {
     if (!pending) return;
-    const timer = setTimeout(() => setWaitedFor(face), PROFILE_WAIT_MS);
+    const timer = setTimeout(() => setWaitedFor(face), ms);
     return () => clearTimeout(timer);
-  }, [pending, face]);
+  }, [pending, face, ms]);
   return waitedFor === face;
 }
 

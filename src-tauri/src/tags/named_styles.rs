@@ -212,7 +212,7 @@ fn stamp(path: &Path) -> Option<Stamp> {
 /// read. Never reads Adobe Fonts files (they aren't in the library, but this checks again).
 pub fn postscript_names(path: &str, face_index: u32) -> Vec<String> {
     let p = Path::new(path);
-    if crate::services::adobe::is_adobe_path(p) {
+    if crate::services::adobe::is_adobe_path(p) || crate::services::google::previews::is_preview_cache_path(p) {
         return Vec::new();
     }
     let Some(stamp) = stamp(p) else { return Vec::new() };

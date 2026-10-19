@@ -59,6 +59,9 @@ pub struct AppState {
     pending_restore: Mutex<Vec<String>>,
     /// Becomes true once launch has worked out what to ask about.
     launch_checked: tokio::sync::watch::Sender<bool>,
+    /// Online previews of Google Fonts families, kept in the app's cache folder (never in the
+    /// data folder's Services, which is scanned).
+    google_previews: services::google::previews::Previews,
 }
 
 pub struct RunningScan {
@@ -134,6 +137,10 @@ impl AppState {
             settings: Mutex::new(settings::AppSettings::default()),
             pending_restore: Mutex::default(),
             launch_checked: tokio::sync::watch::channel(false).0,
+            google_previews: services::google::previews::Previews::new(
+                data_dir.join("Caches").join(services::google::previews::DIR_NAME),
+                data_dir.to_path_buf(),
+            ),
         })
     }
 }
@@ -153,6 +160,8 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let db_path = dir.join("library.sqlite3");
+            // ~/Library/Caches/design.snds.fontface on macOS: Google Fonts' online previews.
+            let preview_cache = app.path().app_cache_dir()?.join(services::google::previews::DIR_NAME);
             let mut conn = db::open(&db_path)?;
             tags::ensure_schema(&conn)?;
             preview::ensure_schema(&conn)?;
@@ -191,6 +200,7 @@ pub fn run() {
                 settings: Mutex::new(app_settings.clone()),
                 pending_restore: Mutex::default(),
                 launch_checked: tokio::sync::watch::channel(false).0,
+                google_previews: services::google::previews::Previews::new(preview_cache, dir.clone()),
             });
             commands::restart_purchase_watcher(app.handle());
             sync::start(app.handle());
@@ -279,6 +289,9 @@ pub fn run() {
             commands::google_catalog,
             commands::google_install,
             commands::google_remove,
+            commands::google_preview,
+            commands::google_preview_cache,
+            commands::clear_google_preview_cache,
             commands::adobe_status,
             commands::purchases_status,
             commands::purchases_set_watching,

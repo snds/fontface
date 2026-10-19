@@ -303,6 +303,10 @@ fn add_finder_tags(path: &str, names: &std::collections::BTreeSet<String>, font_
     if crate::services::adobe::is_adobe_path(Path::new(path)) || crate::services::adobe::is_adobe_path(&real) {
         return Err(AppError::Invalid("Adobe Fonts files are never changed".into()));
     }
+    let previews = crate::services::google::previews::is_preview_cache_path;
+    if previews(Path::new(path)) || previews(&real) {
+        return Err(AppError::Invalid("Google Fonts previews are never tagged".into()));
+    }
     if font_dirs.iter().any(|d| real.starts_with(d)) {
         return Ok(None);
     }

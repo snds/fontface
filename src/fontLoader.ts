@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import type { FontSummary } from "./api";
 import { darkPaletteCss, darkPaletteOverride } from "./colorPalette";
 import { FaceMemory } from "./fontMemory";
+import { parsePreviewPath, previewFilePath, remoteFaceName } from "./googlePreviews";
 import { nextLoad } from "./loadOrder";
 
 // Previews load on demand. Each face becomes a page-only FontFace, so previews never depend
@@ -23,6 +24,11 @@ import { nextLoad } from "./loadOrder";
 // - Loaded faces that no row shows are kept up to KEEP_UNUSED; past that the one unused longest
 //   leaves the page and its caches (fontMemory.ts), so scrolling through thousands of tiles
 //   never piles up thousands of fonts. It loads again if a row shows it later.
+// - Online previews of Google Fonts families (googlePreviews.ts) take the same road: the file
+//   Rust keeps in its preview cache comes from `ff://localhost/google/…` (cached files only,
+//   never the network), through the same queue, memory and dark palettes, under a name like
+//   `gf-inter_2024-01-02_name`. A failed one isn't remembered: the row may ask Rust for the
+//   file again first.
 
 export type FaceState = "loading" | "ready" | "error" | "cloud" | "too-large";
 type Outcome = Exclude<FaceState, "loading"> | "dropped";
@@ -85,8 +91,9 @@ function enqueue(name: string, task: () => Promise<Outcome>): Promise<Outcome> {
 /** Holds the dark-theme palettes of faces that need one. */
 let paletteSheet: HTMLStyleElement | null = null;
 
-async function fromApp(font: FontSummary, name: string): Promise<Outcome> {
-  const res = await fetch(`${convertFileSrc(String(font.id), "ff")}?v=${version(font)}`);
+/** Fetches a font file from the app (`ff://`) and adds it to the page as `name`. */
+async function fromUrl(url: string, name: string): Promise<Outcome> {
+  const res = await fetch(url);
   if (res.status === 503) return "cloud";
   if (res.status === 413) return "too-large";
   if (!res.ok) return "error";
@@ -105,6 +112,8 @@ async function fromApp(font: FontSummary, name: string): Promise<Outcome> {
   memory.loaded(name, face);
   return "ready";
 }
+
+const fromApp = (font: FontSummary, name: string) => fromUrl(`${convertFileSrc(String(font.id), "ff")}?v=${version(font)}`, name);
 
 async function fromSystem(font: FontSummary, name: string): Promise<boolean> {
   if (!font.installed || !font.postscriptName) return false;
@@ -133,6 +142,18 @@ function loadFace(font: FontSummary): Promise<Outcome> {
   return pending;
 }
 
+/** Loads an online preview file from the preview cache. Only "ready" is kept: anything else
+ *  is tried again the next time (the row asks Rust for the file again first). */
+function loadRemote(name: string, url: string): Promise<Outcome> {
+  let pending = cache.get(name);
+  if (!pending) {
+    pending = enqueue(name, () => fromUrl(url, name));
+    cache.set(name, pending);
+    pending.then((o) => o !== "ready" && cache.get(name) === pending && cache.delete(name));
+  }
+  return pending;
+}
+
 /** The face has loaded and was added to the page: text in it draws (and measures) in it. */
 export const isFaceLoaded = (name: string) => loaded.has(name);
 
@@ -140,28 +161,24 @@ export const isFaceLoaded = (name: string) => loaded.has(name);
 export const fontMemoryStats = () => ({ kept: memory.size, unused: memory.unused, limit: KEEP_UNUSED });
 
 /**
- * Whether a font's face is ready to draw. The state belongs to one face: when a row starts
- * showing another font (a family's representative changes as you search), it reads "loading"
- * at once, not the last font's "ready", so nothing is shown or measured in the fallback font
- * meanwhile. A face that has already loaded reads "ready" straight away.
- *
- * `urgent`: the face is a font page's chosen style; its file loads before others waiting.
+ * One face's state while a row shows it. The state belongs to the face: when a row starts
+ * showing another one, it reads "loading" at once, not the last face's "ready". `attempt`:
+ * a new value loads the face again if it failed (an online file asked for again).
  */
-export function useFontFace(font: FontSummary | undefined, urgent = false): FaceState {
-  const name = font ? faceName(font) : undefined;
+function useFace(name: string | undefined, load: () => Promise<Outcome>, urgent: boolean, attempt: number): FaceState {
   const [current, setCurrent] = useState<{ name: string | undefined; state: FaceState }>(() => ({
     name,
     state: name && loaded.has(name) ? "ready" : "loading",
   }));
   useEffect(() => {
-    if (!font || !name) return;
+    if (!name) return;
     let live = true;
     memory.use(name);
     if (urgent) urgentFaces.set(name, (urgentFaces.get(name) ?? 0) + 1);
     const settle = (state: FaceState) => setCurrent({ name, state });
     settle(loaded.has(name) ? "ready" : "loading");
     // "dropped" means the row left the screen before its turn; if it's back, ask again.
-    const run = () => loadFace(font).then((o) => live && (o === "dropped" ? queueMicrotask(run) : settle(o)));
+    const run = () => load().then((o) => live && (o === "dropped" ? queueMicrotask(run) : settle(o)));
     run();
     return () => {
       live = false;
@@ -174,7 +191,38 @@ export function useFontFace(font: FontSummary | undefined, urgent = false): Face
     };
     // The face name captures everything that identifies the file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, urgent]);
+  }, [name, urgent, attempt]);
   if (current.name === name) return current.state;
   return name && loaded.has(name) ? "ready" : "loading";
+}
+
+/**
+ * Whether a font's face is ready to draw. The state belongs to one face: when a row starts
+ * showing another font (a family's representative changes as you search), it reads "loading"
+ * at once, not the last font's "ready", so nothing is shown or measured in the fallback font
+ * meanwhile. A face that has already loaded reads "ready" straight away.
+ *
+ * `urgent`: the face is a font page's chosen style; its file loads before others waiting.
+ */
+export function useFontFace(font: FontSummary | undefined, urgent = false): FaceState {
+  return useFace(font ? faceName(font) : undefined, () => (font ? loadFace(font) : Promise.resolve<Outcome>("error")), urgent, 0);
+}
+
+/** The page-only font name of an online preview file (google_preview's `path`), or undefined
+ *  for a path that isn't one. */
+export function remoteFace(path: string | undefined): string | undefined {
+  const file = parsePreviewPath(path);
+  return file ? remoteFaceName(file) : undefined;
+}
+
+/**
+ * Whether an online preview file (google_preview's `path`) is ready to draw, in the face
+ * `remoteFace(path)` names. A path that isn't a preview file reads "error". `attempt`: a new
+ * value (a new answer for the same file) loads it again after a failure.
+ */
+export function useRemoteFace(path: string | undefined, attempt = 0): FaceState {
+  const file = parsePreviewPath(path);
+  const name = file ? remoteFaceName(file) : undefined;
+  const state = useFace(name, () => (file && name ? loadRemote(name, convertFileSrc(previewFilePath(file), "ff")) : Promise.resolve<Outcome>("error")), false, attempt);
+  return path && !file ? "error" : state;
 }

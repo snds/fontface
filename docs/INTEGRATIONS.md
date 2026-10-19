@@ -8,7 +8,7 @@ Fontface never copies, decrypts, converts or re-shares a font in a way its licen
 
 Status (2026-10-12): built so far:
 - the All Fonts, Font Book and Folders views;
-- Google Fonts (keyless: the Fontsource catalog plus full files from the google/fonts repository, and Google's icon fonts from google/material-design-icons);
+- Google Fonts (keyless: the Fontsource catalog plus full files from the google/fonts repository, and Google's icon fonts from google/material-design-icons), with online previews of families that aren't downloaded (2026-10-19, §3.1);
 - the read-only Adobe Fonts listing;
 - the Purchases download watcher (§3.3). Still to do there: the "Replace with newer version" offer, the 30-day trial reminder, and a "License transferred" status. Everything else here is still a plan. Facts were checked live on 2026-10-12, and each section ends with its sources. Fontface uses only other font managers' public documentation, never their code, binaries or hosted data (see [FEATURES.md](FEATURES.md)).
 
@@ -133,8 +133,12 @@ Sources: [Manage fonts in Windows](https://support.microsoft.com/en-us/windows/m
 - Development builds use the older login keychain, which may ask for access after each rebuild. Move to the data protection keychain once release builds are signed with a provisioning profile.
 
 **Network.**
-- All requests go out from Rust with `reqwest` 0.13. Only optional previews load from the web view. Send a descriptive User-Agent, cache, use conditional requests (ETag) and back off on errors.
-- Publish a short privacy note listing every host Fontface contacts and what it sends. Google's API terms require one.
+- All requests go out from Rust with `ureq` 2 (a small blocking HTTP client, run off the main thread and off Tauri's async workers), not `reqwest` as first planned. The web view never contacts a service, not even for previews: Rust downloads them and serves them through `ff://`. Requests send Fontface's own User-Agent (`Fontface/<version> (personal desktop font manager)`), never a browser's. They cache, use conditional requests (ETag) and back off on errors. Proxies from `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` are used, and `NO_PROXY` is respected.
+- Publish a short privacy note listing every host Fontface contacts and what it sends. Google's API terms require one. As built, the hosts are:
+  - `api.fontsource.org`: the Google Fonts catalog, at most once a day.
+  - `raw.githubusercontent.com`: a family's files and license when you download or update it, and one small "has it changed?" request per downloaded icon family on each catalog refresh.
+  - `fonts.googleapis.com` and `fonts.gstatic.com`: online previews on the Google Fonts page, while Settings › "Show previews of Google Fonts you haven't downloaded" is on (the default). Google sees your IP address and which families you view; text you type is never sent.
+  - Every request carries your IP address and Fontface's User-Agent. Nothing else about you or your library is sent.
 
 **Sign-in.**
 - No P1 to P3 integration needs OAuth, the standard "sign in and grant access" protocol. Google uses an API key, Adobe needs nothing and Envato takes a personal token.
@@ -150,7 +154,7 @@ Google offers an official API that lists every family and links to complete desk
 
 - Connect: Settings > Services > Google Fonts. Paste a Google API key. A short guide explains how: create a Google Cloud project, turn on the free "Web Fonts Developer API", create a key and restrict it to that API.
 - No key: browsing and installing still work through Google's official google/fonts GitHub repo. It is slower, has no popularity sort and has a rate limit.
-- Browse about 1,950 families. Sort by popularity, trending, newest or name. Filter by category, script and variable. Rows show each name in the API's `menu` font, a tiny file with just those letters.
+- Browse about 1,950 families. Sort by popularity, trending, newest or name. Filter by category, script and variable. Rows show each name in its own font. The plan was the API's `menu` font (it needs a key); as built it's keyless: a tiny file with just those letters, from Google's documented CSS2 `text=` option (see "Online previews (as built)" below).
 - The type tester downloads the full font into a preview cache that is not turned on. Typed text never goes to Google.
 - Install: one click per family. The variable font is the default. A "Prefer static fonts" setting installs separate weights instead, which helps older apps.
 - Update: a daily check shows an update badge. Auto-update is optional. Fontface warns if PostScript names change, because documents may lose the link.
@@ -199,12 +203,31 @@ Material Icons and Material Symbols have no folder in google/fonts. Google publi
 - Previews: Material Icons' letters draw nothing alone (words like "home" turn into icons through ligatures, letters drawn as one shape), so the library preview shows a sample of its icons, labelled Symbols. Material Symbols also has a plain alphabet, so the library preview draws its name in those letters. On the Google Fonts page, downloaded icon families preview as five icons (home, search, settings, favorite, star) by their code points, which every one of these fonts has. Material Icons Two Tone is a color font (COLR and CPAL tables): its palette is five entries, all black at different opacities, and its icons never use the text color, so CSS `color` can't change them. In the dark theme they would draw black on the near-black page. So any color font whose whole first palette is dark gets a CSS font palette (`@font-palette-values`) for the dark theme: each entry in the dark theme's text color, at the entry's own opacity (`src/colorPalette.ts`). Previews, the font page and its Characters grid use it; colorful palettes, such as emoji, are left alone. Only fonts the app loads from their files get it, not installed fonts it loads by name.
 - Sizes: Material Icons styles are 0.3–0.7 MB each; the variable Material Symbols are 9–15 MB each.
 
+**Online previews (as built, 2026-10-19)**
+
+The Google Fonts page shows every family in its own font, even with nothing downloaded. Sean chose online previews **on by default**, with a notice in Settings saying what Google sees, rather than a prompt.
+
+- **Your own copy first, no network.** A family you already have in any library folder previews from your file (matched by family name, ignoring case, spaces and punctuation; the Google Fonts folder's copy first; the most regular style). A copy that isn't the managed download says so quietly ("Your copy"), since it may be another version. This is done in the UI (`src/components/GoogleFontsPanel.tsx`).
+- **Otherwise, a tiny file from Google** (`src-tauri/src/services/google/previews.rs`). Rust asks `GET https://fonts.googleapis.com/css2?family=<Family+Name>[:axes]&text=<characters>` with Fontface's User-Agent. Google answers with one `@font-face` whose `src` is a `https://fonts.gstatic.com/l/font?kit=…` TrueType file holding only those characters (checked 2026-10-19). Rust takes that one URL and throws the CSS away. Any font URL that isn't on `https://fonts.gstatic.com/` makes the whole answer unusable, and a redirect to another host is refused. The file may be at most 512 KB (Noto Color Emoji's is over 20 MB, so it shows "too large"), must parse as a font, and is profiled like a library font, so a row gets the same preview profile the library uses.
+- **What a row asks for.**
+  - The family name, plus its capitals and lowercase in the same request, so a capitals-only font still shows its name (in capitals).
+  - Icon families (Material Icons, Material Symbols): five icons by their private-use code points (home, search, settings, favorite, star), never icon words, which rely on ligatures.
+  - A family that can't draw its name gets a short sample of its script instead: up to 24 letters of the main Unicode block of its script (hand-picked text for Japanese, Korean, Chinese, emoji, symbols, math and music). The script comes from Fontsource's `defSubset`, then the family's other subsets. Lycian, Khmer and Karla Tamil Upright, asked for their names, answer with only a space; families without a `latin` subset go straight to the sample.
+  - Families without a regular style get their nearest style, or Google answers HTTP 400: `family=Buda:wght@300` (Buda 300, Coda Caption 800, Sunflower 300/500/700 asks for 500, UnifrakturCook 700), `:ital@1` for italic-only Molle, or `ital,wght@1,<w>` when both are needed. From the catalog's `weights` and `styles`.
+- **Typed preview text never leaves the Mac.** While the page's preview text isn't empty, rows use one fixed "alphabet" file per family instead: printable ASCII (U+0020–U+007E) and Latin-1 (U+00A0–U+00FF). Until it's there, a row keeps its name preview. A typed character outside that alphabet can't be previewed online (the row says so; it doesn't claim the font lacks it). Characters inside it that the font lacks come from the profile's `asciiMissing`, as in the library. Icon families keep their icons.
+- **The cache.** In the app's cache folder, never in the Services folder (which is scanned and turned on): `~/Library/Caches/design.snds.fontface/google-previews/<id>/<token>/<kind>.ttf`, with `<kind>.json` beside it (the profile and the characters the file holds). Kinds: `name`, `icons`, `script`, `alphabet`. The token is the family's catalog `lastModified`; when it changes, the old files go, and so do families that leave the catalog. Writes go to a temporary file first and are renamed into place. About 64 MB in all; past that, the files used longest ago go. Settings › "Clear preview cache (<size>)" empties it.
+- **Failures.** Google refusing the family, a file too large, one that isn't a usable font, or one that can't draw anything: remembered next to the files and tried again after 7 days. Network trouble (no connection, DNS, a timeout, Google's servers failing or limiting requests, an answer that isn't Google's usual one): previews pause for 15 minutes ("offline") and nothing is remembered about the family. Rows show the name in the interface font, with a quiet explanation, never an error message per row.
+- **Load.** One shared connection per host (no new TLS handshake for every small request), a 10-second deadline (5 to connect), and at most 6 preview requests at once in Rust. The UI queues its calls the same way as `ff://` fonts and drops rows that scroll away.
+- **Off.** With the setting off, nothing at all is sent to Google, and saved previews aren't used either; rows that aren't local show the name in the interface font. The cache stays until it's cleared.
+- **Kept away from everything else.** The cache's files are never scanned, turned on, tagged, listed or served by library id, even if you add your Library folder (`is_preview_cache_path`, next to each Adobe Fonts guard). The web view gets them only through `ff://localhost/google/<id>/<token>/<kind>`, which serves saved files only.
+- Commands: `google_preview(id, kind)` (kind `"row"` or `"alphabet"`; the only command that sends anything to Google for previews), `google_preview_cache()` and `clear_google_preview_cache()`. The setting is `googlePreviews`.
+
 **License and ToS guardrails**
 
 - The user's own key is the default. A built-in key is allowed only in a closed-source build, because §4b bans keys in open-source projects.
 - No Fontface server that passes on Google's data. It would re-share API content (§4a, §5e).
 - Use the API only as documented (§2c) and never work around its limits (§2d). Show "Google Fonts" as plain text, with no logo or hint of endorsement (§6).
-- Never install WOFF2 files or CSS2 output. They are web pieces.
+- Never install WOFF2 files or CSS2 output. They are web pieces. Online previews use CSS2 `text=` files only to draw rows on the Google Fonts page: kept in the cache folder, never scanned, installed or turned on.
 - The fonts use the SIL Open Font License (OFL) 1.1, Apache 2.0 or the Ubuntu Font Licence. Keep the license with each family. Never modify fonts or generate new instances (OFL reserved names), and don't sell them on their own.
 - The privacy note says that every request sends the user's IP address and Fontface's User-Agent to Google.
 
@@ -421,7 +444,7 @@ These would copy or decrypt licensed fonts, break a service's terms or get aroun
 2. **Other apps' fonts in All Fonts?** Recommended: show Adobe and other managed fonts in All Fonts with a badge, and also under their own Services row, with a filter to hide them. Agree?
 3. **Google Fonts: on demand or "sync all"?** Syncing everything takes 2–3 GB, plus about 1 GB for Noto and other scripts. Recommended: on demand, with an optional "Download all".
 4. **Static fonts from where?** The official API gives only named weights. Google's unofficial download list adds optical-size and width statics. Allow the unofficial source as an opt-in?
-5. **Online previews?** Google CSS2 and jsDelivr previews send the user's IP address to those hosts. Recommended: local previews only, with online previews as an opt-in.
+5. **Online previews?** Google CSS2 and jsDelivr previews send the user's IP address to those hosts. Decided (2026-10-19): Google's, on by default, with a notice in Settings saying what Google sees and a switch to turn them off (§3.1, "Online previews (as built)"). Your own copies preview first, without the network.
 6. **Ask for permission?** Email ITF about in-app Fontshare downloads. Ask Adobe about reading `entitlements.xml`, which would show fonts added for Adobe apps only. The `fontintegrations@adobe.com` address came from a forum poster, not a confirmed Adobe contact.
 7. **Test hardware.** Can you lend or set up a Mac with Creative Cloud, and ideally Monotype Fonts, Monotype Connect and Fontstand? We need to confirm where they keep fonts and how the OS lists them. A Windows 11 24H2 machine is needed for the Windows questions.
 8. **GitHub token.** Allow users to paste one for higher download limits?
