@@ -63,17 +63,20 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 ## Location colors
 
 Sources are colored from their row in the sidebar: right-click the row (or focus it and press
-Shift-F10) and pick a color. Folders inside a source, Font Book's three macOS font folders
-among them, are colored from the toolbar's folder picker on that source's view: right-click a
-folder there, or press Shift-F10 on it. Picking the color marked "(default)", or "Use default
-color", goes back to the default, so the location follows its parent folder or Font Book again.
-The color tints the location's icon, and each font row shows a small dot in the color of the
-places its copies live (hover for the list; screen readers hear the places, after the row's
-name, with its tags).
+Shift-F10) and pick a color. Picking the color marked "(default)", or "Use default color", goes
+back to the default. The color tints the source's icon, and each font row shows a small dot in
+the color of the sources its copies come from (hover for the list of places; screen readers
+hear the places, after the row's name, with its tags). A font always takes its source's color:
+folders inside a source have no color of their own.
+
+Earlier versions could color a folder inside a source, or one of Font Book's three macOS font
+folders (from the sidebar's old folder trees and then the toolbar's old folder picker). Those
+colors are still kept in the library, in tags exports and backups, and through Locate…, but
+nothing shows them now.
 
 | Location | Default color | Notes |
 |---|---|---|
-| Font Book and the macOS font folders | Gray | The three folders follow Font Book's color unless you set their own (in the folder picker) |
+| Font Book and the macOS font folders | Gray | The three folders are part of Font Book and show its color |
 | Google Fonts | Blue | Fontface's download folder |
 | Adobe Fonts | Red | |
 | Purchases | Orange | Fontface's folder for fonts imported from store downloads |
@@ -102,10 +105,6 @@ the folder by its old path, so importing or restoring one first points those pat
 folder's current place: location colors, and fonts kept by file (`file:` keys). A path inside a
 library folder that's there now is left alone, and so is a file the library still lists. The
 preview and the import make the same change, so they always agree.
-
-Each folder you add can be opened (the arrow before its name) to show the folders inside it,
-built from where its fonts are. Each of those is a view with its own count and color. A folder
-without its own color takes the color of the nearest folder above it that has one.
 
 ### The palette
 

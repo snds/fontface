@@ -1,5 +1,5 @@
 import type { Folder, ServiceInfo, SidebarSections } from "./api";
-import type { Family, LibraryView, SmartKind } from "./library";
+import type { LibraryView, SmartKind } from "./library";
 
 /**
  * The sidebar's places, and how a saved view maps onto them. Pure (no React, no DOM), so `npm
@@ -7,14 +7,13 @@ import type { Family, LibraryView, SmartKind } from "./library";
  *
  * LIBRARY holds the smart entries (`SMART_ENTRIES`). SOURCES holds one row per source, flat, in
  * this order: Font Book (the OS's three font folders as one source), Google Fonts, Adobe Fonts,
- * Purchases, then your folders A to Z (`sourceRows`). There are no folder trees in the sidebar:
- * a folder inside a source is a "location" view, picked with the toolbar's subfolder picker
- * (subfolders.ts), and its source's row stays selected (`sourceOf`).
+ * Purchases, then your folders A to Z (`sourceRows`). There are no folders inside a source: a
+ * source's view lists all of its fonts.
  *
- * Saved views from before (`lastView`) still open: a macOS font folder's view becomes Font Book
- * narrowed to that folder, and a service folder's view becomes that service's row
- * (`migrateView`). "service:google" used to open the catalog; it now lists your Google fonts,
- * and the catalog opens from there (Browse).
+ * Saved views from before (`lastView`) still open: a macOS font folder's view becomes Font Book,
+ * a service folder's view becomes that service's row, and a folder inside a source (from the
+ * toolbar's old folder picker) becomes that source (`migrateView`). "service:google" used to
+ * open the catalog; it now lists your Google fonts, and the catalog opens from there (Browse).
  */
 
 export interface SmartEntry {
@@ -89,7 +88,7 @@ export function sourceOfFolder(folder: Folder, services: readonly ServiceInfo[])
 }
 
 /** The source a view shows (its row in SOURCES is the selected one), or null for the smart
- *  entries and tags. A folder inside a source belongs to that source. */
+ *  entries and tags. */
 export function sourceOf(view: LibraryView, folders: readonly Folder[], services: readonly ServiceInfo[]): SourceKey | null {
   switch (view.kind) {
     case "installed":
@@ -99,10 +98,6 @@ export function sourceOf(view: LibraryView, folders: readonly Folder[], services
     case "folder": {
       const folder = folders.find((f) => f.id === view.id);
       return folder ? sourceOfFolder(folder, services) : `folder:${view.id}`;
-    }
-    case "location": {
-      const folder = folderHolding(view.path, folders);
-      return folder ? sourceOfFolder(folder, services) : null;
     }
     default:
       return null;
@@ -129,17 +124,27 @@ export function sourceFolders(source: SourceKey, folders: readonly Folder[], ser
   return folders.filter((f) => f.id === id);
 }
 
+/** A view as saved before: today's views, or a folder inside a source ("location"), from the
+ *  toolbar's folder picker that has since gone. */
+export type SavedView = LibraryView | { kind: "location"; path: string };
+
 /**
  * A saved view in today's terms. A macOS font folder's view (from when those folders sat under
- * Font Book in the sidebar) becomes Font Book narrowed to that folder; a service folder's view
- * becomes that service's row. Everything else is unchanged, including views of folders that are
- * gone (`stillThere` turns those into All Fonts).
+ * Font Book in the sidebar) becomes Font Book; a service folder's view becomes that service's
+ * row; a folder inside a source becomes that whole source (All Fonts if no source holds it any
+ * more). Everything else is unchanged, including views of folders that are gone (`stillThere`
+ * turns those into All Fonts).
  */
-export function migrateView(view: LibraryView, folders: readonly Folder[], services: readonly ServiceInfo[]): LibraryView {
+export function migrateView(view: SavedView, folders: readonly Folder[], services: readonly ServiceInfo[]): LibraryView {
+  if (view.kind === "location") {
+    const folder = folderHolding(view.path, folders);
+    const source = folder ? sourceOfFolder(folder, services) : null;
+    return source ? sourceView(source) : { kind: "all" };
+  }
   if (view.kind !== "folder") return view;
   const folder = folders.find((f) => f.id === view.id);
   if (!folder) return view;
-  if (folder.kind === "system") return { kind: "location", path: folder.path };
+  if (folder.kind === "system") return { kind: "installed" };
   if (folder.kind === "service") {
     const service = serviceOfFolder(folder, services);
     return service ? { kind: "service", id: service } : view;
@@ -150,7 +155,7 @@ export function migrateView(view: LibraryView, folders: readonly Folder[], servi
 const isId = (v: unknown) => typeof v === "number" && Number.isInteger(v);
 
 /** A view read back from storage, if it has the right shape. */
-export function parseView(v: unknown): LibraryView | null {
+export function parseView(v: unknown): SavedView | null {
   if (!v || typeof v !== "object") return null;
   const view = v as Record<string, unknown>;
   switch (view.kind) {
@@ -186,8 +191,7 @@ export function hiddenBySidebar(view: LibraryView, sidebar: SidebarSections, fol
       return !sidebar.tags;
     case "installed":
     case "service":
-    case "folder":
-    case "location": {
+    case "folder": {
       const source = sourceOf(view, folders, services);
       if (source === "fontbook") return !sidebar.fontBook;
       if (source === "google" || source === "adobe" || source === "purchases") return !sidebar[source];
@@ -202,24 +206,17 @@ export interface PlaceContext {
   folders: readonly Folder[];
   services: readonly ServiceInfo[];
   sidebar: SidebarSections;
-  /** The whole library, so a saved subfolder can be checked for fonts. */
-  families: readonly Family[];
 }
 
-/** True if a view can still be shown: its folder or subfolder (with fonts in it) still exists,
- *  and the sidebar shows its place. */
-export function stillThere(view: LibraryView, { folders, services, sidebar, families }: PlaceContext): boolean {
+/** True if a view can still be shown: its folder still exists, and the sidebar shows its place. */
+export function stillThere(view: LibraryView, { folders, services, sidebar }: PlaceContext): boolean {
   if (hiddenBySidebar(view, sidebar, folders, services)) return false;
   if (view.kind === "folder") return folders.some((f) => f.id === view.id);
-  if (view.kind === "location") {
-    const inside = `${view.path}/`;
-    return !!folderHolding(view.path, folders) && families.some((family) => family.faces.some((face) => face.copies.some((c) => c.path.startsWith(inside))));
-  }
   return true;
 }
 
 /** "Open where you left off": the saved view brought up to date, or All Fonts if it's gone. */
-export function restoreView(saved: LibraryView, ctx: PlaceContext): LibraryView {
+export function restoreView(saved: SavedView, ctx: PlaceContext): LibraryView {
   const view = migrateView(saved, ctx.folders, ctx.services);
   return stillThere(view, ctx) ? view : { kind: "all" };
 }
@@ -244,8 +241,5 @@ export function placeLabel(
       return folders.find((f) => f.id === view.id)?.label || "the folder";
     case "tag":
       return tagName(view.id) ?? "the tag";
-    case "location":
-      // One of the OS's font folders by its own name ("Computer Fonts"), else the folder's name.
-      return folders.find((f) => f.path === view.path)?.label || view.path.split("/").pop() || "the folder";
   }
 }

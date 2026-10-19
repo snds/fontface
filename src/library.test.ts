@@ -242,7 +242,6 @@ test("a service's view lists the fonts in its managed folder; none without one, 
   assert.deepEqual(shown({ kind: "service", id: "purchases" }), [], "no Purchases folder yet");
   assert.deepEqual(shown({ kind: "service", id: "adobe" }), []);
   assert.deepEqual(shown({ kind: "installed" }), ["Both", "Sys"], "Font Book: a copy in an OS font folder");
-  assert.deepEqual(shown({ kind: "location", path: "/g/Goog" }), ["Goog"]);
 });
 
 test("the smart entries' counts match what each lists", () => {

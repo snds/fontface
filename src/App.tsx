@@ -38,8 +38,7 @@ import {
   type LibraryView,
   type StatusFilter,
 } from "@/library";
-import { hiddenBySidebar, placeLabel, SERVICE_LABELS, sourceFolders, sourceOf, sourceView } from "@/places";
-import { hasSubfolders } from "@/subfolders";
+import { hiddenBySidebar, placeLabel, SERVICE_LABELS, sourceFolders, sourceOf } from "@/places";
 import { describeSort, layoutInfo, layoutShortcut, sizeShortcut, sortInfo, stepSize } from "@/viewOptions";
 import {
   commandName,
@@ -95,7 +94,6 @@ import { ViewOptions } from "@/components/ViewOptions";
 import { PreviewStyleContext, usePreviewStyleValue } from "@/components/PreviewStyle";
 import { FontPage } from "@/components/fontPage/FontPage";
 import { BackButton } from "@/components/fontPage/PageHeader";
-import { SubfolderPicker } from "@/components/SubfolderPicker";
 import { StateWordingContext, type SwitchWording } from "@/components/ActivationSwitch";
 import { GOOGLE_SEARCH_ID, GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
@@ -675,11 +673,7 @@ export default function App() {
     try {
       const failures = await api.removeFolder(folder.id);
       for (const f of failures) toast.error(`Couldn't turn off ${fileName(f.path)}`, { description: f.error });
-      setView((v) =>
-        (v.kind === "folder" && v.id === folder.id) || (v.kind === "location" && v.path.startsWith(`${folder.path}/`))
-          ? { kind: "all" }
-          : v,
-      );
+      setView((v) => (v.kind === "folder" && v.id === folder.id ? { kind: "all" } : v));
     } catch (e) {
       removedFolders.current.delete(folder.id);
       toast.error(String(e));
@@ -1155,12 +1149,10 @@ export default function App() {
   const styleCount = useMemo(() => filtered.reduce((n, f) => n + f.faces.length, 0), [filtered]);
   const { hasOwnTag } = filterContext;
   const counts = useMemo(() => placeCounts(allFamilies, { hideInstalled, recentSince: since, hasOwnTag }), [allFamilies, hideInstalled, since, hasOwnTag]);
-  // The source this view shows (its sidebar row), its library folders, and whether the toolbar
-  // offers its subfolders.
+  // The source this view shows (its sidebar row) and its library folders.
   const source = sourceOf(view, folders, services);
   const sourceKey = source ? `${source}:${sourceFolders(source, folders, services).map((f) => `${f.id}=${f.path}`).join(",")}` : "";
   const sourceRoots = useMemo(() => (source ? sourceFolders(source, folders, services) : []), [sourceKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const offerSubfolders = useMemo(() => sourceRoots.length > 0 && (view.kind === "location" || hasSubfolders(sourceRoots, allFamilies)), [sourceRoots, allFamilies, view.kind]);
   const browseService = source === "google" || source === "purchases" ? source : null;
   // A source's view shows only its own folders' scans: Google Fonts or Purchases with nothing in
   // the library yet (no folder) keeps offering Browse while another folder is scanned. Other
@@ -1170,7 +1162,7 @@ export default function App() {
   // Empty list with filters on: say which fonts were asked for, e.g. "No active variable fonts here."
   const filtersOn = !!query || listStatus !== "any" || variableOnly;
   const kinds = [listStatus !== "any" && listStatus, variableOnly && "variable", "fonts"].filter(Boolean).join(" ");
-  const where = view.kind === "tag" ? " with this tag" : view.kind === "location" ? " in this folder" : "";
+  const where = view.kind === "tag" ? " with this tag" : "";
   const noMatch = query ? `No ${kinds}${where} match “${query}”.` : `No ${kinds}${where || " here"}.`;
 
   // "Open where you left off": the view and filters are saved as they change, and reopened at launch.
@@ -1179,7 +1171,6 @@ export default function App() {
     libraryLoaded,
     folders,
     services,
-    families: allFamilies,
     current: { view, status, variableOnly },
     apply: (last) => {
       setView(last.view);
@@ -1602,18 +1593,6 @@ export default function App() {
                 fontCount={styleCount}
                 layout={layout}
                 onLayout={chooseLayout}
-                subfolders={
-                  source && offerSubfolders ? (
-                    <SubfolderPicker
-                      sourceLabel={placeLabel(sourceView(source), { folders, fontBook: INSTALLED_LABEL, tagName: () => undefined })}
-                      roots={sourceRoots}
-                      families={allFamilies}
-                      selected={view.kind === "location" ? view.path : null}
-                      locations={locations}
-                      onPick={(path) => goToPlace(path === null ? sourceView(source) : { kind: "location", path })}
-                    />
-                  ) : undefined
-                }
                 browse={browseService ? <BrowseButton service={browseService} newPurchases={newPurchases} onBrowse={openCatalog} /> : undefined}
                 viewOptions={
                   <ViewOptions
@@ -1938,7 +1917,6 @@ function EmptyPlace({
     switch (view.kind) {
       case "tag":
         return quiet("No fonts have this tag yet. Select fonts in another view, then tag them from the tag button or by right-clicking.");
-      case "location":
       case "folder":
         return quiet("No fonts in this folder.");
       case "recent":

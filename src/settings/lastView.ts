@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppSettings, Folder, ServiceInfo } from "@/api";
-import type { Family, LibraryView, StatusFilter } from "@/library";
-import { parseView, restoreView } from "@/places";
+import type { LibraryView, StatusFilter } from "@/library";
+import { parseView, restoreView, type SavedView } from "@/places";
 
 /**
  * "Open where you left off": the library view and its filters (All / Active / Inactive and
  * Variable) are kept in localStorage as they change, and reopened at launch when the setting
  * is on. A view saved before the sidebar's flat Sources (a macOS font folder, a service's
- * folder) opens as today's equivalent (`migrateView` in places.ts); one whose folder, subfolder
- * or sidebar entry is gone opens All Fonts instead. (A deleted tag is caught by the Tags section
- * once tags load.)
+ * folder) or before the toolbar's folder picker went (a folder inside a source) opens as
+ * today's equivalent (`migrateView` in places.ts); one whose folder or sidebar entry is gone
+ * opens All Fonts instead. (A deleted tag is caught by the Tags section once tags load.)
  */
 
 const KEY = "fontface.lastView";
@@ -20,7 +20,10 @@ export interface LastView {
   variableOnly: boolean;
 }
 
-function load(): LastView | null {
+/** What storage holds: a view from an older version too, until `restoreView` brings it up to date. */
+type Saved = Omit<LastView, "view"> & { view: SavedView };
+
+function load(): Saved | null {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? "null");
     const view = parseView(raw?.view);
@@ -50,7 +53,6 @@ export function useLastView({
   libraryLoaded,
   folders,
   services,
-  families,
   current,
   apply,
 }: {
@@ -59,12 +61,11 @@ export function useLastView({
   libraryLoaded: boolean;
   folders: Folder[];
   services: ServiceInfo[];
-  families: Family[];
   current: LastView;
   apply: (last: LastView) => void;
 }) {
   // Read before anything is saved over it.
-  const saved = useRef<LastView | null | undefined>(undefined);
+  const saved = useRef<Saved | null | undefined>(undefined);
   if (saved.current === undefined) saved.current = load();
   const [decided, setDecided] = useState(false);
   const untouched = current.view.kind === "all" && current.status === "any" && !current.variableOnly;
@@ -74,8 +75,8 @@ export function useLastView({
     setDecided(true);
     const last = saved.current;
     if (!settings.restoreLastView || !last || !untouched) return;
-    apply({ ...last, view: restoreView(last.view, { folders, services, families, sidebar: settings.sidebar }) });
-  }, [decided, settings, libraryLoaded, folders, services, families, untouched, apply]);
+    apply({ ...last, view: restoreView(last.view, { folders, services, sidebar: settings.sidebar }) });
+  }, [decided, settings, libraryLoaded, folders, services, untouched, apply]);
 
   const { view, status, variableOnly } = current;
   useEffect(() => {

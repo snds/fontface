@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment } from "react";
 import { toast } from "sonner";
 import {
   ContextMenu,
@@ -30,7 +30,6 @@ import { useSettings } from "@/settings/useSettings";
 import { COLOR_NAMES, PALETTE, colorVar, type Tag, type TagColor } from "./api";
 import { openTagDialog } from "./dialogs";
 import { moveTag, moveToGroup } from "./drag";
-import type { Locations } from "./locations";
 import { fold, GROUP_LABELS, isWithin, parentOf, useTagIndex, type TagGroup, type TagNode } from "./model";
 import { recolorTag, setLocationColor } from "./store";
 
@@ -254,8 +253,7 @@ function LocationItems({
   onLocate?: () => void;
 }) {
   const { Item, Separator } = CONTEXT;
-  // Picking the default goes back to following it (a parent folder, or Font Book), rather
-  // than fixing that color in place.
+  // Picking the default goes back to following it, rather than fixing that color in place.
   const pick = (c: TagColor) => setLocationColor(location, c === defaultColor ? null : c).catch(failed("change the color"));
   return (
     <>
@@ -345,32 +343,6 @@ export function LocationMenu({
         )}
         {after.length > 0 && <Separator />}
         {after.map(action)}
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
-
-/**
- * One right-click menu for many location rows (a subfolder picker can list thousands). Each row
- * names its location in a `data-location` attribute.
- */
-export function LocationsMenu({ locations, children }: { locations: Locations; children: React.ReactNode }) {
-  const [target, setTarget] = useState<string | null>(null);
-  return (
-    <ContextMenu onOpenChange={(open) => !open && setTarget(null)}>
-      <ContextMenuTrigger
-        className="block"
-        onKeyDown={openMenuFromKeyboard}
-        onContextMenuCapture={(e) => setTarget((e.target as HTMLElement).closest("[data-location]")?.getAttribute("data-location") ?? null)}
-      >
-        {children}
-      </ContextMenuTrigger>
-      <ContextMenuContent className="min-w-44">
-        {target ? (
-          <LocationItems location={target} color={locations.colorOf(target)} defaultColor={locations.defaultOf(target)} />
-        ) : (
-          <ContextMenuItem disabled>Right-click a folder to change its color</ContextMenuItem>
-        )}
       </ContextMenuContent>
     </ContextMenu>
   );

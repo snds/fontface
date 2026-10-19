@@ -5,16 +5,19 @@ import type { TagColor } from "./api";
 import { useOrganize } from "./store";
 
 /**
- * Colors for library locations: Font Book and the macOS font folders, service folders, the
- * user's folders and any folder inside them.
+ * Colors for the sidebar's sources: Font Book, Adobe Fonts, the service folders (Google Fonts,
+ * Purchases) and the user's folders. A font shows its source's color.
  *
- * Each location has a default the user can change:
- * - Font Book and its folders: gray (the folders follow Font Book's color unless set).
+ * Each source has a default the user can change (right-click its row):
+ * - Font Book: gray. The macOS font folders are part of it and show its color.
  * - Services and cloud storage: a color people know them by (Google Fonts blue, Adobe red,
  *   Google Drive green, iCloud sky, Dropbox indigo…), recognised from the folder's path.
  *   Purchases (fonts imported from store downloads) are orange.
  * - Plain folders: amber, like a manila folder.
- * A folder inside a library folder takes the color of the nearest folder above it that has one.
+ *
+ * Colors set before on a folder inside a source, or on one macOS font folder (from the sidebar's
+ * old folder trees and the toolbar's old folder picker), stay in the library, its export and its
+ * relocations, but nothing shows them any more: a font always takes its source's color.
  *
  * Windows plan: the same rules with `\` paths, plus OneDrive's default `%USERPROFILE%\OneDrive*`.
  */
@@ -45,7 +48,7 @@ export function cloudOf(path: string): { label: string; color: TagColor } | null
   return CLOUD.find((c) => c.test.test(path.endsWith("/") ? path : `${path}/`)) ?? null;
 }
 
-export const dirOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
+const dirOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 
 export interface FolderKind {
   /** Where it comes from, in plain words ("Google Drive", "Font Book", "Folder"). */
@@ -66,11 +69,12 @@ export function folderKind(folder: Folder, services: ServiceInfo[], fontBookColo
 }
 
 export interface Locations {
-  /** The color a location shows: picked, inherited or default. */
+  /** The color a source shows (by its location: Font Book, Adobe Fonts or its folder's path):
+   *  picked or default. */
   colorOf: (location: string) => TagColor;
-  /** What a location's color is when nothing is picked for it (for "Reset to …"). */
+  /** What a source's color is when nothing is picked for it (for "Reset to …"). */
   defaultOf: (location: string) => TagColor;
-  /** A copy's color: its folder's, or the nearest folder inside it that has its own. */
+  /** A copy's color: its source's. */
   colorOfCopy: (copy: FontSummary) => TagColor;
   /** Where a copy lives, in words: "Google Drive › Fonts › Inter/static". */
   describeCopy: (copy: FontSummary) => string;
@@ -90,41 +94,19 @@ export function useLocations(folders: Folder[], services: ServiceInfo[]): Locati
     const kinds = new Map(folders.map((f) => [f.id, folderKind(f, services, fontBook)]));
     const kindOf = (f: Folder) => kinds.get(f.id) ?? folderKind(f, services, fontBook);
 
-    /** The library folder holding a path, by longest prefix. */
-    const rootOf = (path: string): Folder | undefined => {
-      for (let dir = path; dir; dir = dirOf(dir)) {
-        const f = byPath.get(dir);
-        if (f) return f;
-      }
-      return undefined;
-    };
-
     const defaultOf = (location: string): TagColor => {
       if (location === FONT_BOOK_LOCATION) return DEFAULTS.fontBook;
       if (location === ADOBE_LOCATION) return DEFAULTS.adobe;
-      const root = rootOf(location);
-      if (!root) return cloudOf(location)?.color ?? DEFAULTS.folder;
-      if (location === root.path) return kindOf(root).defaultColor;
-      // A folder inside a library folder takes the color of the nearest folder above it that has one.
-      for (let dir = dirOf(location); dir.length >= root.path.length; dir = dirOf(dir)) {
-        const picked = locationColors.get(dir);
-        if (picked) return picked;
-      }
-      return kindOf(root).defaultColor;
+      const folder = byPath.get(location);
+      return folder ? kindOf(folder).defaultColor : (cloudOf(location)?.color ?? DEFAULTS.folder);
     };
     const colorOf = (location: string): TagColor => locationColors.get(location) ?? defaultOf(location);
 
-    const cache = new Map<string, TagColor>();
     const colorOfCopy = (copy: FontSummary): TagColor => {
       const folder = folderById.get(copy.folderId);
-      const dir = dirOf(copy.path);
-      const cacheKey = `${copy.folderId}|${dir}`;
-      let color = cache.get(cacheKey);
-      if (!color) {
-        color = folder && (dir === folder.path || dir.startsWith(`${folder.path}/`)) ? colorOf(dir) : folder ? colorOf(folder.path) : DEFAULTS.folder;
-        cache.set(cacheKey, color);
-      }
-      return color;
+      if (!folder) return DEFAULTS.folder;
+      // The macOS font folders are all Font Book.
+      return folder.kind === "system" ? fontBook : colorOf(folder.path);
     };
 
     const describeCopy = (copy: FontSummary): string => {
