@@ -543,7 +543,7 @@ fn verify_with_os(outcomes: &mut [ActivationOutcome], indexes: &[usize], active:
             outcomes[i].active = false;
             // Still recorded as on (the list shows it as set to turn on), so say so, and how to stop it.
             outcomes[i].error = Some(
-                "macOS didn't load this font. It may be turned off in Font Book. It stays set to turn on until you switch it off."
+                "macOS didn't load this font. It may be turned off in another app. It stays set to turn on until you switch it off."
                     .into(),
             );
         } else if !active && on {
@@ -560,7 +560,7 @@ fn verify_with_os(outcomes: &mut [ActivationOutcome], indexes: &[usize], active:
         if loaded.contains(&outcomes[i].path) {
             outcomes[i].active = true;
             outcomes[i].error = Some(
-                "Still on: another app (such as Typeface or Font Book) has turned this font on. Turn it off there.".into(),
+                "Still on: another app has turned this font on. Turn it off there.".into(),
             );
         }
     }

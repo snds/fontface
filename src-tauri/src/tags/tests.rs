@@ -1327,9 +1327,9 @@ fn reads_typeface_format_5_and_its_own_download_folder() {
                     "/Users/x/Fonts"],
       "tags": [ { "tag": { "name": "Fun" }, "fonts": ["Okuda"] } ] }"#;
     let source = typeface::parse(v5.as_bytes()).unwrap();
-    assert_eq!(source.label, "Typeface backup (format 5)");
+    assert_eq!(source.label, "Another font manager's backup (format 5)");
     assert_eq!(source.tags.len(), 1);
-    assert!(source.notes.iter().any(|n| n.contains("Typeface kept the Google Fonts")), "{:?}", source.notes);
+    assert!(source.notes.iter().any(|n| n.contains("kept the Google Fonts it downloaded")), "{:?}", source.notes);
     assert!(source.notes.iter().any(|n| n.contains("watching 1 folder, and 1 isn't on this Mac") && n.contains("…/x/Fonts")), "{:?}", source.notes);
 }
 

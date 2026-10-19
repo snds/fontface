@@ -185,7 +185,7 @@ export const isOnNow = (face: Face) => face.active && !face.installed;
 
 /** What the OS calls its own installed-fonts library. */
 export const INSTALLED_LABEL =
-  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent) ? "Windows Fonts" : "Font Book";
+  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent) ? "Windows Fonts" : "macOS Fonts";
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 

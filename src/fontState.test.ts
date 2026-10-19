@@ -45,8 +45,8 @@ const TEMPORARY = { activated: true, osActive: true, temporary: true };
 const WAITING = { activated: true, osActive: false };
 const ELSEWHERE = { activated: false, osActive: true };
 /** Why a style that's set to turn on may not be on (every case says the same "may"). */
-const WHY_ONE = "Its file may be on a drive that isn't connected, or online-only. Or macOS may not have loaded it, for example if it's turned off in Font Book.";
-const WHY_MANY = "Their files may be on a drive that isn't connected, or online-only. Or macOS may not have loaded them, for example if they're turned off in Font Book.";
+const WHY_ONE = "Its file may be on a drive that isn't connected, or online-only. Or macOS may not have loaded it, for example if it's turned off in another app.";
+const WHY_MANY = "Their files may be on a drive that isn't connected, or online-only. Or macOS may not have loaded them, for example if they're turned off in another app.";
 
 test("each style's state", () => {
   assert.equal(faceState(one(font("A", MACOS))), "macos");

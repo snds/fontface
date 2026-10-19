@@ -190,7 +190,7 @@ function TopLevelTarget() {
 /** The two groups' headings: open-state ids in the expanded-rows store, and how each starts. */
 const GROUPS: Record<TagGroup, { openId: string; startsOpen: boolean; hint: string }> = {
   mine: { ...GROUP_ROWS.mine, hint: "Tags you made, here or in another app." },
-  builtin: { ...GROUP_ROWS.builtin, hint: "Tags that came with Font Book and Typeface, such as Fixed Width and Style." },
+  builtin: { ...GROUP_ROWS.builtin, hint: "Tags another app made for you, such as Fixed Width and Style." },
 };
 
 /**
@@ -389,7 +389,7 @@ export function TagsSection({
             Create a tag…
           </button>
           <button className="text-left hover:text-foreground" onClick={() => openTagDialog({ kind: "import" })}>
-            Import from Typeface, Finder or Font Book…
+            Import tags…
           </button>
         </div>
       )}

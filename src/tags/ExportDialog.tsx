@@ -20,8 +20,8 @@ const FORMATS: { value: Format; title: string; hint: string; ext?: string }[] = 
   { value: "csv", title: "Spreadsheet (.csv)", hint: "One row for each font and tag. Opens in Numbers or Excel.", ext: "csv" },
   {
     value: "typeface",
-    title: "Typeface backup (.typeface-backup)",
-    hint: "The same layout as Typeface's own backups, for restoring into Typeface. Not yet tried in Typeface.",
+    title: "Another font manager's backup",
+    hint: "The backup format that Import reads, for restoring your tags in the app that makes it. Not yet tried in that app.",
     ext: "typeface-backup",
   },
   {
@@ -31,8 +31,8 @@ const FORMATS: { value: Format; title: string; hint: string; ext?: string }[] = 
   },
   {
     value: "fontBook",
-    title: "Font Book collections",
-    hint: "Adds a Font Book collection for each tag. Fonts already in a collection stay. Font Book only lists fonts that are turned on.",
+    title: "macOS font collections",
+    hint: "Adds a font collection on this Mac for each tag. Fonts already in a collection stay. Collections only list fonts that are turned on.",
   },
 ];
 
@@ -60,7 +60,7 @@ export function ExportDialog({ open, tag, onClose }: { open: boolean; tag?: Tag;
         const parts = [`${n(r.added)} fonts added to ${n(r.collections)} collections`, r.skipped && `${n(r.skipped)} without a PostScript name left out`].filter(Boolean);
         if (r.failed.length) {
           toast.warning(`${n(r.failed.length)} collections couldn't be saved`, { description: r.failed.map((f) => `${f.path}: ${f.reason}`).join("\n") });
-        } else toast.success(r.added ? "Font Book collections updated" : "Font Book already had these", { description: parts.join(" · ") });
+        } else toast.success(r.added ? "Font collections updated" : "The collections already had these", { description: parts.join(" · ") });
       } else {
         const spec = FORMATS.find((f) => f.value === format)!;
         const base = tag ? tag.name.replace(/[/:]/g, "-") : "fontface-tags";
@@ -110,7 +110,7 @@ export function ExportDialog({ open, tag, onClose }: { open: boolean; tag?: Tag;
             Cancel
           </Button>
           <Button onClick={run} disabled={working}>
-            {working ? "Exporting…" : format === "finder" ? "Add Finder tags" : format === "fontBook" ? "Add to Font Book" : "Export…"}
+            {working ? "Exporting…" : format === "finder" ? "Add Finder tags" : format === "fontBook" ? "Add collections" : "Export…"}
           </Button>
         </DialogFooter>
       </DialogContent>
