@@ -157,11 +157,11 @@ const sentence = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim(
 
 /** The back end's reasons (src-tauri/src/commands.rs), said for one font or for several. */
 const REASONS: { starts: string; one: string; many: string }[] = [
-  { starts: "macOS didn't load", one: "macOS didn't load it. It may be turned off in Font Book.", many: "macOS didn't load them. They may be turned off in Font Book." },
+  { starts: "macOS didn't load", one: "macOS didn't load it. It may be turned off in another app.", many: "macOS didn't load them. They may be turned off in another app." },
   {
     starts: "Still on: another app",
-    one: "Another app, such as Typeface or Font Book, keeps it on. Turn it off there.",
-    many: "Another app, such as Typeface or Font Book, keeps them on. Turn them off there.",
+    one: "Another app keeps it on. Turn it off there.",
+    many: "Another app keeps them on. Turn them off there.",
   },
   { starts: "Its folder was removed", one: "Its folder was removed from the library.", many: "Their folder was removed from the library." },
 ];
@@ -306,7 +306,7 @@ export const BUILTIN_FONTS_TIP = "Fonts can't be added to built-in tags or taken
 
 /** What a built-in tag is, for its group's heading in the sidebar. */
 export const BUILTIN_HINT =
-  "Tags that came with Font Book and Typeface, such as Fixed Width and Style. They're read-only: you can view, turn on and export them. To change one, choose “Make it my tag”.";
+  "Tags another app made for you, such as Fixed Width and Style. They're read-only: you can view, turn on and export them. To change one, choose “Make it my tag”.";
 
 /**
  * The tag menu's editing actions for `tag` (`top`: its top-level tag, which decides its group).
@@ -329,7 +329,7 @@ export function tagEditStates(tag: TagLike, top: TagLike, { nested = false }: { 
     moveTo: locked
       ? state(false, "Move to", `Built-in tags can't be moved. ${first}`)
       : state(true, "Move to", "Put it inside another of your tags, or back at the top level."),
-    export: state(true, "Export…", `Save it${nested ? " and the tags inside it" : ""} to a file, or to Finder tags or Font Book.`),
+    export: state(true, "Export…", `Save it${nested ? " and the tags inside it" : ""} to a file, to Finder tags, or to this Mac's font collections.`),
     delete: locked
       ? state(false, "Delete…", `Built-in tags can't be deleted. ${first} To hide them instead, turn off Built-in tags in Settings › Sidebar.`)
       : state(true, "Delete…", nested ? "Delete it and the tags inside it. The fonts stay in your library." : "Delete the tag. The fonts stay in your library."),

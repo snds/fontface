@@ -164,7 +164,7 @@ const outcome = (f: FontSummary, active: boolean, error: string | null = null): 
   error,
 });
 
-const NOT_LOADED = "macOS didn't load this font. It may be turned off in Font Book. It stays set to turn on until you switch it off.";
+const NOT_LOADED = "macOS didn't load this font. It may be turned off in another app. It stays set to turn on until you switch it off.";
 
 test("the result counts styles and groups the reasons", () => {
   const fonts = Array.from({ length: 6 }, (_, i) => font(`R${i}`, "Regular"));
@@ -185,7 +185,7 @@ test("the result counts styles and groups the reasons", () => {
     { error: "Its folder was removed from the library", count: 1 },
     { error: "The connection dropped", count: 1 },
   ]);
-  assert.equal(problemWords(result.problems[0], true), "2 fonts didn't turn on. macOS didn't load them. They may be turned off in Font Book.");
+  assert.equal(problemWords(result.problems[0], true), "2 fonts didn't turn on. macOS didn't load them. They may be turned off in another app.");
   assert.equal(problemWords(result.problems[1], true), "1 font didn't turn on. Its folder was removed from the library.");
   assert.equal(problemWords(result.problems[2], true), "1 font didn't turn on. The connection dropped.");
 
@@ -213,14 +213,14 @@ test("what a tag switch says", () => {
   const none = tagSwitchMessage("Sci-Fi", on, tagSwitchResult(on, [outcome(a, false, NOT_LOADED)]));
   assert.equal(none.tone, "error");
   assert.equal(none.title, "Couldn't turn on the fonts in “Sci-Fi”");
-  assert.equal(none.details[0], "1 font didn't turn on. macOS didn't load it. It may be turned off in Font Book.");
+  assert.equal(none.details[0], "1 font didn't turn on. macOS didn't load it. It may be turned off in another app.");
 
   const off = planTagSwitch(set, false);
-  const stillOn = "Still on: another app (such as Typeface or Font Book) has turned this font on. Turn it off there.";
+  const stillOn = "Still on: another app has turned this font on. Turn it off there.";
   const offMessage = tagSwitchMessage("Sci-Fi", off, tagSwitchResult(off, [outcome(b, true, stillOn)]));
   assert.equal(offMessage.title, "Couldn't turn off the fonts in “Sci-Fi”");
   assert.deepEqual(offMessage.details, [
-    "1 font didn't turn off. Another app, such as Typeface or Font Book, keeps it on. Turn it off there.",
+    "1 font didn't turn off. Another app keeps it on. Turn it off there.",
     "1 font stays on: installed in macOS's font folders.",
   ]);
 

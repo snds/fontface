@@ -434,7 +434,7 @@ export function TagsSection({
               <TooltipContent>More for tags: import, export, open or close all</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" className="w-auto min-w-48">
-              <TipItem kit={DROPDOWN} tip="Bring in tags from Typeface, Finder, Font Book or a Fontface tags file." onClick={() => openTagDialog({ kind: "import" })}>
+              <TipItem kit={DROPDOWN} tip="Bring in tags from Finder, this Mac's font collections, another font manager's backup, or a Fontface tags file." onClick={() => openTagDialog({ kind: "import" })}>
                 <Icon name="download" size={16} />
                 Import tags…
               </TipItem>
@@ -478,8 +478,8 @@ export function TagsSection({
           <TextAction tip="Make your first tag. Then drag fonts onto it, or use a font's right-click menu." onClick={() => openTagDialog({ kind: "create" })}>
             Create a tag…
           </TextAction>
-          <TextAction tip="Bring in the tags you made in Typeface, Finder or Font Book." onClick={() => openTagDialog({ kind: "import" })}>
-            Import from Typeface, Finder or Font Book…
+          <TextAction tip="Bring in tags from Finder, this Mac's font collections, or another font manager's backup." onClick={() => openTagDialog({ kind: "import" })}>
+            Import tags…
           </TextAction>
         </div>
       )}

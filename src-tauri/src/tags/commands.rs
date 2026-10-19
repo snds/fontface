@@ -149,7 +149,7 @@ fn on_main_thread<T: Send + 'static>(app: &AppHandle, f: impl FnOnce() -> T + Se
         let _ = tx.send(f());
     })
     .map_err(|e| AppError::Other(e.to_string()))?;
-    rx.recv().map_err(|_| AppError::Other("Font Book didn't answer".into()))
+    rx.recv().map_err(|_| AppError::Other("macOS didn't answer".into()))
 }
 
 fn load_source(app: &AppHandle, state: &AppState, request: &ImportRequest) -> AppResult<Source> {
@@ -166,7 +166,7 @@ fn load_source(app: &AppHandle, state: &AppState, request: &ImportRequest) -> Ap
         #[cfg(not(target_os = "macos"))]
         ImportRequest::Finder | ImportRequest::FontBook => {
             let _ = (app, state);
-            Err(AppError::Unsupported("Finder tags and Font Book collections".into()))
+            Err(AppError::Unsupported("Finder tags and macOS font collections".into()))
         }
     }
 }
@@ -393,5 +393,5 @@ fn add_to_font_book(app: &AppHandle, name: String, postscript_names: Vec<String>
 
 #[cfg(not(target_os = "macos"))]
 fn add_to_font_book(_: &AppHandle, _: String, _: Vec<String>) -> AppResult<usize> {
-    Err(AppError::Unsupported("Font Book collections".into()))
+    Err(AppError::Unsupported("macOS font collections".into()))
 }

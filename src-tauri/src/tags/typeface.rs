@@ -57,11 +57,11 @@ struct EntryTag {
 fn system_list(name: &str) -> Option<&'static str> {
     let n = name.trim().to_ascii_lowercase();
     if n == "typeface/active" {
-        Some("Typeface's record of the fonts it had turned on")
+        Some("The other app's record of the fonts it had turned on")
     } else if n.starts_with("typeface/") || n == "typeface" {
-        Some("One of Typeface's own lists")
+        Some("One of the other app's own lists")
     } else if n == "quick-collection" || n == "saved-quick-collection" {
-        Some("Typeface's quick collection")
+        Some("The other app's quick collection")
     } else {
         None
     }
@@ -69,11 +69,11 @@ fn system_list(name: &str) -> Option<&'static str> {
 
 pub fn parse(bytes: &[u8]) -> AppResult<Source> {
     let backup: Backup = serde_json::from_slice(bytes)
-        .map_err(|e| AppError::Invalid(format!("That doesn't look like a Typeface backup ({e})")))?;
+        .map_err(|e| AppError::Invalid(format!("That doesn't look like a backup Fontface can read ({e})")))?;
     let mut source = Source {
         label: match backup.version {
-            Some(v) => format!("Typeface backup (format {v})"),
-            None => "Typeface backup".into(),
+            Some(v) => format!("Another font manager's backup (format {v})"),
+            None => "Another font manager's backup".into(),
         },
         date: backup.date,
         ..Default::default()
@@ -120,7 +120,7 @@ pub fn parse(bytes: &[u8]) -> AppResult<Source> {
     let (own, watched): (Vec<&str>, Vec<&str>) = locations.into_iter().partition(|l| is_typeface_download_folder(l));
     if !own.is_empty() {
         source.notes.push(
-            "Typeface kept the Google Fonts it downloaded in its own folder, which Fontface doesn't read, so those fonts \
+            "The app that made this backup kept the Google Fonts it downloaded in its own folder, which Fontface doesn't read, so those fonts \
              show as not in your library. Add the families from Google Fonts in Fontface, then run this import again."
                 .into(),
         );
@@ -131,13 +131,13 @@ pub fn parse(bytes: &[u8]) -> AppResult<Source> {
         let count = |n: usize| if n == 1 { "1 folder".to_string() } else { format!("{n} folders") };
         source.notes.push(if gone.is_empty() {
             format!(
-                "Typeface was watching {}. Fonts are matched by name, so they don't need to be in the same place. \
+                "The app that made this backup was watching {}. Fonts are matched by name, so they don't need to be in the same place. \
                  Add any folder that's missing under Folders.",
                 count(watched.len())
             )
         } else {
             format!(
-                "Typeface was watching {}, and {} isn't on this Mac at that place any more ({}). That's fine: fonts are \
+                "The app that made this backup was watching {}, and {} isn't on this Mac at that place any more ({}). That's fine: fonts are \
                  matched by name, not by where they are. If the fonts moved, add their new folder under Folders.",
                 count(watched.len()),
                 if gone.len() == 1 { "1".to_string() } else { gone.len().to_string() },

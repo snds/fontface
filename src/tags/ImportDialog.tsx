@@ -54,12 +54,12 @@ const SOURCES: { kind: ImportSource["kind"]; icon: string; title: string; hint: 
   {
     kind: "typeface",
     icon: "backup",
-    title: "Typeface backup…",
-    hint: "A .typeface-backup file, from Typeface's File › Export › Backup Tags.",
+    title: "Another font manager's backup…",
+    hint: "A tags backup file made by another font manager.",
   },
   { kind: "fontface", icon: "data_object", title: "Fontface tags file…", hint: "A .json file exported from Fontface." },
   { kind: "finder", icon: "sell", title: "Finder tags", hint: "Tags you added to font files in Finder." },
-  { kind: "fontBook", icon: "auto_stories", title: "Font Book collections", hint: "Collections you made in Font Book." },
+  { kind: "fontBook", icon: "auto_stories", title: "macOS font collections", hint: "Font collections you made on this Mac." },
 ];
 
 async function pickSource(kind: ImportSource["kind"]): Promise<ImportSource | null> {
@@ -68,8 +68,8 @@ async function pickSource(kind: ImportSource["kind"]): Promise<ImportSource | nu
   const path = await openFile({
     multiple: false,
     directory: false,
-    title: typeface ? "Choose a Typeface backup" : "Choose a Fontface tags file",
-    filters: [typeface ? { name: "Typeface backup", extensions: ["typeface-backup"] } : { name: "Fontface tags", extensions: ["json"] }],
+    title: typeface ? "Choose a tags backup" : "Choose a Fontface tags file",
+    filters: [typeface ? { name: "Tags backup", extensions: ["typeface-backup"] } : { name: "Fontface tags", extensions: ["json"] }],
   });
   return typeof path === "string" ? { kind, path } : null;
 }
@@ -94,7 +94,7 @@ function MissingFonts({ preview }: { preview: ImportPreview }) {
         <div className="flex flex-col gap-2 border-t p-2">
           <div className="flex items-center gap-2">
             <span className="flex-1 text-muted-foreground">
-              Most are fonts you don't have here, such as Google Fonts that Typeface downloaded itself.
+              Most are fonts you don't have here, such as Google Fonts that another app downloaded itself.
               {preview.missing.length < total && ` The first ${n(preview.missing.length)} are listed.`}
             </span>
             <Button variant="outline" size="xs" onClick={copy}>
@@ -375,7 +375,7 @@ export function ImportDialog({
                                 {/* Where it lands in the sidebar. Tags nested inside follow their top-level tag, so
                                     it's said once per branch: on the top-most tag the list shows. */}
                                 {t.builtin && !listed.has(parentOf(t.name)?.toLowerCase() ?? "") && (
-                                  <span className="shrink-0 text-muted-foreground" title="Goes under Built-in in the sidebar (tags from Font Book and Typeface)">
+                                  <span className="shrink-0 text-muted-foreground" title="Goes under Built-in in the sidebar (tags another app made for you)">
                                     Built-in
                                   </span>
                                 )}

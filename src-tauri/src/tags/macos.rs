@@ -149,8 +149,8 @@ pub fn font_book_source() -> Source {
             });
         }
         Source {
-            label: "Font Book collections".into(),
-            notes: if tags.is_empty() { vec!["Font Book has no collections of yours.".into()] } else { vec![] },
+            label: "macOS font collections".into(),
+            notes: if tags.is_empty() { vec!["This Mac has no font collections of yours.".into()] } else { vec![] },
             tags,
             ..Default::default()
         }
@@ -172,7 +172,7 @@ fn existing_collection(name: &NSString) -> Option<Retained<NSString>> {
 pub fn add_to_collection(tag_name: &str, postscript_names: &[String]) -> AppResult<usize> {
     let wanted = tag_name.replace('/', LEVEL_SEPARATOR);
     if wanted.to_ascii_lowercase().starts_with("com.apple.") {
-        return Err(AppError::Invalid("Font Book keeps names that start with “com.apple.” for itself".into()));
+        return Err(AppError::Invalid("macOS keeps collection names that start with “com.apple.” for itself".into()));
     }
     autoreleasepool(|_| {
         // SAFETY: AppKit constant.
@@ -181,10 +181,10 @@ pub fn add_to_collection(tag_name: &str, postscript_names: &[String]) -> AppResu
         let (name, collection, have) = match existing_collection(&wanted) {
             Some(name) => {
                 let collection = NSMutableFontCollection::fontCollectionWithName_visibility(&name, NSFontCollectionVisibility::User)
-                    .ok_or_else(|| AppError::Invalid("Font Book has a collection with this name that Fontface can't change".into()))?;
+                    .ok_or_else(|| AppError::Invalid("There's a font collection with this name that Fontface can't change".into()))?;
                 let entries = collection
                     .queryDescriptors()
-                    .ok_or_else(|| AppError::Invalid("Font Book's collection couldn't be read, so it was left alone".into()))?;
+                    .ok_or_else(|| AppError::Invalid("The font collection couldn't be read, so it was left alone".into()))?;
                 let have: BTreeSet<String> = entries.iter().filter_map(|d| descriptor_string(&d, ps_key)).collect();
                 (name, collection, have)
             }

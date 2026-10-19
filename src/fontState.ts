@@ -162,8 +162,8 @@ const untilWhen = (wording: StateWording) => (wording.untilQuit ? "until you qui
 /** Why a font that's set to turn on may not be on. It's only ever "may": Fontface can't tell a
  *  file that isn't there yet from one macOS chose not to load. */
 const WAITING_WHY = {
-  one: "Its file may be on a drive that isn't connected, or online-only. Or macOS may not have loaded it, for example if it's turned off in Font Book.",
-  many: "Their files may be on a drive that isn't connected, or online-only. Or macOS may not have loaded them, for example if they're turned off in Font Book.",
+  one: "Its file may be on a drive that isn't connected, or online-only. Or macOS may not have loaded it, for example if it's turned off in another app.",
+  many: "Their files may be on a drive that isn't connected, or online-only. Or macOS may not have loaded them, for example if they're turned off in another app.",
 };
 
 /**
