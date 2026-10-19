@@ -10,6 +10,7 @@ mod login_item;
 mod model;
 mod preview;
 mod protocol;
+mod removed;
 mod scanner;
 mod services;
 mod settings;
@@ -139,7 +140,8 @@ impl AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
-    // macOS: the menu bar adds Settings… to the app menu. Other systems keep Tauri's default.
+    // macOS: the menu bar adds Settings… to the app menu, and the View and Font menus the page
+    // drives (window.rs). Other systems keep Tauri's default.
     #[cfg(target_os = "macos")]
     let builder = builder.menu(window::app_menu).on_menu_event(window::on_menu_event);
     let app = builder
@@ -157,6 +159,7 @@ pub fn run() {
             activation::ensure_schema(&conn)?;
             sync::ensure_schema(&conn)?;
             families::ensure_schema(&conn)?;
+            removed::ensure_schema(&conn)?;
             // Before the window can change any tag: sync's saved state from an older build.
             if let Err(e) = sync::upgrade_saved_state(&conn) {
                 eprintln!("fontface: sync couldn't update its saved state: {e}");
@@ -302,6 +305,10 @@ pub fn run() {
             commands::backups_reveal,
             commands::app_data_reveal,
             window::title_bar_double_click,
+            window::set_menu_state,
+            removed::fonts_remove,
+            removed::fonts_removed,
+            removed::fonts_put_back,
             families::families_get,
             families::families_merge,
             families::families_keep_separate,

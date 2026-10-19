@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FontPageTab } from "@/api";
+import type { ActivationMode, FontPageTab } from "@/api";
 import type { Face, Family } from "@/library";
 import type { FontPageEntry, PagePatch } from "@/nav";
 import { usePreviewProfile } from "@/previewProfiles";
@@ -9,8 +9,8 @@ import { Icon } from "@/components/ui/icon";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useFontCharacters } from "@/components/CharacterGrid";
 import { dragRegion, useTitleBar } from "@/components/TitleBar";
-import { FontTagMenuItems } from "@/tags/FontMenu";
-import { FamilyGroupMenuItem } from "@/families/FamilyGroupMenuItem";
+import { FontActionItems } from "@/components/FontActions";
+import { pageTarget } from "@/fontActions";
 import type { Locations } from "@/tags/locations";
 import { openMenuFromKeyboard } from "@/tags/menus";
 import { useTagIndex } from "@/tags/model";
@@ -33,8 +33,10 @@ interface Props {
   locations: Locations;
   onBack: () => void;
   onChange: (patch: PagePatch) => void;
-  onActivate: (ids: number[], active: boolean) => void;
+  onActivate: (ids: number[], active: boolean, scope?: ActivationMode | null) => void;
   onReveal: (fontId: number) => void;
+  /** Bumped by Cmd+T (or the Font menu's Tags…) to open the header's Tags popover. */
+  tagsAsk?: number;
 }
 
 /**
@@ -79,7 +81,7 @@ function GonePage({ placeName, onBack, headingRef }: { placeName: string; onBack
 
 const TAB_LABELS: Record<FontPageTab, string> = { specimen: "Specimen", characters: "Characters", axes: "Axes", info: "Info" };
 
-function FamilyPage({ page, family, placeName, previewText, busy, locations, onBack, onChange, onActivate, onReveal, headingRef }: Props & { family: Family; headingRef: React.RefObject<HTMLHeadingElement | null> }) {
+function FamilyPage({ page, family, placeName, previewText, busy, locations, onBack, onChange, onActivate, onReveal, tagsAsk, headingRef }: Props & { family: Family; headingRef: React.RefObject<HTMLHeadingElement | null> }) {
   const face: Face =
     family.faces.find((f) => f.key === page.styleKey) ?? family.faces.find((f) => f.key === page.faceKey) ?? family.representative;
   const font = face.primary;
@@ -101,7 +103,7 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
   const visibleAxes = detail ? detail.axes.filter((a) => !a.hidden) : null;
 
   return (
-    <PageMenu family={family}>
+    <PageMenu family={family} face={face}>
       <FontPageHeader
         family={family}
         face={face}
@@ -111,7 +113,7 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
         onBack={onBack}
         onChoose={(styleKey) => onChange({ styleKey })}
         onActivate={onActivate}
-        onReveal={onReveal}
+        tagsAsk={tagsAsk}
       />
       <Tabs value={tab} onValueChange={(v) => onChange({ tab: v as FontPageTab })} className="min-h-0 flex-1 gap-0">
         <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-6 py-2.5">
@@ -163,14 +165,15 @@ function wantsNativeMenu(e: React.MouseEvent) {
 }
 
 /**
- * Right-click anywhere on the page (or Shift-F10) for the tag and sync menu: on a line in "All
- * styles" it covers that style, elsewhere the whole family.
+ * Right-click anywhere on the page (or Shift-F10) for the font's menu (components/FontActions):
+ * on a line in "All styles" it covers that style, elsewhere the whole family in its chosen style.
  */
-function PageMenu({ family, children }: { family: Family; children: React.ReactNode }) {
+function PageMenu({ family, face, children }: { family: Family; face: Face; children: React.ReactNode }) {
   const index = useTagIndex();
-  const [faces, setFaces] = useState<Face[]>([]);
+  const [line, setLine] = useState<Face | null>(null);
   return (
-    <ContextMenu onOpenChange={(open) => !open && setFaces([])}>
+    // The line right-clicked is set as the menu opens (and kept while it closes).
+    <ContextMenu>
       <ContextMenuTrigger
         render={<div className="flex min-h-0 flex-1 flex-col" />}
         onKeyDown={(e) => openMenuFromKeyboard(e)}
@@ -181,14 +184,13 @@ function PageMenu({ family, children }: { family: Family; children: React.ReactN
             return;
           }
           const key = (e.target as HTMLElement).closest<HTMLElement>("[data-face-key]")?.dataset.faceKey;
-          setFaces(key ? family.faces.filter((f) => f.key === key) : family.faces);
+          setLine((key && family.faces.find((f) => f.key === key)) || null);
         }}
       >
         {children}
       </ContextMenuTrigger>
-      <ContextMenuContent className="max-h-[min(28rem,var(--available-height))] min-w-56">
-        <FontTagMenuItems faces={faces.length ? faces : family.faces} index={index} />
-        <FamilyGroupMenuItem faces={faces.length ? faces : family.faces} />
+      <ContextMenuContent className="max-h-[min(32rem,var(--available-height))] min-w-56">
+        <FontActionItems kind="context" target={pageTarget(family, face, line ?? undefined)} index={index} />
       </ContextMenuContent>
     </ContextMenu>
   );

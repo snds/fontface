@@ -1,19 +1,27 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useRef } from "react";
+import type { ActivationMode } from "@/api";
+import { optionClickHint, switchScope } from "@/fontActions";
 import { LOCK_LABELS, MARK_ICONS, markOf, stateDetails, switchLook, type LockKind, type StateMark as Mark, type StateSummary, type StateWording } from "@/fontState";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { IS_MAC } from "./TitleBar";
 
 // A font's on/off control and the marks that say more (see src/fontState.ts for the states).
 // Every layout and the font page use `StateControl`; the marks have a tooltip, and what they
 // say is also screen-reader text (on `srId`, which the item's description points at), so color
 // is never the only sign.
 
-/** How the state words put "on until logout" (App provides it, from settings). */
-export const StateWordingContext = createContext<StateWording>({});
+/** How the state words put "on until logout", and the saved activation mode a switch turns
+ *  fonts on with (Option-click uses the other). App provides it, from settings. */
+export interface SwitchWording extends StateWording {
+  mode?: ActivationMode;
+}
+export const StateWordingContext = createContext<SwitchWording>({});
 export const useStateWording = () => useContext(StateWordingContext);
+
 
 interface SwitchProps {
   /** The item's states, counted (`summarize`). */
@@ -27,20 +35,39 @@ interface SwitchProps {
   compact?: boolean;
   /** The text that says more about the state, as the switch's description. */
   describedBy?: string;
-  onChange: (next: boolean) => void;
+  /** `scope`: how to turn fonts on, when it isn't the saved activation mode (Option-click). */
+  onChange: (next: boolean, scope: ActivationMode | null) => void;
 }
 
 /**
  * The on/off switch. It's on when every style is on or set to turn on; with only some, it reads
  * as off with an "n/total" count of the styles that are on beside it (in Rows and on the font
  * page), and switching it turns them all on. Set to turn on but not on yet, it's on and paler.
+ *
+ * Option-click (Alt-click on Windows) turns fonts on the other way from the saved activation
+ * mode: until logout, or until you turn them off. Its tooltip says so while it would turn fonts
+ * on. (From the keyboard, the Font menu and right-click menu have both ways.)
  */
 export function ActivationSwitch({ state, label, busy = false, tabIndex, compact = false, describedBy, onChange }: SwitchProps) {
   const { checked, partial, dim } = switchLook(state);
   const counted = `${state.on} of ${state.total} styles on${state.waiting ? `, ${state.waiting} more set to turn on` : ""}`;
+  const { mode = "persistent" } = useStateWording();
+  /** Option was held for the press that's changing the switch. */
+  const alt = useRef(false);
   return (
-    // Rows are clickable (they select); keep switch clicks from also selecting.
-    <span className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+    // Rows are clickable (they select); keep switch clicks from also selecting. The capture
+    // handlers note Option before the switch acts on the press.
+    <span
+      className="flex items-center gap-1.5"
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onPointerDownCapture={(e) => (alt.current = e.altKey)}
+      onKeyDownCapture={(e) => (alt.current = e.altKey)}
+      onClickCapture={(e) => {
+        // A click from the keyboard (detail 0) keeps what its key press said.
+        if (e.detail > 0) alt.current = e.altKey;
+      }}
+    >
       {busy && <Icon name="progress_activity" size={14} className="animate-spin text-muted-foreground" aria-hidden />}
       {partial && !busy && !compact && (
         // The same count the item's name says ("3 of 12 on"); styles set to turn on have their own mark.
@@ -50,17 +77,30 @@ export function ActivationSwitch({ state, label, busy = false, tabIndex, compact
           </span>
         </MarkTip>
       )}
-      <Switch
-        checked={checked}
-        disabled={busy}
-        aria-busy={busy}
-        onCheckedChange={(on) => onChange(on)}
-        aria-label={label}
-        aria-describedby={describedBy}
-        tabIndex={tabIndex}
-        size={compact ? "sm" : "default"}
-        className={cn("data-checked:bg-active", partial && "data-unchecked:bg-active/40", dim && "data-checked:bg-active/45")}
-      />
+      {/* The tooltip is off while the switch is on (it would only turn fonts off), so the
+          switch itself never moves in the tree and keeps focus as it changes. */}
+      <Tooltip disabled={checked || busy}>
+        <TooltipTrigger
+          delay={600}
+          render={
+            <Switch
+              checked={checked}
+              disabled={busy}
+              aria-busy={busy}
+              onCheckedChange={(on) => {
+                onChange(on, switchScope(on, alt.current, mode));
+                alt.current = false;
+              }}
+              aria-label={label}
+              aria-describedby={describedBy}
+              tabIndex={tabIndex}
+              size={compact ? "sm" : "default"}
+              className={cn("data-checked:bg-active", partial && "data-unchecked:bg-active/40", dim && "data-checked:bg-active/45")}
+            />
+          }
+        />
+        <TooltipContent className="max-w-xs">{optionClickHint(mode, IS_MAC)}</TooltipContent>
+      </Tooltip>
     </span>
   );
 }
@@ -121,7 +161,8 @@ interface ControlProps {
   compact?: boolean;
   /** Id for the screen-reader text that says more (the item's description points at it). */
   srId?: string;
-  onSwitch: (on: boolean) => void;
+  /** `scope`: the other activation mode, for an Option-click that turns fonts on; else null. */
+  onSwitch: (on: boolean, scope: ActivationMode | null) => void;
 }
 
 /** A font's state wherever it shows: the lock (with why), or the switch with its mark. While a

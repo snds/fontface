@@ -1,11 +1,19 @@
-//! The main window's native side: the macOS menu bar, double-clicking the title bar, the window's
-//! color before the page paints, and hiding the window when it's closed.
+//! The main window's native side: the macOS menu bar (with the View and Font menus the page
+//! drives), double-clicking the title bar, the window's color before the page paints, and hiding
+//! the window when it's closed.
 //!
 //! On macOS the title bar is an overlay (src-tauri/tauri.macos.conf.json): the page draws the
 //! top row and marks it as the place to drag the window from (src/components/TitleBar.tsx).
 
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering::Relaxed},
+        Mutex,
+    },
+};
 
 #[cfg(target_os = "macos")]
 use tauri::{Emitter, WebviewWindow};
@@ -22,9 +30,214 @@ use crate::{
 #[cfg(target_os = "macos")]
 const SETTINGS_ITEM: &str = "settings";
 
+/// One item of the View or Font menu. Choosing it sends "menu" to the page with its id, and the
+/// page keeps the items' state in step with what's on screen (`set_menu_state`). The ids must
+/// match src/fontActions.ts (src/menuIds.test.ts reads this file to check).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuEntry {
+    pub id: &'static str,
+    /// The name it has until the page gives it another (Turn On's name follows the activation
+    /// mode, Compare's the selection).
+    pub text: &'static str,
+    pub accelerator: Option<&'static str>,
+    /// A check item (a layout, the sort, Group Styles into Families).
+    pub check: bool,
+}
+
+/// What a menu holds, in order.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Debug, Clone, Copy)]
+pub enum Slot {
+    Item(MenuEntry),
+    Separator,
+    Submenu(&'static str, &'static [Slot]),
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const fn item(id: &'static str, text: &'static str, accelerator: Option<&'static str>) -> Slot {
+    Slot::Item(MenuEntry { id, text, accelerator, check: false })
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const fn check(id: &'static str, text: &'static str, accelerator: Option<&'static str>) -> Slot {
+    Slot::Item(MenuEntry { id, text, accelerator, check: true })
+}
+
+/// The View menu, above Enter Full Screen: the library's layouts, grouping, sort and preview
+/// size (what View options holds), and Back.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub const VIEW_MENU: &[Slot] = &[
+    check("view.tiles", "Tiles", Some("CmdOrCtrl+1")),
+    check("view.rows", "Rows", Some("CmdOrCtrl+2")),
+    check("view.table", "Table", Some("CmdOrCtrl+3")),
+    Slot::Separator,
+    check("view.group", "Group Styles into Families", None),
+    Slot::Submenu(
+        "Sort By",
+        &[
+            check("sort.name", "Name", None),
+            check("sort.added", "Date Added", None),
+            check("sort.styles", "Number of Styles", None),
+            check("sort.weight", "Weight", None),
+            check("sort.foundry", "Foundry", None),
+            check("sort.active", "On or Off", None),
+            Slot::Separator,
+            check("sort.asc", "A to Z", None),
+            check("sort.desc", "Z to A", None),
+        ],
+    ),
+    Slot::Separator,
+    item("view.bigger", "Bigger Preview", Some("CmdOrCtrl+=")),
+    item("view.smaller", "Smaller Preview", Some("CmdOrCtrl+-")),
+    Slot::Separator,
+    item("view.back", "Back", Some("CmdOrCtrl+[")),
+];
+
+/// The Font menu: what can be done to the selected fonts, or the open font page's family. The
+/// same actions as the right-click menu.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub const FONT_MENU: &[Slot] = &[
+    item("font.open", "Open", None),
+    Slot::Separator,
+    item("font.turnOn", "Turn On", Some("CmdOrCtrl+Enter")),
+    item("font.turnOnOther", "Turn On Until Logout", Some("Alt+CmdOrCtrl+Enter")),
+    item("font.turnOff", "Turn Off", Some("Shift+CmdOrCtrl+Enter")),
+    Slot::Separator,
+    item("font.tags", "Tags…", Some("CmdOrCtrl+T")),
+    item("font.compare", "Compare With…", None),
+    item("font.pair", "Pair With…", None),
+    item("font.familyGroup", "Family Group…", None),
+    Slot::Separator,
+    item("font.reveal", "Show in Finder", None),
+    item("font.copyPostScript", "Copy PostScript Name", None),
+    Slot::Separator,
+    item("font.remove", "Remove from Library…", None),
+];
+
+/// Every item of the View and Font menus, in menu order.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn menu_entries() -> Vec<MenuEntry> {
+    fn walk(slots: &[Slot], out: &mut Vec<MenuEntry>) {
+        for slot in slots {
+            match slot {
+                Slot::Item(entry) => out.push(*entry),
+                Slot::Separator => {}
+                Slot::Submenu(_, inner) => walk(inner, out),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(VIEW_MENU, &mut out);
+    walk(FONT_MENU, &mut out);
+    out
+}
+
+/// The View and Font menus' items as the page wants them: which are enabled and checked, and
+/// names that differ from the usual one. Items it doesn't name are disabled and unchecked, and
+/// ids it names that aren't items are ignored. Must match NativeMenuState in src/fontActions.ts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MenuState {
+    pub enabled: BTreeSet<String>,
+    pub checked: BTreeSet<String>,
+    pub texts: BTreeMap<String, String>,
+}
+
+/// One change to make to a menu item.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MenuUpdate {
+    Enabled(&'static str, bool),
+    Checked(&'static str, bool),
+    Text(&'static str, String),
+}
+
+/// The changes that take the menus from `before` to `after`. Each one is a trip to the main
+/// thread, so only what changed is sent.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn menu_updates(before: &MenuState, after: &MenuState) -> Vec<MenuUpdate> {
+    let mut out = Vec::new();
+    for entry in menu_entries() {
+        let enabled = after.enabled.contains(entry.id);
+        if enabled != before.enabled.contains(entry.id) {
+            out.push(MenuUpdate::Enabled(entry.id, enabled));
+        }
+        if entry.check {
+            let checked = after.checked.contains(entry.id);
+            if checked != before.checked.contains(entry.id) {
+                out.push(MenuUpdate::Checked(entry.id, checked));
+            }
+        }
+        let (was, now) = (shown_text(before, &entry), shown_text(after, &entry));
+        if now != was {
+            out.push(MenuUpdate::Text(entry.id, now.to_string()));
+        }
+    }
+    out
+}
+
+/// An item's name in a state: the page's, or its usual one.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn shown_text<'a>(state: &'a MenuState, entry: &MenuEntry) -> &'a str {
+    state.texts.get(entry.id).map(String::as_str).filter(|t| !t.trim().is_empty()).unwrap_or(entry.text)
+}
+
+/// The page's id for a chosen menu item, if it's one of the View or Font menus' items.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn page_menu_id(id: &str) -> Option<&'static str> {
+    menu_entries().into_iter().find(|e| e.id == id).map(|e| e.id)
+}
+
+/// The View and Font menus' items, kept to change them later, and what they show now.
+#[cfg(target_os = "macos")]
+pub struct MenuHandles {
+    items: HashMap<&'static str, MenuHandle>,
+    shown: Mutex<MenuState>,
+}
+
+#[cfg(target_os = "macos")]
+enum MenuHandle {
+    Plain(tauri::menu::MenuItem<tauri::Wry>),
+    Check(tauri::menu::CheckMenuItem<tauri::Wry>),
+}
+
+/// Adds `slots` to `menu`, every item disabled until the page says otherwise.
+#[cfg(target_os = "macos")]
+fn fill(
+    app: &AppHandle,
+    menu: &tauri::menu::Submenu<tauri::Wry>,
+    slots: &[Slot],
+    handles: &mut HashMap<&'static str, MenuHandle>,
+) -> tauri::Result<()> {
+    use tauri::menu::{CheckMenuItem, MenuItem, PredefinedMenuItem, Submenu};
+    for slot in slots {
+        match slot {
+            Slot::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
+            Slot::Item(e) if e.check => {
+                let item = CheckMenuItem::with_id(app, e.id, e.text, false, false, e.accelerator)?;
+                menu.append(&item)?;
+                handles.insert(e.id, MenuHandle::Check(item));
+            }
+            Slot::Item(e) => {
+                let item = MenuItem::with_id(app, e.id, e.text, false, e.accelerator)?;
+                menu.append(&item)?;
+                handles.insert(e.id, MenuHandle::Plain(item));
+            }
+            Slot::Submenu(title, inner) => {
+                let sub = Submenu::new(app, *title, true)?;
+                fill(app, &sub, inner, handles)?;
+                menu.append(&sub)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The macOS menu bar: Tauri's default menu, with "Settings…" (⌘,) and "Show All" added to the
-/// app menu. A menu built here replaces the default one, so every standard item is repeated:
-/// the Edit menu's shortcuts are what make copy, paste and undo work in text fields.
+/// app menu, and the View and Font menus the page drives. A menu built here replaces the default
+/// one, so every standard item is repeated: the Edit menu's shortcuts are what make copy, paste
+/// and undo work in text fields.
 #[cfg(target_os = "macos")]
 pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem as Item, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
@@ -70,7 +283,14 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
             &Item::select_all(app, None)?,
         ],
     )?;
-    let view = Submenu::with_items(app, "View", true, &[&Item::fullscreen(app, None)?])?;
+    let mut handles = HashMap::new();
+    let view = Submenu::new(app, "View", true)?;
+    fill(app, &view, VIEW_MENU, &mut handles)?;
+    view.append(&Item::separator(app)?)?;
+    view.append(&Item::fullscreen(app, None)?)?;
+    let font = Submenu::new(app, "Font", true)?;
+    fill(app, &font, FONT_MENU, &mut handles)?;
+    app.manage(MenuHandles { items: handles, shown: Mutex::default() });
     // These ids make them macOS's Window menu (with the open windows listed) and Help menu
     // (with its search field), as in the default menu.
     let window = Submenu::with_id_and_items(
@@ -81,18 +301,66 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
         &[&Item::minimize(app, None)?, &Item::maximize(app, None)?, &Item::separator(app)?, &Item::close_window(app, None)?],
     )?;
     let help = Submenu::with_id_and_items(app, HELP_SUBMENU_ID, "Help", true, &[])?;
-    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window, &help])
+    Menu::with_items(app, &[&app_menu, &file, &edit, &view, &font, &window, &help])
 }
 
 /// "Settings…": brings the window back if it was closed (see `hide`) and sends "open-settings"
-/// to the page, which opens the settings screen.
+/// to the page, which opens the settings screen. A View or Font menu item brings it back too and
+/// sends "menu" with the item's id; the page checks it still applies (the menus can lag a
+/// moment behind the page) and that its own key handler hasn't already acted on the same key
+/// press (src/fontActions.ts, `createShortcutGuard`).
 #[cfg(target_os = "macos")]
 pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
-    if event.id() == SETTINGS_ITEM {
-        if let Some(window) = app.get_webview_window("main") {
-            show(&window);
+    let id = event.id().as_ref();
+    let page_id = page_menu_id(id);
+    if id != SETTINGS_ITEM && page_id.is_none() {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        show(&window);
+    }
+    match page_id {
+        Some(id) => {
+            let _ = app.emit_to("main", "menu", id);
         }
-        let _ = app.emit_to("main", "open-settings", ());
+        None => {
+            let _ = app.emit_to("main", "open-settings", ());
+        }
+    }
+}
+
+/// The page's view of the View and Font menus (`MenuState`). Only what changed since the last
+/// call is applied. Elsewhere (no app menu) it does nothing.
+#[tauri::command(async)]
+pub fn set_menu_state(app: AppHandle, state: MenuState) -> crate::error::AppResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(handles) = app.try_state::<MenuHandles>() else { return Ok(()) };
+        let mut shown = handles.shown.lock().unwrap_or_else(|p| p.into_inner());
+        for update in menu_updates(&shown, &state) {
+            let result = match (&update, handles.items.get(update_id(&update))) {
+                (MenuUpdate::Enabled(_, on), Some(MenuHandle::Plain(item))) => item.set_enabled(*on),
+                (MenuUpdate::Enabled(_, on), Some(MenuHandle::Check(item))) => item.set_enabled(*on),
+                (MenuUpdate::Checked(_, on), Some(MenuHandle::Check(item))) => item.set_checked(*on),
+                (MenuUpdate::Text(_, text), Some(MenuHandle::Plain(item))) => item.set_text(text),
+                (MenuUpdate::Text(_, text), Some(MenuHandle::Check(item))) => item.set_text(text),
+                _ => Ok(()),
+            };
+            if let Err(e) = result {
+                eprintln!("fontface: couldn't update the menu: {e}");
+            }
+        }
+        *shown = state;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, state);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn update_id(update: &MenuUpdate) -> &'static str {
+    match update {
+        MenuUpdate::Enabled(id, _) | MenuUpdate::Checked(id, _) | MenuUpdate::Text(id, _) => id,
     }
 }
 

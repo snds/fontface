@@ -910,3 +910,62 @@ fn the_window_background_matches_the_page_for_each_appearance() {
     assert!(css.contains("--background: oklch(1 0 0);"), "light background changed in index.css: update window.rs");
     assert!(css.contains("--background: oklch(0.145 0 0);"), "dark background changed in index.css: update window.rs");
 }
+
+// ----------------------------------------------------------------- View and Font menus
+
+#[test]
+fn view_and_font_menu_items_are_unique_and_keep_the_standard_shortcuts_free() {
+    let entries = window::menu_entries();
+    let ids: HashSet<&str> = entries.iter().map(|e| e.id).collect();
+    assert_eq!(ids.len(), entries.len(), "every item has its own id");
+    let keys: Vec<&str> = entries.iter().filter_map(|e| e.accelerator).collect();
+    assert_eq!(keys.iter().collect::<HashSet<_>>().len(), keys.len(), "no two items share a shortcut");
+    // The app menu, the Edit menu and the Window menu keep theirs.
+    for taken in ["CmdOrCtrl+,", "CmdOrCtrl+C", "CmdOrCtrl+V", "CmdOrCtrl+X", "CmdOrCtrl+Z", "CmdOrCtrl+A", "CmdOrCtrl+W", "CmdOrCtrl+M", "CmdOrCtrl+Q", "CmdOrCtrl+H"] {
+        assert!(!keys.contains(&taken), "{taken} belongs to a standard menu");
+    }
+    for (id, key) in [("view.tiles", "CmdOrCtrl+1"), ("view.table", "CmdOrCtrl+3"), ("view.back", "CmdOrCtrl+["), ("view.bigger", "CmdOrCtrl+="), ("font.tags", "CmdOrCtrl+T")] {
+        assert_eq!(entries.iter().find(|e| e.id == id).and_then(|e| e.accelerator), Some(key), "{id}");
+    }
+    assert!(entries.iter().filter(|e| e.id.starts_with("view.") || e.id.starts_with("sort.")).count() >= 12);
+    assert!(entries.iter().filter(|e| e.id.starts_with("font.")).count() == 11, "the Font menu has the right-click menu's actions");
+    assert!(entries.iter().filter(|e| e.check).all(|e| e.id.starts_with("view.") || e.id.starts_with("sort.")), "only View items are check items");
+}
+
+#[test]
+fn a_chosen_menu_item_reaches_the_page_only_if_it_is_one_of_the_page_menus() {
+    assert_eq!(window::page_menu_id("view.back"), Some("view.back"));
+    assert_eq!(window::page_menu_id("font.remove"), Some("font.remove"));
+    assert_eq!(window::page_menu_id("settings"), None, "Settings… has its own event");
+    assert_eq!(window::page_menu_id("quit"), None);
+}
+
+#[test]
+fn menu_state_changes_only_what_differs() {
+    use window::{menu_updates, MenuState, MenuUpdate};
+    let state = |v: serde_json::Value| -> MenuState { serde_json::from_value(v).unwrap() };
+    let start = MenuState::default();
+    // What the page sends: camelCase, any field may be missing, unknown ids are ignored.
+    let list = state(json!({
+        "enabled": ["view.tiles", "view.rows", "font.turnOn", "not.an.item"],
+        "checked": ["view.rows", "font.turnOn"],
+        "texts": { "font.turnOn": "Turn On Until Logout", "font.turnOnOther": "Turn On" },
+    }));
+    let updates = menu_updates(&start, &list);
+    assert!(updates.contains(&MenuUpdate::Enabled("view.tiles", true)));
+    assert!(updates.contains(&MenuUpdate::Checked("view.rows", true)));
+    assert!(updates.contains(&MenuUpdate::Text("font.turnOn", "Turn On Until Logout".into())));
+    assert!(updates.contains(&MenuUpdate::Text("font.turnOnOther", "Turn On".into())));
+    assert!(!updates.iter().any(|u| matches!(u, MenuUpdate::Checked("font.turnOn", _))), "a plain item is never checked");
+    assert!(!updates.iter().any(|u| matches!(u, MenuUpdate::Enabled("view.table", _))), "unchanged: nothing sent");
+    assert_eq!(updates.len(), 6);
+    assert!(menu_updates(&list, &list).is_empty(), "the same state again: nothing to do");
+
+    // Back to how they were built: everything off, the usual names.
+    let back = menu_updates(&list, &state(json!({})));
+    assert!(back.contains(&MenuUpdate::Enabled("view.tiles", false)));
+    assert!(back.contains(&MenuUpdate::Checked("view.rows", false)));
+    assert!(back.contains(&MenuUpdate::Text("font.turnOn", "Turn On".into())));
+    assert!(back.contains(&MenuUpdate::Text("font.turnOnOther", "Turn On Until Logout".into())));
+    assert!(menu_updates(&start, &state(json!({ "texts": { "font.open": "  " } }))).is_empty(), "a blank name keeps the usual one");
+}

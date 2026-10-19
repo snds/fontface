@@ -245,7 +245,7 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
           busy={family.switchable.some((face) => face.copies.some((c) => busy.has(c.path)))}
           tabIndex={tab}
           srId={`${id}-state`}
-          onSwitch={(on) => onActivate(activationIds(family.switchable, on), on)}
+          onSwitch={(on, scope) => onActivate(activationIds(family.switchable, on), on, scope)}
         />
       </div>
       <div className="flex min-h-0 flex-1 items-center overflow-hidden">

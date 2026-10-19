@@ -228,7 +228,7 @@ function FamilyRow(props: RowProps & { family: Family }) {
           busy={family.switchable.some((face) => face.copies.some((c) => busy.has(c.path)))}
           tabIndex={tab}
           srId={`${props.id}-state`}
-          onSwitch={(on) => onActivate(activationIds(family.switchable, on), on)}
+          onSwitch={(on, scope) => onActivate(activationIds(family.switchable, on), on, scope)}
         />
       </div>
       <div className="pl-8">
@@ -286,7 +286,7 @@ function FaceRow(props: RowProps & { face: Face }) {
           busy={face.copies.some((c) => busy.has(c.path))}
           tabIndex={tab}
           srId={`${props.id}-state`}
-          onSwitch={(on) => onActivate(activationIds([face], on), on)}
+          onSwitch={(on, scope) => onActivate(activationIds([face], on), on, scope)}
         />
       </div>
       <FacePreview font={font} preview={preview} typed={previewText} own="full" size={size} />

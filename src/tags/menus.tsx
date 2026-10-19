@@ -36,7 +36,7 @@ import { recolorTag, setLocationColor } from "./store";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** The same menu items work in a right-click menu and in a "…" menu. */
-interface Kit {
+export interface Kit {
   Item: React.ComponentType<any>;
   Group: React.ComponentType<any>;
   Label: React.ComponentType<any>;

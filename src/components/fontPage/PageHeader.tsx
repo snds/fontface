@@ -1,18 +1,18 @@
-import { toast } from "sonner";
+import { useEffect, useRef, useState } from "react";
+import type { ActivationMode } from "@/api";
+import { pageTarget, type FontActionId } from "@/fontActions";
 import { activationIds, type Face, type Family } from "@/library";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { copyText } from "@/lib/clipboard";
 import { summarize } from "@/fontState";
 import { StateControl } from "@/components/ActivationSwitch";
+import { FontActionItems } from "@/components/FontActions";
 import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
 import { TagPicker } from "@/tags/TagPicker";
-import { useOpenFamilyGroups } from "@/families/store";
-import { REVEAL_LABEL } from "./InfoTab";
 
 const BACK_KEYS = IS_MAC ? "⌘[" : "Alt+Left";
 const BACK_ARIA_KEYS = IS_MAC ? "Meta+[" : "Alt+ArrowLeft";
@@ -45,29 +45,35 @@ interface Props {
   busy: Set<string>;
   onBack: () => void;
   onChoose: (faceKey: string) => void;
-  onActivate: (ids: number[], active: boolean) => void;
-  onReveal: (fontId: number) => void;
+  onActivate: (ids: number[], active: boolean, scope?: ActivationMode | null) => void;
+  /** Bumped by Cmd+T (or the Font menu's Tags…) to open the Tags popover. */
+  tagsAsk?: number;
 }
+
+/** What the More menu offers: the font actions the header doesn't show already. */
+const MORE: readonly FontActionId[] = ["compare", "pair", "familyGroup", "reveal", "copyPostScript", "remove"];
+
+/** The font page's More button: focus comes back to it from Family groups, Compare and Pair. */
+export const FONT_PAGE_MORE_ID = "font-page-more";
 
 /**
  * The font page's top row, 52px like the toolbar it replaces; on macOS it's part of the title
  * bar (drag it to move the window, double-click it to zoom). Back, the family name (the page's
- * heading) and style count, the style picker, the family switch or lock, Tags, and More. As it
- * narrows, the count and the Tags label go first.
+ * heading) and style count, the style picker, the family switch or lock, Tags (Cmd+T), and More
+ * (Compare With…, Pair With…, Family Group…, Show in Finder, Copy PostScript Name, Remove from
+ * Library…). As it narrows, the count and the Tags label go first.
  */
-/** The font page's More button: focus comes back to it from Family groups. */
-export const FONT_PAGE_MORE_ID = "font-page-more";
-
-export function FontPageHeader({ family, face, placeName, headingRef, busy, onBack, onChoose, onActivate, onReveal }: Props) {
+export function FontPageHeader({ family, face, placeName, headingRef, busy, onBack, onChoose, onActivate, tagsAsk = 0 }: Props) {
   const titleBar = useTitleBar();
-  const openFamilyGroups = useOpenFamilyGroups();
-  const font = face.primary;
   const styles = `${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`;
-  const copyPostScript = async () => {
-    if (!font.postscriptName) return;
-    if (await copyText(font.postscriptName)) toast.success("Copied the PostScript name", { description: font.postscriptName });
-    else toast.error("Couldn't copy the PostScript name");
-  };
+  // Cmd+T opens Tags here (a new ask each time; the first render isn't one).
+  const [tagsOpen, setTagsOpen] = useState(false);
+  const seenAsk = useRef(tagsAsk);
+  useEffect(() => {
+    if (seenAsk.current === tagsAsk) return;
+    seenAsk.current = tagsAsk;
+    setTagsOpen(true);
+  }, [tagsAsk]);
   return (
     <header className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
       <BackButton placeName={placeName} onBack={onBack} />
@@ -105,10 +111,10 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
         label={`Activate ${family.name}`}
         busy={family.switchable.some((f) => f.copies.some((c) => busy.has(c.path)))}
         srId="font-page-state"
-        onSwitch={(on) => onActivate(activationIds(family.switchable, on), on)}
+        onSwitch={(on, scope) => onActivate(activationIds(family.switchable, on), on, scope)}
       />
-      <Popover>
-        <PopoverTrigger render={<Button variant="ghost" size="sm" aria-label={`Tags for ${family.name}`} />}>
+      <Popover open={tagsOpen} onOpenChange={setTagsOpen}>
+        <PopoverTrigger render={<Button variant="ghost" size="sm" aria-label={`Tags for ${family.name}`} aria-keyshortcuts={IS_MAC ? "Meta+T" : "Control+T"} />}>
           <Icon name="sell" size={16} />
           <span className="@max-[640px]/pagehead:hidden">Tags</span>
         </PopoverTrigger>
@@ -120,19 +126,8 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
         <DropdownMenuTrigger render={<Button id={FONT_PAGE_MORE_ID} variant="ghost" size="icon-sm" aria-label="More" />}>
           <Icon name="more_horiz" size={18} />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-52">
-          <DropdownMenuItem onClick={() => onReveal(font.id)}>
-            <Icon name="folder_open" size={16} />
-            {REVEAL_LABEL}
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={!font.postscriptName} onClick={copyPostScript}>
-            <Icon name="content_copy" size={16} />
-            Copy PostScript Name
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => openFamilyGroups(family.faces, { returnTo: FONT_PAGE_MORE_ID })}>
-            <Icon name="account_tree" size={16} />
-            Family Group…
-          </DropdownMenuItem>
+        <DropdownMenuContent align="end" className="min-w-56">
+          <FontActionItems kind="dropdown" target={pageTarget(family, face)} only={MORE} returnTo={FONT_PAGE_MORE_ID} />
         </DropdownMenuContent>
       </DropdownMenu>
     </header>

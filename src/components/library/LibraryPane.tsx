@@ -1,18 +1,18 @@
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { LibraryLayout, SortOrder, TableColumnSetting, TableDensity } from "@/api";
+import type { ActivationMode, LibraryLayout, SortOrder, TableColumnSetting, TableDensity } from "@/api";
 import type { Face, Family } from "@/library";
+import type { FontTarget, TargetItem } from "@/fontActions";
 import { listKeyCommand, type Selection } from "@/selection";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fontsPayload, pressToDrag } from "@/tags/drag";
-import { FontTagMenuItems } from "@/tags/FontMenu";
-import { FamilyGroupMenuItem } from "@/families/FamilyGroupMenuItem";
 import { isMenuKey, openMenuFromKeyboard } from "@/tags/menus";
 import type { Locations } from "@/tags/locations";
 import { uniqueFaces, useTagIndex, type TagIndex } from "@/tags/model";
 import { TagPicker } from "@/tags/TagPicker";
+import { FontActionItems, useFontActions } from "../FontActions";
 import { FontList } from "../FontList";
 import { IS_MAC } from "../TitleBar";
 import { FontTable } from "./FontTable";
@@ -50,6 +50,9 @@ export interface ListHandle {
   /** Focuses the list with this row active (on Back). False if the row isn't listed any more. */
   focusRow: (rowKey: string | null) => boolean;
 }
+
+/** The selection bar's Compare button: focus comes back to it from Compare. */
+export const COMPARE_BUTTON_ID = "selection-compare";
 
 /** Presses on these don't start a drag or open the font: an item's own buttons, switches and fields. */
 export const ROW_CONTROLS = "button, input, textarea, a, [role=switch], [data-no-drag]";
@@ -91,7 +94,7 @@ export interface DisplayProps {
   /** Files with an on/off request in progress. */
   busy: Set<string>;
   locations: Locations;
-  onActivate: (ids: number[], active: boolean) => void;
+  onActivate: (ids: number[], active: boolean, scope?: ActivationMode | null) => void;
   /** Recently Added: Rows and Tiles say when each item was added. */
   showAdded?: boolean;
 }
@@ -146,6 +149,9 @@ interface Props extends DisplayProps {
   orderKey: string;
   /** Double-click or Return: open the item's font page. */
   onOpen: (request: OpenRequest) => void;
+  /** What the font actions work on changed: the selected rows (the Font menu, Cmd+T and the
+   *  other shortcuts act on them), or null with nothing selected. */
+  onTarget?: (target: FontTarget | null) => void;
   table: TableOptions;
   ref?: React.Ref<ListHandle>;
 }
@@ -161,7 +167,7 @@ interface Props extends DisplayProps {
  * The selection lives here, keyed by row key, so it carries over when the layout changes
  * (Tiles has no style rows: a selected style becomes its family).
  */
-export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orderKey, onOpen, table, ...display }: Props) {
+export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orderKey, onOpen, onTarget, table, ...display }: Props) {
   const { expanded, onToggleExpanded } = display;
   const listId = useId();
   const index = useTagIndex();
@@ -185,9 +191,9 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
   // Tiles list no styles: a selected style (and the anchor) becomes its family there.
   const sel = useSelection(order, resetKey, parentOf, { toParent: tiles });
   const { selection } = sel;
-  // The fonts the right-click menu works on, fixed when it opens (a tag view can lose the row
-  // while the menu is still open).
-  const [menuFaces, setMenuFaces] = useState<Face[]>([]);
+  // What the right-click menu works on, fixed when it opens (a tag view can lose the row while
+  // the menu is still open).
+  const [menuTarget, setMenuTarget] = useState<FontTarget | null>(null);
   // Keyboard focus shows as a ring on the active item: after a key press, or focus that didn't
   // come from a click (Tab, or Back from a font page).
   const [focused, setFocused] = useState(false);
@@ -256,6 +262,27 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
     return uniqueFaces(out);
   };
   const targetsFor = (key: string) => facesOf(selection.keys.has(key) && selection.keys.size > 1 ? selection.keys : [key]);
+  /** What the font actions work on for these rows, in list order (Compare's lanes, Pair's
+   *  heading and body follow it). */
+  const targetOf = (keys: Iterable<string>): FontTarget | null => {
+    const at = [...keys].map((k) => indexByKey.get(k)).filter((i): i is number => i !== undefined).sort((a, b) => a - b);
+    if (!at.length) return null;
+    const items = at.map((i): TargetItem => {
+      const row = rows[i];
+      const family = fullFamily.get(row.family.id) ?? row.family;
+      return row.kind === "face"
+        ? { rowKey: rowKey(row), family, face: row.face, kind: "style" }
+        : { rowKey: rowKey(row), family, face: row.family.representative, kind: "family" };
+    });
+    return { where: "list", items, faces: facesOf(at.map((i) => order[i])) };
+  };
+  const menuTargetFor = (key: string) => targetOf(selection.keys.has(key) && selection.keys.size > 1 ? selection.keys : [key]);
+  // The selection, for the Font menu and the shortcuts (App). Rows that reload make a new one.
+  const selectionTarget = useMemo(() => targetOf(selection.keys), [selection.keys, indexByKey, fullFamily]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reportTarget = useRef(onTarget);
+  reportTarget.current = onTarget;
+  useEffect(() => reportTarget.current?.(selectionTarget), [selectionTarget]);
+  useEffect(() => () => reportTarget.current?.(null), []);
   const selectedFaces = useMemo(() => (selection.keys.size > 1 ? facesOf(selection.keys) : []), [selection.keys, indexByKey, fullFamily]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const actions: RowActions = {
@@ -443,7 +470,7 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
       }
       const el = (e.target as HTMLElement).closest<HTMLElement>("[data-row-key]");
       const key = el?.dataset.rowKey ?? (menuOnActive.current ? selection.focus : null);
-      setMenuFaces(key ? targetsFor(key) : []);
+      setMenuTarget(key ? menuTargetFor(key) : null);
       // Right-clicking outside the selection selects that item, like Finder. It never opens the font.
       if (key) sel.selectForMenu(key);
     },
@@ -454,17 +481,14 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {count > 1 && <BulkBar faces={selectedFaces} rows={count} onClear={sel.clear} />}
+      {count > 1 && <BulkBar faces={selectedFaces} rows={count} target={selectionTarget} onClear={sel.clear} />}
       {/* Always present, so the first count is announced too. */}
       <div className="sr-only" aria-live="polite">
         {count > 1 ? `${count} ${tiles ? "items" : "rows"} selected` : ""}
       </div>
-      {/* One right-click menu for the whole list; the item under the pointer decides what it covers. */}
-      <ContextMenu
-        onOpenChange={(open) => {
-          if (!open) setMenuFaces([]);
-        }}
-      >
+      {/* One right-click menu for the whole list; the item under the pointer decides what it
+          covers (set as it opens, and kept while it closes, so its items don't change as it fades). */}
+      <ContextMenu>
         {layout === "tiles" ? (
           <FontTiles view={view} {...display} />
         ) : layout === "table" ? (
@@ -472,14 +496,11 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
         ) : (
           <FontList view={view} {...display} />
         )}
-        <ContextMenuContent className="max-h-[min(28rem,var(--available-height))] min-w-56">
-          {menuFaces.length ? (
-            <>
-              <FontTagMenuItems faces={menuFaces} index={index} />
-              <FamilyGroupMenuItem faces={menuFaces} />
-            </>
+        <ContextMenuContent className="max-h-[min(32rem,var(--available-height))] min-w-56">
+          {menuTarget ? (
+            <FontActionItems kind="context" target={menuTarget} index={index} />
           ) : (
-            <ContextMenuItem disabled>Right-click a font to tag it</ContextMenuItem>
+            <ContextMenuItem disabled>Right-click a font for its menu</ContextMenuItem>
           )}
         </ContextMenuContent>
       </ContextMenu>
@@ -487,13 +508,20 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
   );
 }
 
-/** Shown while several items are selected: tag them all at once. */
-function BulkBar({ faces, rows, onClear }: { faces: Face[]; rows: number; onClear: () => void }) {
+/** Shown while several items are selected: tag them all at once, or compare them. */
+function BulkBar({ faces, rows, target, onClear }: { faces: Face[]; rows: number; target: FontTarget | null; onClear: () => void }) {
+  const actions = useFontActions();
   return (
     <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-4 py-1.5 text-sm" role="region" aria-label="Selection">
       <span className="flex-1">
         {rows.toLocaleString()} selected · {faces.length.toLocaleString()} {faces.length === 1 ? "style" : "styles"}
       </span>
+      {actions && target && (
+        <Button id={COMPARE_BUTTON_ID} variant="outline" size="sm" onClick={() => actions.run("compare", target, { returnTo: COMPARE_BUTTON_ID })}>
+          <Icon name="compare" size={16} />
+          Compare
+        </Button>
+      )}
       <Popover>
         <PopoverTrigger render={<Button variant="outline" size="sm" />}>
           <Icon name="sell" size={16} />

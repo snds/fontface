@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
-import { api, type AppSettings, type FontSummary, type PurchasesStatus, type SidebarSections, type TagBackup, type TurnOffAllReport } from "@/api";
+import { api, type AppSettings, type FontSummary, type PurchasesStatus, type RemovedFile, type SidebarSections, type TagBackup, type TurnOffAllReport } from "@/api";
 import { INSTALLED_LABEL } from "@/library";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
 import { IS_MAC } from "@/components/TitleBar";
@@ -47,6 +47,38 @@ export interface SectionProps {
   /** Families the Family groups page suggests merging (only counted while settings are open). */
   familySuggestions: number;
   onReviewFamilyGroups: () => void;
+  /** Put Back: removed files are listed again (App scans their folders). */
+  onPutBack: (paths: string[]) => Promise<void>;
+}
+
+/** Files shown in Settings › Library's list of removed fonts before "Show all". */
+const REMOVED_SHOWN = 50;
+
+/** The fonts you removed from the library (Remove from Library…), read when settings open, and
+ *  Put Back for one or all of them. */
+function useRemovedFonts(onPutBack: (paths: string[]) => Promise<void>) {
+  const [files, setFiles] = useState<RemovedFile[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [all, setAll] = useState(false);
+  const load = useCallback(() => api.fontsRemoved().then(setFiles, () => setFiles([])), []);
+  useEffect(() => void load(), [load]);
+  const putBack = async (paths: string[]) => {
+    setBusy(true);
+    try {
+      await onPutBack(paths);
+    } catch (e) {
+      toast.error("Couldn't put the fonts back", { description: String(e) });
+    } finally {
+      setBusy(false);
+      await load();
+      // The Put Back that had focus went with its row: the next one takes it.
+      requestAnimationFrame(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        document.querySelector<HTMLElement>('[aria-label="Removed fonts"] button')?.focus();
+      });
+    }
+  };
+  return { files, busy, putBack, all, showAll: () => setAll(true) };
 }
 
 /** Things the settings show that live outside the settings themselves, read when the screen opens. */
@@ -169,6 +201,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
   const { settings: s, update, reset } = useSettings();
   const outside = useOutsideState(props.onPurchasesChanged);
   const syncSection = useSyncSection();
+  const removed = useRemovedFonts(props.onPutBack);
   // Font files Fontface has turned on, outside the OS's own font folders: what Turn Off All
   // covers (`wanted`), and how many of those macOS has on right now (`on`). The rest are set to
   // come back on, e.g. from a drive that isn't connected, or waiting on "Ask me".
@@ -355,6 +388,61 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 {props.familySuggestions > 0 ? `Review ${n(props.familySuggestions)} ${props.familySuggestions === 1 ? "suggestion" : "suggestions"}` : "Family groups…"}
               </Button>
             ),
+          },
+        ],
+      },
+      {
+        id: "removed",
+        title: "Removed from the library",
+        rows: [
+          {
+            id: "removedFonts",
+            label: removed.files?.length ? `${n(removed.files.length)} removed font ${removed.files.length === 1 ? "file" : "files"}` : "Removed fonts",
+            description: removed.files?.length
+              ? "Fonts you removed with Remove from Library. Fontface doesn't list them; their files are where they were. Put Back lists them again."
+              : "Fonts you remove with Remove from Library are listed here, to put back. Their files are never touched.",
+            keywords: "removed remove from library hidden excluded put back restore undo",
+            control: (ids) =>
+              removed.files && removed.files.length > 1 ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-describedby={ids.description}
+                  disabled={removed.busy}
+                  focusableWhenDisabled
+                  onClick={() => removed.putBack(removed.files!.map((f) => f.path))}
+                >
+                  <Icon name="undo" size={16} />
+                  Put All Back
+                </Button>
+              ) : null,
+            below: () =>
+              !removed.files?.length ? null : (
+                <>
+                  <ul className="flex flex-col divide-y rounded-lg border bg-background" aria-label="Removed fonts">
+                    {(removed.all ? removed.files : removed.files.slice(0, REMOVED_SHOWN)).map((f) => (
+                      <li key={f.path} className="flex items-center gap-3 px-3 py-2">
+                        <Icon name="font_download_off" size={16} className="text-muted-foreground" />
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-sm">{fileName(f.path)}</span>
+                          <span className="truncate font-mono text-[11px] text-muted-foreground" title={f.path}>
+                            {f.path}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-xs text-muted-foreground">{when(f.removedAt * 1000)}</span>
+                        <Button size="xs" variant="ghost" disabled={removed.busy} focusableWhenDisabled aria-label={`Put back ${fileName(f.path)}`} onClick={() => removed.putBack([f.path])}>
+                          Put Back
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                  {!removed.all && removed.files.length > REMOVED_SHOWN && (
+                    <Button size="xs" variant="ghost" className="self-start" onClick={removed.showAll}>
+                      Show all {n(removed.files.length)}
+                    </Button>
+                  )}
+                </>
+              ),
           },
         ],
       },

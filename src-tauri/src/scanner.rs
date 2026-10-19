@@ -331,6 +331,10 @@ pub fn scan_folder(
     let mut conn = db::open(db_path)?;
     // The scanner writes preview profiles with the fonts.
     preview::ensure_schema(&conn)?;
+    // Files you removed from the library are skipped; files put back are listed again.
+    crate::removed::ensure_schema(&conn)?;
+    let removed = crate::removed::for_scan(&conn, folder_id)?;
+    let mut seen_removed = HashSet::new();
     // When the fonts this scan finds came into the library (new rows only).
     let added_at = db::now();
     let mut report = ScanReport { folder_id, ..Default::default() };
@@ -409,6 +413,12 @@ pub fn scan_folder(
         let walked = entry.path().to_string_lossy().into_owned();
         if walked != path_str {
             adopt_walked_path(&conn, &mut known, &mut skipped, &walked, &path_str)?;
+        }
+        // Removed from the library (Remove from Library…): never listed, here or elsewhere.
+        if removed.skip.contains(&path_str) {
+            report.files -= 1;
+            seen_removed.insert(path_str);
+            continue;
         }
         // Reached through a symlink into another library folder, or already listed by another
         // folder: that folder owns it. Mark it seen anyway, so a row this folder held from
@@ -531,8 +541,15 @@ pub fn scan_folder(
                             conn.execute_batch("BEGIN IMMEDIATE")?;
                             in_tx = true;
                         }
+                        // Removed from the library while this scan was reading it: leave it out.
+                        let removed_now = crate::removed::is_removed(&conn, &item.path_str)?;
+                        // Put back: its fonts keep the date they first came in.
+                        let put_back = removed.restore.get(&item.path_str);
+                        let io_failed = matches!(result, Err(ReadError::Io(_)));
                         match result {
+                            _ if removed_now => {}
                             Ok(faces) => {
+                                let added_at = put_back.copied().flatten().unwrap_or(added_at);
                                 let file = FileStamp { path: &item.path_str, size: item.size, mtime: item.mtime, added_at };
                                 let written = upsert_faces(&conn, folder_id, &file, &faces)?;
                                 if written > 0 {
@@ -555,6 +572,11 @@ pub fn scan_folder(
                                 remember_skipped(&conn, folder_id, item, &reason)?;
                                 report.failed.push(ScanFailure { path: item.path_str.clone(), reason });
                             }
+                        }
+                        // A file put back has been read again (after an I/O failure, it's tried
+                        // again next scan).
+                        if put_back.is_some() && !removed_now && !io_failed {
+                            crate::removed::forget(&conn, &item.path_str)?;
                         }
                         if throttle.ready() {
                             on_progress(ScanProgress {
@@ -608,6 +630,23 @@ pub fn scan_folder(
                 .collect()
         };
         let (gone_fonts, gone_skipped) = (gone(&known), gone(&skipped));
+        // Removed (or put-back) files of this folder that aren't there any more: forgotten.
+        let gone_removed: Vec<&String> = removed
+            .here
+            .iter()
+            .filter(|p| !seen.contains(*p) && !seen_removed.contains(*p) && !protected.iter().any(|t| Path::new(p).starts_with(t)))
+            .collect();
+        if !gone_removed.is_empty() {
+            while db::ui_write_waiting() {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            let _turn = db::scan_write_turn();
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            for path in &gone_removed {
+                crate::removed::forget(&tx, path)?;
+            }
+            tx.commit()?;
+        }
         if !gone_fonts.is_empty() || !gone_skipped.is_empty() {
             // Lock order everywhere: scan write turn, then activation lock.
             let _turn = db::scan_write_turn();

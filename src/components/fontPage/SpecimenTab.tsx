@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import type { ActivationMode } from "@/api";
 import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
 import { ROW_HEIGHT } from "@/previewFit";
@@ -26,7 +27,7 @@ interface Props {
   variation: string | undefined;
   busy: Set<string>;
   onChoose: (faceKey: string) => void;
-  onActivate: (ids: number[], active: boolean) => void;
+  onActivate: (ids: number[], active: boolean, scope?: ActivationMode | null) => void;
 }
 
 /** The waterfall and a paragraph in the chosen style, then every style with its own switch. */
@@ -160,7 +161,7 @@ function StyleLine({
   previewText: string;
   busy: boolean;
   onChoose: (faceKey: string) => void;
-  onActivate: (ids: number[], active: boolean) => void;
+  onActivate: (ids: number[], active: boolean, scope?: ActivationMode | null) => void;
 }) {
   const font = face.primary;
   const preview = usePreviewProfile(font);
@@ -201,7 +202,7 @@ function StyleLine({
         label={`Activate ${face.family} ${face.style}`}
         busy={busy}
         srId={stateId}
-        onSwitch={(on) => onActivate(activationIds([face], on), on)}
+        onSwitch={(on, scope) => onActivate(activationIds([face], on), on, scope)}
       />
     </li>
   );

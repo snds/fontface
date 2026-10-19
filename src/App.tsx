@@ -7,6 +7,7 @@ import {
   api,
   type ActivationMode,
   type Folder,
+  type RemoveReport,
   type FontSummary,
   type GoogleFamily,
   type LibraryLayout,
@@ -37,9 +38,30 @@ import {
 } from "@/library";
 import { hiddenBySidebar, placeLabel, SERVICE_LABELS, sourceFolders, sourceOf, sourceView } from "@/places";
 import { hasSubfolders } from "@/subfolders";
-import { describeSort, layoutInfo, layoutShortcut, sizeShortcut, stepSize } from "@/viewOptions";
+import { describeSort, layoutInfo, layoutShortcut, sizeShortcut, sortInfo, stepSize } from "@/viewOptions";
+import {
+  commandName,
+  compareKeysOf,
+  createShortcutGuard,
+  fontActionStates,
+  fontShortcut,
+  menuCommand,
+  menuStateKey,
+  nativeMenuState,
+  pageTarget,
+  postScriptNames,
+  removalPlan,
+  revealFontOf,
+  scopeOf,
+  type ActionContext,
+  type FontActionId,
+  type FontTarget,
+  type MenuCommand,
+} from "@/fontActions";
+import { compareList } from "@/compare";
+import { copyText } from "@/lib/clipboard";
 import { familySources } from "@/familyFacts";
-import { applyOutcomes, type StateWording } from "@/fontState";
+import { applyOutcomes } from "@/fontState";
 import { newestWins } from "@/newestWins";
 import { listenForProfiles } from "@/previewProfiles";
 import {
@@ -60,11 +82,17 @@ import { cn } from "@/lib/utils";
 import { SETTINGS_BUTTON_ID, Sidebar, scanStatus } from "@/components/Sidebar";
 import { LIBRARY_SEARCH_ID, Toolbar } from "@/components/Toolbar";
 import { LibraryPane, type ListHandle, type OpenRequest } from "@/components/library/LibraryPane";
+import { FontActionsContext, type FontActionsApi } from "@/components/FontActions";
+import { FontPickerContext, FontPickerDialog, type PickRequest } from "@/components/FontPicker";
+import { ComparePage, type FaceRef } from "@/components/ComparePage";
+import { PairPage } from "@/components/PairPage";
+import { RemoveFontsDialog, type RemovalRequest } from "@/components/RemoveFontsDialog";
+import { REVEAL_LABEL } from "@/components/fontPage/InfoTab";
 import { ViewOptions } from "@/components/ViewOptions";
 import { FontPage } from "@/components/fontPage/FontPage";
 import { BackButton } from "@/components/fontPage/PageHeader";
 import { SubfolderPicker } from "@/components/SubfolderPicker";
-import { StateWordingContext } from "@/components/ActivationSwitch";
+import { StateWordingContext, type SwitchWording } from "@/components/ActivationSwitch";
 import { GOOGLE_SEARCH_ID, GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
@@ -73,6 +101,7 @@ import { cancelDrag, isDragging } from "@/tags/drag";
 import { locateFolder } from "@/tags/locate";
 import { useLocations } from "@/tags/locations";
 import { leafOf, useFilterContext, useTagIndex } from "@/tags/model";
+import { openTagDialog } from "@/tags/dialogs";
 import { TagDialogHost } from "@/tags/TagDialogs";
 import { useLastView } from "@/settings/lastView";
 import type { SectionId } from "@/settings/parts";
@@ -82,7 +111,7 @@ import { applyTheme, useDarkTheme } from "@/settings/theme";
 import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/useSettings";
 import { useSyncEvents } from "@/sync/store";
 import { popupOpen, useNav } from "@/useNav";
-import { findIntent, type CatalogPageEntry, type GroupsFilter } from "@/nav";
+import { findIntent, type CatalogPageEntry, type GroupsFilter, type Page, type PageReturn } from "@/nav";
 import { suggestGroups, type GroupingOptions } from "@/familyGroups";
 import { FamilyGroupsContext, reloadFamilyChoices, useFamilyChoices, type OpenFamilyGroups } from "@/families/store";
 import { FamilyGroupsPage, GROUPS_SEARCH_ID } from "@/components/FamilyGroupsPage";
@@ -105,6 +134,31 @@ function useHourNow(): number {
     return () => clearInterval(timer);
   }, []);
   return hour * 3600;
+}
+
+/** The element (by id) focus goes back to when `closed` is closed with pages left under it: the
+ *  button that opened it there (More on a font page, a Compare lane's name), else none (the
+ *  page's heading). */
+function returnElement(closed: Page): string | null {
+  if (closed.kind === "font") return closed.returnTo;
+  if (closed.kind === "catalog") return null;
+  return closed.returnTo && "element" in closed.returnTo ? closed.returnTo.element : null;
+}
+
+/**
+ * Focuses an element on a layer that was hidden until this render (the list, or a page that was
+ * covered: `invisible`). A button there (`transition-all`) eases into being visible like any other
+ * property, and while that has only just started it's still hidden and can't take focus. So its
+ * transition is skipped for the moment it takes focus.
+ */
+function focusShown(el: HTMLElement) {
+  el.focus({ preventScroll: true });
+  if (document.activeElement === el) return;
+  const transition = el.style.transition;
+  el.style.transition = "none";
+  void getComputedStyle(el).visibility;
+  el.focus({ preventScroll: true });
+  el.style.transition = transition;
 }
 
 /** A service's page on the page stack: its header has Back, and its heading takes focus when it opens. */
@@ -265,26 +319,36 @@ export default function App() {
   const listRef = useRef<ListHandle>(null);
   const pendingFocus = useRef<{ row: string | null } | { element: string | null } | "search" | null>(null);
   const placeNameRef = useRef("All Fonts");
+  // A shortcut that's also a macOS menu item (Back, the layouts, the sizes, the Font menu) can
+  // reach both the page's key handler and the menu: the second of the two is dropped.
+  const [shortcutGuard] = useState(() => createShortcutGuard());
   const nav = useNav({
     // Settings over the page take Esc themselves; a drag takes Esc to cancel.
     blocked: () => settingsOpenRef.current || isDragging(),
+    allowKeyBack: () => shortcutGuard.allow("back", "key", performance.now()),
     onBack: (closed, remaining) => {
       if (remaining.length) {
-        // Back to the page underneath (a font page under Family groups): focus goes to what
-        // opened this one, else that page's heading.
-        const id = closed.kind === "groups" && closed.returnTo && "element" in closed.returnTo ? closed.returnTo.element : null;
-        requestAnimationFrame(() => {
-          const el = (id && document.getElementById(id)) || document.querySelector<HTMLElement>("[data-page-top] h1");
-          el?.focus({ preventScroll: true });
-        });
+        // Back to the page underneath (a font page under Family groups or Compare): focus goes to
+        // what opened this one, else that page's heading, once it's no longer covered (below).
+        pendingPageFocus.current = returnElement(closed);
         return;
       }
       pendingFocus.current =
-        closed.kind === "font" ? { row: closed.returnTo } : closed.kind === "groups" ? (closed.returnTo ?? { element: null }) : { element: closed.returnTo };
+        closed.kind === "font" ? { row: closed.returnTo } : closed.kind === "catalog" ? { element: closed.returnTo } : (closed.returnTo ?? { element: null });
       announce(`Back to ${placeNameRef.current}`);
     },
   });
   const pageOpen = nav.pages.length > 0;
+  // After Back to a page underneath: its element (by id) or heading takes focus once the page is
+  // drawn on top again (an effect, so it's no longer inert). Undefined: nothing waiting.
+  const pendingPageFocus = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const want = pendingPageFocus.current;
+    if (want === undefined) return;
+    pendingPageFocus.current = undefined;
+    const el = (want && document.getElementById(want)) || document.querySelector<HTMLElement>("[data-page-top] h1");
+    if (el) focusShown(el);
+  }, [nav.pages]);
   const focusSearch = () => {
     const search = document.getElementById(LIBRARY_SEARCH_ID);
     if (search instanceof HTMLInputElement) {
@@ -302,7 +366,7 @@ export default function App() {
     if (want !== "search" && "element" in want) {
       // The button that opened a service's page (Browse), else the list.
       const el = want.element ? document.getElementById(want.element) : null;
-      if (el) return el.focus();
+      if (el) return focusShown(el);
       if (listRef.current) return void listRef.current.focusRow(null);
     } else if (want !== "search" && listRef.current) return void listRef.current.focusRow(want.row);
     if (!focusSearch()) document.querySelector<HTMLElement>("main")?.focus();
@@ -995,7 +1059,9 @@ export default function App() {
   const { update: updateSettings } = settingsStore;
   // "On until logout" says "until you quit Fontface" when quitting turns those fonts off.
   const untilQuit = settings?.clearTemporaryOnQuit ?? false;
-  const stateWording = useMemo<StateWording>(() => ({ untilQuit }), [untilQuit]);
+  // Switches turn fonts on the saved way; Option-click turns them on the other way.
+  const activationMode = settings?.activationMode ?? DEFAULT_SETTINGS.activationMode;
+  const stateWording = useMemo<SwitchWording>(() => ({ untilQuit, mode: activationMode }), [untilQuit, activationMode]);
   const chooseLayout = useCallback(
     (next: LibraryLayout) => {
       updateSettings({ layout: next });
@@ -1012,6 +1078,18 @@ export default function App() {
     updateSettings({ groupStyles: on });
     announce(on ? "Styles grouped into families" : "Every style listed on its own");
   };
+  /** Cmd+= and Cmd+- (and View › Bigger and Smaller Preview): the next size step. */
+  const stepPreviewSize = useCallback(
+    (step: 1 | -1) => {
+      const to = stepSize(sizeRef.current, step);
+      // Already at the end: nothing changes, so nothing to say.
+      if (to === sizeRef.current) return;
+      sizeRef.current = to;
+      setSize(to);
+      announce(`Preview size ${to} pixels`);
+    },
+    [announce],
+  );
   // Cmd+1/2/3 pick the layout and Cmd+= / Cmd+- step the preview size (Ctrl on Windows), while
   // the library list is showing (not under settings, a page or a service's own page). Like Cmd+F
   // and Back, they wait while a menu, dialog or popover is open (the list it hands focus back to
@@ -1025,24 +1103,20 @@ export default function App() {
       const next = layoutShortcut(e, IS_MAC);
       if (next) {
         e.preventDefault();
-        // Holding the keys down picks it once.
-        if (!e.repeat) chooseLayout(next);
+        // Holding the keys down picks it once; the View menu's item for the same press doesn't
+        // pick it again.
+        if (!e.repeat && shortcutGuard.allow(`layout:${next}`, "key", performance.now())) chooseLayout(next);
         return;
       }
       const step = sizeShortcut(e, IS_MAC);
       if (step) {
         e.preventDefault();
-        const to = stepSize(sizeRef.current, step);
-        // Already at the end: nothing changes, so nothing to say.
-        if (to === sizeRef.current) return;
-        sizeRef.current = to;
-        setSize(to);
-        announce(`Preview size ${to} pixels`);
+        if (shortcutGuard.allow(`size:${step}`, "key", performance.now())) stepPreviewSize(step);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [listShowing, chooseLayout, announce]);
+  }, [listShowing, chooseLayout, stepPreviewSize, shortcutGuard]);
   // A font page finds its family by face key, whatever the list shows (filters don't apply there).
   const familyOfFace = useMemo(() => {
     const map = new Map<string, Family>();
@@ -1056,7 +1130,20 @@ export default function App() {
   /** What Back from the page at `i` returns to, in words: the font page under it, or the place. */
   const pageUnder = (i: number) => {
     const under = i > 0 ? nav.pages[i - 1] : undefined;
-    return under?.kind === "font" ? (familyOfFace.get(under.styleKey) ?? familyOfFace.get(under.faceKey))?.name ?? placeName : placeName;
+    switch (under?.kind) {
+      case "font":
+        return (familyOfFace.get(under.styleKey) ?? familyOfFace.get(under.faceKey))?.name ?? placeName;
+      case "compare":
+        return "Compare";
+      case "pair":
+        return "Pair";
+      case "groups":
+        return "Family groups";
+      case "catalog":
+        return SERVICE_LABELS[under.service];
+      default:
+        return placeName;
+    }
   };
   const styleCount = useMemo(() => filtered.reduce((n, f) => n + f.faces.length, 0), [filtered]);
   const { hasOwnTag } = filterContext;
@@ -1127,10 +1214,316 @@ export default function App() {
     [settingsOpen, library, grouping],
   );
 
+
+  // ------------------------------------------------------------- font actions and menus
+
+  // One set of font actions (fontActions.ts) for the right-click menus, the font page's More
+  // menu, the selection bar, the shortcuts and the macOS Font menu. What they work on: the open
+  // font page's family, else the list's selection (as the list last reported it).
+  const userFolderIds = useMemo(() => new Set(folders.filter((f) => f.kind === "user").map((f) => f.id)), [folders]);
+  const actionContext = useMemo<ActionContext>(
+    () => ({ mode: activationMode, removable: (font) => userFolderIds.has(font.folderId), revealLabel: REVEAL_LABEL }),
+    [activationMode, userFolderIds],
+  );
+  const listTarget = useRef<FontTarget | null>(null);
+  const [picker, setPicker] = useState<PickRequest | null>(null);
+  /** Remove from Library… waiting for its confirmation. `closePage`: the font page it came from,
+   *  closed once its whole family is gone. */
+  const [removal, setRemoval] = useState<(RemovalRequest & { closePage: number | null }) | null>(null);
+  /** Cmd+T on a font page opens its Tags popover: the page asked for, and a count that only grows. */
+  const [tagsAsk, setTagsAsk] = useState({ page: 0, n: 0 });
+  const allFaces = useMemo(() => allFamilies.flatMap((f) => f.faces), [allFamilies]);
+  const faceOf = useCallback(
+    (key: string): FaceRef | undefined => {
+      const family = familyOfFace.get(key);
+      const face = family?.faces.find((f) => f.key === key);
+      return family && face ? { family, face } : undefined;
+    },
+    [familyOfFace],
+  );
+  // The library A to Z for the picker: worked out while it's open, and kept while it closes.
+  const pickerList = useRef<Family[]>([]);
+  const pickerFamilies = useMemo(() => {
+    if (picker) pickerList.current = sortFamilies(allFamilies, { key: "name", desc: false });
+    return pickerList.current;
+  }, [picker, allFamilies]);
+
+  const currentTarget = (): FontTarget | null => {
+    if (settingsOpenRef.current) return null;
+    const top = nav.pages[nav.pages.length - 1];
+    if (top) {
+      if (top.kind !== "font") return null;
+      const family = familyOfFace.get(top.styleKey) ?? familyOfFace.get(top.faceKey);
+      if (!family) return null;
+      const face = family.faces.find((f) => f.key === top.styleKey) ?? family.faces.find((f) => f.key === top.faceKey) ?? family.representative;
+      return pageTarget(family, face);
+    }
+    return adobePage ? null : listTarget.current;
+  };
+
+  /** A target in words: “Inter”, “Inter Bold”, or "12 styles". */
+  const targetName = (target: FontTarget) => {
+    const [only] = target.items;
+    if (target.items.length !== 1) return `${target.faces.length.toLocaleString()} ${target.faces.length === 1 ? "style" : "styles"}`;
+    return only.kind === "family" ? `“${only.family.name}”` : `“${only.family.name} ${only.face.style}”`;
+  };
+
+  const openCompare = (keys: string[], returnTo: PageReturn) => {
+    const list = compareList(keys);
+    nav.open({ kind: "compare", ...list, mode: "lines", returnTo });
+    announce(`Opened Compare with ${list.faces.length} ${list.faces.length === 1 ? "font" : "fonts"}${list.left ? `; ${list.left} more didn't fit` : ""}`);
+  };
+  const openPair = (heading: string, body: string, returnTo: PageReturn) => {
+    nav.open({ kind: "pair", heading, body, returnTo });
+    announce("Opened Pair");
+  };
+
+  const runFontAction = (action: FontActionId, target: FontTarget, opts: { returnTo?: string } = {}) => {
+    if (!fontActionStates(target, actionContext)[action].enabled) return;
+    const name = targetName(target);
+    const first = target.items[0];
+    // A page it opens hands focus back to: the button it came from, else the list row.
+    const returnTo: PageReturn = opts.returnTo ? { element: opts.returnTo } : target.where === "list" && first?.rowKey ? { row: first.rowKey } : null;
+    const switchable = target.faces.filter((f) => !f.installed);
+    const top = nav.pages[nav.pages.length - 1];
+    switch (action) {
+      case "open":
+        openFont({ faceKey: first.face.key, styleKey: first.face.key, rowKey: first.rowKey ?? "", name: first.family.ungroupedFrom ?? first.family.name });
+        return;
+      case "turnOn":
+      case "turnOnOther": {
+        const scope = scopeOf(action, activationMode);
+        const until = (scope ?? activationMode) === "temporary" ? (untilQuit ? " until you quit Fontface" : " until logout") : "";
+        void setActivation(activationIds(switchable, true), true, undefined, scope).then((on) => on.size && announce(`Turned on ${name}${until}`));
+        return;
+      }
+      case "turnOff":
+        void setActivation(activationIds(switchable, false), false).then(() => announce(`Turned off ${name}`));
+        return;
+      case "tags":
+        // The open page's family: its own Tags popover. Anything else: the tag picker.
+        if (target.where === "page" && first.kind === "family" && top?.kind === "font") setTagsAsk((t) => ({ page: top.id, n: t.n + 1 }));
+        else openTagDialog({ kind: "pick", faces: target.faces });
+        return;
+      case "compare": {
+        const keys = compareKeysOf(target);
+        if (keys.length > 1) return openCompare(keys, returnTo);
+        setPicker({
+          title: `Compare ${name} with…`,
+          multiple: true,
+          confirm: "Compare",
+          // Picking its own family again would only show it once.
+          exclude: first.face.key === first.family.representative.key ? [first.family.id] : [],
+          onPick: (families) => {
+            openCompare([keys[0], ...families.map((f) => f.representative.key)], returnTo);
+            return true;
+          },
+        });
+        return;
+      }
+      case "pair":
+        if (target.items.length === 2) return openPair(target.items[0].face.key, target.items[1].face.key, returnTo);
+        setPicker({
+          title: `Pair ${name} with…`,
+          description: `${name} is the heading font: pick the body font. Swap them on the Pair page.`,
+          multiple: false,
+          onPick: ([family]) => {
+            openPair(first.face.key, family.representative.key, returnTo);
+            return true;
+          },
+        });
+        return;
+      case "familyGroup":
+        return openFamilyGroups(target.faces, { returnTo: opts.returnTo });
+      case "reveal": {
+        const font = revealFontOf(target);
+        if (font) revealFont(font.id);
+        return;
+      }
+      case "copyPostScript": {
+        const names = postScriptNames(target);
+        void copyText(names.join("\n")).then((ok) =>
+          ok
+            ? toast.success(names.length === 1 ? "Copied the PostScript name" : `Copied ${names.length.toLocaleString()} PostScript names`, {
+                description: names.length === 1 ? names[0] : undefined,
+              })
+            : toast.error("Couldn't copy the PostScript names"),
+        );
+        return;
+      }
+      case "remove": {
+        const plan = removalPlan(target.faces, allFaces, actionContext.removable);
+        if (!plan.files.length) return;
+        const wholeFamily = target.where === "page" && first.kind === "family" && plan.leaving === target.faces.length;
+        setRemoval({ what: name, plan, closePage: wholeFamily && top?.kind === "font" ? top.id : null });
+        return;
+      }
+    }
+  };
+
+  /** Remove from Library…, confirmed: turned off and no longer listed, with Undo. */
+  const confirmRemoval = async ({ what, plan, closePage }: RemovalRequest & { closePage: number | null }) => {
+    setRemoval(null);
+    mutationEpoch.current++;
+    let report: RemoveReport;
+    try {
+      report = await api.fontsRemove(plan.ids);
+    } catch (e) {
+      toast.error(`Couldn't remove ${what} from the library`, { description: String(e) });
+      return;
+    } finally {
+      mutationEpoch.current++;
+      await loadFonts().catch(() => {});
+    }
+    for (const f of report.failures) toast.error(fileName(f.path), { description: f.error });
+    if (!report.removed.length) return;
+    // From its own page: the page goes too, once nothing of the family is left to show.
+    if (closePage !== null && nav.pages[nav.pages.length - 1]?.id === closePage) nav.back();
+    const files = report.removed.length;
+    announce(`Removed ${what} from the library`);
+    toast.success(`Removed ${what} from the library`, {
+      description: `${files.toLocaleString()} font ${files === 1 ? "file" : "files"} turned off and no longer listed. Nothing was deleted.`,
+      action: { label: "Undo", onClick: () => void undoRemoval(report) },
+      // As long as the tag drags' Undo: time to notice, and to change your mind.
+      duration: 10_000,
+    });
+  };
+
+  /** Put Back: removed files are listed again (their folders are scanned). */
+  const putBack = async (paths: string[]) => {
+    const ids = await api.fontsPutBack(paths);
+    for (const id of ids) {
+      const folder = foldersRef.current.find((f) => f.id === id);
+      if (folder) await rescan(folder);
+    }
+    await loadFonts();
+  };
+
+  /** Undo for Remove from Library: put back, and turned back on the way each file was on. */
+  const undoRemoval = async (report: RemoveReport) => {
+    try {
+      await putBack(report.removed);
+      if (report.wasOn.length) {
+        const list = await api.listFonts();
+        for (const temporary of [false, true]) {
+          const paths = new Set(report.wasOn.filter((w) => w.temporary === temporary).map((w) => w.path));
+          const ids = list.filter((f) => paths.has(f.path)).map((f) => f.id);
+          if (ids.length) await setActivation(ids, true, [...paths], temporary ? "temporary" : "persistent", "arrival");
+        }
+      }
+      announce("Put back in the library");
+      toast.success("Put back in the library");
+    } catch (e) {
+      toast.error("Couldn't put the fonts back", { description: String(e) });
+    }
+  };
+
+  /** A View or Font menu item (macOS). The menus can lag a moment behind the page, so each one
+   *  checks again that it applies now. */
+  const runMenuCommand = (c: MenuCommand) => {
+    if (settingsOpenRef.current || popupOpen() || isDragging()) return;
+    if (c.kind === "back") {
+      if (nav.pages.length) nav.back();
+      return;
+    }
+    if (c.kind === "font") {
+      const target = currentTarget();
+      if (target) runFontAction(c.action, target);
+      return;
+    }
+    if (!listShowing) return;
+    switch (c.kind) {
+      case "layout":
+        return chooseLayout(c.layout);
+      case "group":
+        return chooseGrouping(!groupStyles);
+      case "sort":
+        if (sort.key !== c.key) chooseSort({ key: c.key, desc: sortInfo(c.key).desc });
+        return;
+      case "direction":
+        if (sort.desc !== c.desc) chooseSort({ ...sort, desc: c.desc });
+        return;
+      case "size":
+        return stepPreviewSize(c.step);
+    }
+  };
+
+  /** The macOS menus' state, sent when it changes (a moment after the page settles). */
+  const menuSent = useRef("");
+  const syncMenus = () => {
+    const state = nativeMenuState({
+      list: listShowing,
+      back: nav.pages.length > 0 && !settingsOpen,
+      layout,
+      groupStyles,
+      sort,
+      size,
+      actions: fontActionStates(currentTarget(), actionContext),
+    });
+    const key = menuStateKey(state);
+    if (key === menuSent.current) return;
+    menuSent.current = key;
+    api.setMenuState(state).catch(() => {
+      menuSent.current = "";
+    });
+  };
+
+  const latest = useRef({ runFontAction, runMenuCommand, currentTarget, syncMenus, actionContext });
+  latest.current = { runFontAction, runMenuCommand, currentTarget, syncMenus, actionContext };
+  const menuTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const scheduleMenus = useCallback(() => {
+    if (!IS_MAC) return;
+    clearTimeout(menuTimer.current);
+    menuTimer.current = setTimeout(() => latest.current.syncMenus(), 50);
+  }, []);
+  // After every render: whatever changed (a page, the layout, the selection) shows in the menus.
+  useEffect(() => scheduleMenus());
+
+  // The View and Font menus' items send "menu" (window.rs). One the page's own key handler has
+  // just acted on (Cmd+[, Cmd+1…) is the same key press, and is dropped (shortcutGuard).
+  useEffect(() => {
+    const unlisten = listen<string>("menu", (e) => {
+      const c = menuCommand(e.payload);
+      if (!c || !shortcutGuard.allow(commandName(c), "menu", performance.now())) return;
+      latest.current.runMenuCommand(c);
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [shortcutGuard]);
+
+  // Cmd+T (Tags), Cmd+Return (Turn On), Option-Cmd+Return (the other way) and Shift-Cmd+Return
+  // (Turn Off), on the selection or the open font page; Ctrl on Windows. They wait while a menu,
+  // dialog or popover is open, and during a drag.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = fontShortcut(e, IS_MAC);
+      if (!action) return;
+      // Handled here, the key doesn't reach the Font menu as well.
+      e.preventDefault();
+      if (e.repeat || settingsOpenRef.current || popupOpen() || isDragging()) return;
+      const target = latest.current.currentTarget();
+      if (!target || !shortcutGuard.allow(`font:${action}`, "key", performance.now())) return;
+      latest.current.runFontAction(action, target);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shortcutGuard]);
+
+  const fontActionsApi = useMemo<FontActionsApi>(
+    () => ({
+      states: (target) => fontActionStates(target, latest.current.actionContext),
+      run: (action, target, options) => latest.current.runFontAction(action, target, options),
+    }),
+    [],
+  );
+
   return (
     <SettingsContext.Provider value={settingsStore}>
       <FamilyGroupsContext.Provider value={openFamilyGroups}>
       <StateWordingContext.Provider value={stateWording}>
+      <FontActionsContext.Provider value={fontActionsApi}>
+      <FontPickerContext.Provider value={setPicker}>
       <TooltipProvider>
         <div className="relative h-full">
           {/* While settings are open, the library stays as it was, hidden and out of reach underneath. */}
@@ -1225,8 +1618,12 @@ export default function App() {
                   resetKey={resetKey}
                   allFamilies={allFamilies}
                   locations={locations}
-                  onActivate={setActivation}
+                  onActivate={(ids, on, scope) => void setActivation(ids, on, undefined, scope)}
                   onOpen={openFont}
+                  onTarget={(target) => {
+                    listTarget.current = target;
+                    scheduleMenus();
+                  }}
                   showAdded={view.kind === "recent"}
                   table={{
                     sort,
@@ -1307,11 +1704,35 @@ export default function App() {
                           )
                         }
                       </CatalogPage>
+                    ) : page.kind === "compare" ? (
+                      <ComparePage
+                        page={page}
+                        faceOf={faceOf}
+                        placeName={pageUnder(i)}
+                        previewText={previewText}
+                        onBack={nav.back}
+                        onChange={(patch) => nav.update(page.id, patch)}
+                        onOpen={(faceKey, returnTo) => {
+                          nav.open({ kind: "font", faceKey, styleKey: faceKey, tab: settings?.fontPageTab ?? "specimen", returnTo });
+                          announce(`Opened ${familyOfFace.get(faceKey)?.name ?? "the font"}`);
+                        }}
+                        announce={announce}
+                      />
+                    ) : page.kind === "pair" ? (
+                      <PairPage
+                        page={page}
+                        faceOf={faceOf}
+                        placeName={pageUnder(i)}
+                        previewText={previewText}
+                        onBack={nav.back}
+                        onChange={(patch) => nav.update(page.id, patch)}
+                        announce={announce}
+                      />
                     ) : (
                     <FontPage
                       page={page}
                       family={familyOfFace.get(page.styleKey) ?? familyOfFace.get(page.faceKey)}
-                      placeName={placeName}
+                      placeName={pageUnder(i)}
                       previewText={previewText}
                       busy={busy}
                       locations={locations}
@@ -1320,8 +1741,9 @@ export default function App() {
                         nav.update(page.id, patch);
                         if (patch.tab && patch.tab !== settings?.fontPageTab) settingsStore.update({ fontPageTab: patch.tab });
                       }}
-                      onActivate={setActivation}
+                      onActivate={(ids, on, scope) => void setActivation(ids, on, undefined, scope)}
                       onReveal={revealFont}
+                      tagsAsk={tagsAsk.page === page.id ? tagsAsk.n : 0}
                     />
                     )}
                   </div>
@@ -1352,6 +1774,10 @@ export default function App() {
               familySuggestions={familySuggestions}
               // "Review n suggestions" opens them; with none, the button reads "Family groups…" and opens every family.
               onReviewFamilyGroups={() => openFamilyGroups(undefined, { filter: familySuggestions > 0 ? "suggested" : "all" })}
+              onPutBack={async (paths) => {
+                await putBack(paths);
+                toast.success(paths.length === 1 ? "Put back in the library" : `Put ${paths.length.toLocaleString()} font files back in the library`);
+              }}
             />
           )}
         </div>
@@ -1361,6 +1787,9 @@ export default function App() {
           families={allFamilies}
           onDeleted={(ids) => setView((v) => (v.kind === "tag" && ids.includes(v.id) ? { kind: "all" } : v))}
         />
+        {/* The library search for Compare and Pair, and Remove from Library's confirmation. */}
+        <FontPickerDialog request={picker} families={pickerFamilies} onClose={() => setPicker(null)} />
+        <RemoveFontsDialog request={removal} onConfirm={(r) => void confirmRemoval({ ...r, closePage: removal?.closePage ?? null })} onCancel={() => setRemoval(null)} />
 
         <AlertDialog open={pendingRemoval !== null} onOpenChange={(o) => !o && setPendingRemoval(null)}>
           <AlertDialogContent>
@@ -1391,6 +1820,8 @@ export default function App() {
           {announcement}
         </div>
       </TooltipProvider>
+      </FontPickerContext.Provider>
+      </FontActionsContext.Provider>
       </StateWordingContext.Provider>
       </FamilyGroupsContext.Provider>
     </SettingsContext.Provider>

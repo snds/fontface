@@ -496,7 +496,7 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
 
 /// Turns a file off. One that's on for this login only is also removed from session scope.
 /// Runs under the caller's activation lock.
-fn turn_off_file(path: &str, temporary: bool) -> AppResult<()> {
+pub(crate) fn turn_off_file(path: &str, temporary: bool) -> AppResult<()> {
     let p = Path::new(path);
     activation::deactivate(p)?;
     if temporary {

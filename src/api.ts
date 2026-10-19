@@ -505,6 +505,35 @@ export interface NameRef {
   name: string;
 }
 
+// ------------------------------------------------------------------ Remove from Library
+// Must match src-tauri/src/removed.rs. Files stay where they are: Fontface stops listing them.
+
+/** A removed file that was on: Undo turns it back on the same way. */
+export interface RemovedOn {
+  path: string;
+  temporary: boolean;
+}
+
+export interface RemoveReport {
+  /** The files no longer listed. */
+  removed: string[];
+  /** Their folders (scanned again on Undo). */
+  folders: number[];
+  wasOn: RemovedOn[];
+  /** Files that couldn't be turned off: they stay in the library. */
+  failures: ActivationOutcome[];
+  /** Fonts that aren't in your folders: left alone. */
+  skipped: number;
+}
+
+/** A file you removed from the library (Settings › Library lists them). */
+export interface RemovedFile {
+  path: string;
+  folderId: number;
+  /** Unix seconds. */
+  removedAt: number;
+}
+
 export interface TagBackup {
   path: string;
   /** Unix time in milliseconds. */
@@ -580,4 +609,11 @@ export const api = {
   familiesApply: (change: FamilyChange) => invoke<FamilyChange>("families_apply", { change }),
   /** A double-click on the title bar: zooms, minimizes or does nothing, as the macOS setting says. */
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
+  /** The macOS View and Font menus follow the page (fontActions.nativeMenuState). Elsewhere it does nothing. */
+  setMenuState: (state: import("./fontActions").NativeMenuState) => invoke<void>("set_menu_state", { state }),
+  /** Remove from Library: these fonts' files are turned off and no longer listed. Files aren't touched. */
+  fontsRemove: (fontIds: number[]) => invoke<RemoveReport>("fonts_remove", { fontIds }),
+  fontsRemoved: () => invoke<RemovedFile[]>("fonts_removed"),
+  /** Lists these removed files again at their folders' next scan; returns the folders to scan. */
+  fontsPutBack: (paths: string[]) => invoke<number[]>("fonts_put_back", { paths }),
 };

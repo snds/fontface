@@ -500,7 +500,7 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
           busy={switchable.some((f) => f.copies.some((c) => busy.has(c.path)))}
           tabIndex={tab}
           srId={`${id}-state`}
-          onSwitch={(next) => onActivate(activationIds(switchable, next), next)}
+          onSwitch={(next, scope) => onActivate(activationIds(switchable, next), next, scope)}
         />
       );
     }

@@ -602,6 +602,88 @@ mod library {
         let expected = if family.starts_with('.') { 0 } else { 1 };
         assert_eq!(sb.font_rows(), expected, "family {family:?}");
     }
+
+    /// Remove from Library: the file stays on disk, leaves the list, and later scans skip it;
+    /// Put Back lists it again with its first date. Only your folders' files can go. Uses fonts
+    /// that are off, so nothing is registered with the OS.
+    #[test]
+    fn removed_fonts_stay_out_until_put_back() {
+        let sb = Sandbox::new("removed");
+        let andale = sb.copy(ANDALE_MONO, "Andale.ttf");
+        let helvetica = sb.copy(HELVETICA_TTC, "Helvetica.ttc");
+        let folder = sb.add_folder();
+        let system = db::insert_folder(&mut sb.conn(), &sb.dir.join("system"), "system").unwrap();
+        sb.scan(folder);
+        let conn = sb.conn();
+        crate::activation::ensure_schema(&conn).unwrap();
+        crate::removed::ensure_schema(&conn).unwrap();
+        conn.execute("UPDATE fonts SET added_at = 1234 WHERE path = ?1", [andale.to_string_lossy()]).unwrap();
+        let ids = |path: &Path| -> Vec<i64> {
+            let mut stmt = conn.prepare("SELECT id FROM fonts WHERE path = ?1 ORDER BY id").unwrap();
+            stmt.query_map([path.to_string_lossy()], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        let rows_of = |path: &Path| ids(path).len();
+        let helvetica_rows = rows_of(&helvetica);
+        assert!(helvetica_rows > 1, "a collection holds several fonts");
+        // A font in a macOS font folder is never removed.
+        let macos = sb.dir.join("system/Built In.ttf").to_string_lossy().into_owned();
+        conn.execute(
+            "INSERT INTO fonts (folder_id, path, file_size, mtime, family, subfamily, weight, width, italic, monospace, variable, glyph_count, format, activated)
+             VALUES (?1, ?2, 1, 1, 'Built In', 'Regular', 400, 5, 0, 0, 0, 1, 'TrueType', 0)",
+            rusqlite::params![system, macos],
+        )
+        .unwrap();
+        let macos_id: i64 = conn.query_row("SELECT id FROM fonts WHERE path = ?1", [&macos], |r| r.get(0)).unwrap();
+
+        let state = crate::AppState::for_tests(&sb.db(), &sb.dir).unwrap();
+        // One font of the collection takes the whole file; the macOS font is left alone.
+        let report = crate::removed::remove(&state, &[ids(&andale)[0], ids(&helvetica)[0], macos_id]).unwrap();
+        let mut removed = report.removed.clone();
+        removed.sort();
+        let mut want = vec![andale.to_string_lossy().into_owned(), helvetica.to_string_lossy().into_owned()];
+        want.sort();
+        assert_eq!(removed, want);
+        assert_eq!(report.folders, vec![folder]);
+        assert_eq!(report.skipped, 1, "the macOS font");
+        assert!(report.was_on.is_empty() && report.failures.is_empty());
+        assert_eq!(rows_of(&andale) + rows_of(&helvetica), 0, "every font of both files left the list");
+        assert!(andale.exists() && helvetica.exists(), "the files are untouched");
+        assert_eq!(rows_of(Path::new(&macos)), 1);
+        let listed = crate::removed::list(&conn).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().all(|f| f.folder_id == folder));
+
+        // Rescans leave them out.
+        let again = sb.scan(folder);
+        assert_eq!(again.added, 0);
+        assert_eq!(again.files, 0, "removed files aren't counted as the folder's");
+        assert_eq!(rows_of(&andale), 0);
+
+        // Put Back: listed again at the next scan, with the date they first came in.
+        let folders = crate::removed::put_back(&state, &[andale.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(folders, vec![folder]);
+        assert_eq!(crate::removed::list(&conn).unwrap().len(), 1, "put back: no longer listed as removed");
+        let back = sb.scan(folder);
+        assert_eq!(back.added, 1);
+        assert_eq!(rows_of(&andale), 1);
+        assert_eq!(added_at(&conn, &andale), Some(1234), "it keeps its first date");
+        let remembered: i64 = conn.query_row("SELECT COUNT(*) FROM removed_files WHERE path = ?1", [andale.to_string_lossy()], |r| r.get(0)).unwrap();
+        assert_eq!(remembered, 0, "read again: nothing left to remember");
+        assert_eq!(rows_of(&helvetica), 0, "the other file is still removed");
+
+        // A removed file that's deleted from disk is forgotten by the next scan.
+        std::fs::remove_file(&helvetica).unwrap();
+        sb.scan(folder);
+        assert!(crate::removed::list(&conn).unwrap().is_empty());
+
+        // Removing the folder forgets its removed files too.
+        let ttc = sb.copy(HELVETICA_TTC, "Again.ttc");
+        sb.scan(folder);
+        crate::removed::remove(&state, &ids(&ttc)).unwrap();
+        assert_eq!(crate::removed::list(&conn).unwrap().len(), 1);
+        conn.execute("DELETE FROM folders WHERE id = ?1", [folder]).unwrap();
+        assert!(crate::removed::list(&conn).unwrap().is_empty());
+    }
 }
 
 mod safety {

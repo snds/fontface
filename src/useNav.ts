@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { IS_MAC } from "@/components/TitleBar";
-import { backKeyIntent, EMPTY_NAV, MOUSE_BACK_BUTTON, navReducer, type FocusKind, type NavState, type NewPage, type Page, type PagePatch } from "@/nav";
+import { backKeyIntent, EMPTY_NAV, isBackShortcut, MOUSE_BACK_BUTTON, navReducer, type FocusKind, type NavState, type NewPage, type Page, type PagePatch } from "@/nav";
 
 const TEXT_INPUTS = new Set(["text", "search", "number", "email", "url", "tel", "password"]);
 /** Menus, popovers, dialogs and select lists: they handle their own Esc. */
@@ -39,6 +39,9 @@ interface Options {
   blocked: () => boolean;
   /** Called after Back closed a page, with the pages left. */
   onBack?: (closed: Page, remaining: Page[]) => void;
+  /** Asked before Cmd+[ goes back: false drops it. The View menu's Back has the same key, and
+   *  App's shortcut guard (fontActions.createShortcutGuard) keeps one press from going back twice. */
+  allowKeyBack?: () => boolean;
 }
 
 /**
@@ -46,13 +49,13 @@ interface Options {
  * button, and Esc when focus isn't in a text field, menu or popover. They listen only while a
  * page is open, and do nothing while a dialog or menu is open.
  */
-export function useNav({ blocked, onBack }: Options): Nav {
+export function useNav({ blocked, onBack, allowKeyBack }: Options): Nav {
   const [state, dispatch] = useReducer(navReducer, EMPTY_NAV);
   // Read by Back right away, so two Backs before the next render close two pages, not one twice.
   const current = useRef<NavState>(state);
   current.current = state;
-  const options = useRef({ blocked, onBack });
-  options.current = { blocked, onBack };
+  const options = useRef({ blocked, onBack, allowKeyBack });
+  options.current = { blocked, onBack, allowKeyBack };
 
   const back = useCallback(() => {
     const before = current.current;
@@ -76,7 +79,8 @@ export function useNav({ blocked, onBack }: Options): Nav {
       if (!intent) return;
       e.preventDefault();
       if (intent === "leave-field") (e.target as HTMLElement).blur();
-      else back();
+      // Esc has no menu item; only Cmd+[ can reach the View menu's Back too.
+      else if (!isBackShortcut(e, IS_MAC) || (options.current.allowKeyBack?.() ?? true)) back();
     };
     // The mouse's back button. Its press is taken too, so the web view never treats it as its own.
     const onMouse = (e: MouseEvent) => {

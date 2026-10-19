@@ -9,7 +9,6 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
-import { SyncFontMenuItems } from "@/sync/SyncFontMenu";
 import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
 import { CONTEXT, GroupedTags } from "./menus";
@@ -29,20 +28,26 @@ export function describeFaces(faces: Face[]): string {
   return families.size === 1 ? `${[...families][0]}, ${faces.length} styles` : `${faces.length.toLocaleString()} styles`;
 }
 
+/** What a font's right-click menu is about: one style by name, else a count. */
+export function FontMenuLabel({ faces }: { faces: Face[] }) {
+  return (
+    <ContextMenuGroup>
+      <ContextMenuLabel className="max-w-72 truncate">{describeFaces(faces)}</ContextMenuLabel>
+    </ContextMenuGroup>
+  );
+}
+
 /**
- * The tag part of a font's right-click menu (list rows, a selection, the font page):
- * Add to tag (the tag tree, Find a tag…, New tag…) and Remove from tag (the tags they have).
- * Menus also jump to an item when you type the first letters of its name.
+ * Add to tag (the tag tree, Find a tag…, New tag…) and Remove from tag (the tags they have), for
+ * a font's right-click menu (list rows, a selection, the font page). Menus also jump to an item
+ * when you type the first letters of its name.
  */
-export function FontTagMenuItems({ faces, index }: { faces: Face[]; index: TagIndex }) {
+export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }) {
   const coverage = tagCoverage(faces, index);
   const has = index.ordered.filter((node) => (coverage.get(node.tag.id) ?? 0) > 0);
   const count = (id: number) => coverage.get(id) ?? 0;
   return (
     <>
-      <ContextMenuGroup>
-        <ContextMenuLabel className="max-w-72 truncate">{describeFaces(faces)}</ContextMenuLabel>
-      </ContextMenuGroup>
       <ContextMenuSub>
         <ContextMenuSubTrigger>
           <Icon name="new_label" size={16} />
@@ -120,7 +125,6 @@ export function FontTagMenuItems({ faces, index }: { faces: Face[]; index: TagIn
           )}
         </ContextMenuSubContent>
       </ContextMenuSub>
-      <SyncFontMenuItems faces={faces} />
     </>
   );
 }

@@ -1,10 +1,11 @@
 import type { FontPageTab } from "./api";
+import type { CompareList, PairFonts } from "./compare.ts";
 
 /**
  * Pages over the library list (see docs/ARCHITECTURE.md, Front end). The sidebar picks a place
  * (App's `view` and filters), and pages are pushed on top of it: the font page, the Google
- * Fonts and Purchases pages ("catalog" pages, opened with Browse from those sources' lists), and
- * Family groups; later Compare and Pair. While a page shows, the list stays mounted underneath,
+ * Fonts and Purchases pages ("catalog" pages, opened with Browse from those sources' lists),
+ * Family groups, Compare and Pair. While a page shows, the list stays mounted underneath,
  * hidden and inert, so it keeps its scroll position, selection and loaded previews.
  *
  * - Back (the header button, Cmd+[ or Alt+Left on Windows, the mouse's back button, Esc outside
@@ -40,6 +41,9 @@ export interface CatalogPageEntry {
   returnTo: string | null;
 }
 
+/** Where focus goes back on Back: a list row (by row key) or an element (by id). Null: the list. */
+export type PageReturn = { row: string } | { element: string } | null;
+
 /** What the Family groups page lists: every family, the suggestions, or what you changed. */
 export type GroupsFilter = "all" | "suggested" | "changed";
 
@@ -50,20 +54,46 @@ export interface GroupsPageEntry {
   filter: GroupsFilter;
   /** Faces it opened on (a font's menu): checked, their families open and in view. */
   focus: string[];
-  /** Where focus goes back on Back: a list row (by row key) or an element (by id). */
-  returnTo: { row: string } | { element: string } | null;
+  /** Where focus goes back on Back. */
+  returnTo: PageReturn;
   /** How many times it was asked for again while on top (Settings › Library, say): the page
    *  focuses its heading each time, since it stays mounted. Set by the stack. */
   opened: number;
 }
 
-export type Page = FontPageEntry | CatalogPageEntry | GroupsPageEntry;
+/** Compare's two ways of showing its fonts: the same line stacked, or paragraphs in columns. */
+export type CompareMode = "lines" | "columns";
+
+/** Compare (compare.ts): 2 to 8 fonts, from the selection bar, a font's menus or the Font menu. */
+export interface ComparePageEntry extends CompareList {
+  kind: "compare";
+  id: number;
+  mode: CompareMode;
+  returnTo: PageReturn;
+}
+
+/** Pair (compare.ts): a heading font and a body font, from a font's menus or the Font menu. */
+export interface PairPageEntry extends PairFonts {
+  kind: "pair";
+  id: number;
+  returnTo: PageReturn;
+}
+
+export type Page = FontPageEntry | CatalogPageEntry | GroupsPageEntry | ComparePageEntry | PairPageEntry;
 
 /** What a new page needs; the stack gives it its id. */
-export type NewPage = Omit<FontPageEntry, "id"> | Omit<CatalogPageEntry, "id"> | Omit<GroupsPageEntry, "id" | "opened">;
+export type NewPage =
+  | Omit<FontPageEntry, "id">
+  | Omit<CatalogPageEntry, "id">
+  | Omit<GroupsPageEntry, "id" | "opened">
+  | Omit<ComparePageEntry, "id">
+  | Omit<PairPageEntry, "id">;
 
 /** The parts of a page that change while it's open. */
-export type PagePatch = Partial<Pick<FontPageEntry, "styleKey" | "tab">> & Partial<Pick<GroupsPageEntry, "filter">>;
+export type PagePatch = Partial<Pick<FontPageEntry, "styleKey" | "tab">> &
+  Partial<Pick<GroupsPageEntry, "filter">> &
+  Partial<Pick<ComparePageEntry, "faces" | "left" | "mode">> &
+  Partial<PairFonts>;
 
 export interface NavState {
   pages: Page[];
@@ -109,6 +139,18 @@ export function navReducer(state: NavState, action: NavAction): NavState {
           changed = true;
           return { ...p, filter: action.patch.filter };
         }
+        if (p.kind === "compare") {
+          const { faces = p.faces, left = p.left, mode = p.mode } = action.patch;
+          if (sameList(faces, p.faces) && left === p.left && mode === p.mode) return p;
+          changed = true;
+          return { ...p, faces, left, mode };
+        }
+        if (p.kind === "pair") {
+          const { heading = p.heading, body = p.body } = action.patch;
+          if (heading === p.heading && body === p.body) return p;
+          changed = true;
+          return { ...p, heading, body };
+        }
         // A service's page has no parts that change.
         if (p.kind !== "font") return p;
         const next = { ...p, styleKey: action.patch.styleKey ?? p.styleKey, tab: action.patch.tab ?? p.tab };
@@ -121,11 +163,15 @@ export function navReducer(state: NavState, action: NavAction): NavState {
   }
 }
 
-/** The same font on the same style, or the same service's page. (Family groups is never
- *  stacked twice: see "open".) */
+const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((k, i) => k === b[i]);
+
+/** The same font on the same style, the same service's page, or the same fonts compared or
+ *  paired. (Family groups is never stacked twice: see "open".) */
 function samePage(a: Page, b: NewPage): boolean {
   if (a.kind === "font" && b.kind === "font") return a.faceKey === b.faceKey && a.styleKey === b.styleKey;
   if (a.kind === "catalog" && b.kind === "catalog") return a.service === b.service;
+  if (a.kind === "compare" && b.kind === "compare") return sameList(a.faces, b.faces);
+  if (a.kind === "pair" && b.kind === "pair") return a.heading === b.heading && a.body === b.body;
   return false;
 }
 
@@ -182,14 +228,14 @@ export const MOUSE_BACK_BUTTON = 3;
 
 /**
  * What Cmd+F (Ctrl+F on Windows) does, by the page on top: "list" goes to the library's Search
- * (no page is open); "leave" closes the pages, then goes there (a font page, which has no search
- * of its own); "page" goes to the page's own search field (the Google Fonts catalog, Family
+ * (no page is open); "leave" closes the pages, then goes there (a font page, Compare or Pair,
+ * which have no search of their own); "page" goes to the page's own search field (the Google Fonts catalog, Family
  * groups), keeping what's typed and picked there; null does nothing (the Purchases page has no
  * search field, and leaving it would lose its place).
  */
 export function findIntent(top: Page | undefined): "list" | "leave" | "page" | null {
   if (!top) return "list";
-  if (top.kind === "font") return "leave";
+  if (top.kind === "font" || top.kind === "compare" || top.kind === "pair") return "leave";
   if (top.kind === "groups") return "page";
   return top.service === "google" ? "page" : null;
 }
