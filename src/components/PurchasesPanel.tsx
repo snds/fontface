@@ -263,6 +263,7 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
               <Switch
                 checked={status.watching}
                 disabled={settingBusy}
+                focusableWhenDisabled
                 onCheckedChange={(on) => setting(() => api.purchasesSetWatching(on), on ? "Watching for font downloads" : undefined)}
                 aria-label="Watch for font downloads"
                 aria-describedby={watchHintId}

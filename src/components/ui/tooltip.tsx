@@ -2,6 +2,7 @@
 
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 import { cn } from "@/lib/utils"
+import { noteTooltipEscape } from "@/tips"
 
 function TooltipProvider({
   delay = 0,
@@ -16,8 +17,26 @@ function TooltipProvider({
   )
 }
 
-function Tooltip({ ...props }: TooltipPrimitive.Root.Props) {
-  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
+/**
+ * Esc closes an open tooltip and still does what it does where focus is, in the same press:
+ * closes the dialog, popover or menu around it, clears a list's selection, goes Back, leaves
+ * Settings. Base UI would keep the key from going on, so the first Esc would only close the
+ * tooltip. The press is noted as one a tooltip closed on (tips.ts, keyHandled), so the window's
+ * Esc handlers don't take the tooltip's preventDefault for something having handled it.
+ */
+function Tooltip<Payload>({ onOpenChange, ...props }: TooltipPrimitive.Root.Props<Payload>) {
+  return (
+    <TooltipPrimitive.Root
+      data-slot="tooltip"
+      onOpenChange={(open, details) => {
+        onOpenChange?.(open, details)
+        if (open || details.reason !== "escape-key" || details.isCanceled) return
+        details.allowPropagation()
+        if (details.event) noteTooltipEscape(details.event)
+      }}
+      {...props}
+    />
+  )
 }
 
 function TooltipTrigger({ ...props }: TooltipPrimitive.Trigger.Props) {

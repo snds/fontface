@@ -1,12 +1,39 @@
 import type { GoogleFamily } from "./api.ts";
 import { stateWords, summarize, type StateWording } from "./fontState.ts";
 import { familyKey, type CatalogRef } from "./googlePreviews.ts";
-import type { Face } from "./library.ts";
+import { activationIds, type Face } from "./library.ts";
 
 // The Google Fonts source's own view (components/GoogleFontsPanel.tsx): the whole catalog, as
-// the place to get, remove, update and turn on Google Fonts. Which families the toolbar's
-// filters keep, what you have of each family (downloaded here, or your own copy), and what
-// each row offers. Pure (no React, no DOM), so `npm run test:ui` covers it.
+// the place to get, remove, update and turn on Google Fonts. How its loads take turns, which
+// families the toolbar's filters keep, what you have of each family (downloaded here, or your
+// own copy), and what each row offers. Pure (no React, no DOM), so `npm run test:ui` covers it.
+
+// ------------------------------------------------------------------------------ loading
+
+/**
+ * Loads of the catalog (useGoogleView): `ask(refresh)` asks Rust for it, from the network when
+ * `refresh` is set, else as saved (at once, while the saved copy is recent or a refresh holds the
+ * network). Each load says whether it's still the newest one asked for (`newest`): only that one
+ * should land. A load asked for while a refresh is under way (after a download, or each step of
+ * Update all) waits for the refresh, then asks: asked at once, it would get the older saved copy
+ * first and, being newer, drop the refresh's answer.
+ */
+export function catalogLoader<T>(ask: (refresh: boolean) => Promise<T>) {
+  let seq = 0;
+  let refreshing: Promise<unknown> | null = null;
+  return (refresh = false): { result: Promise<T>; newest: () => boolean } => {
+    const my = ++seq;
+    const result = (refreshing ?? Promise.resolve()).catch(() => {}).then(() => ask(refresh));
+    if (refresh) {
+      refreshing = result;
+      const done = () => {
+        if (refreshing === result) refreshing = null;
+      };
+      result.then(done, done);
+    }
+    return { result, newest: () => my === seq };
+  };
+}
 
 // ------------------------------------------------------------------------------ filters
 
@@ -41,10 +68,15 @@ export const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c
 
 /** What you have of one catalog family, as library styles (each with all of its copies). */
 export interface Holding {
-  /** Styles in the family's downloaded folder (Fontface's Google Fonts folder). */
+  /** Styles in the family's downloaded folder (Fontface's Google Fonts folder). One can also
+   *  have a copy of yours elsewhere, with the same PostScript name: `files` says which copies
+   *  are the download. */
   downloaded: Face[];
   /** Styles elsewhere in your library with the family's name ("Your copy"). */
   yours: Face[];
+  /** The files of `downloaded` that are in the family's downloaded folder: what Remove turns
+   *  off and deletes, and what the switch turns on. */
+  files: ReadonlySet<string>;
 }
 
 const trimDir = (dir: string) => dir.replace(/[\\/]+$/, "");
@@ -87,16 +119,21 @@ export function holdingsOf(families: readonly CatalogRef[], faces: readonly Face
     }
     return id;
   };
-  const out = new Map<string, Holding>();
+  const out = new Map<string, Holding & { files: Set<string> }>();
   const holding = (id: string) => {
     let h = out.get(id);
-    if (!h) out.set(id, (h = { downloaded: [], yours: [] }));
+    if (!h) out.set(id, (h = { downloaded: [], yours: [], files: new Set() }));
     return h;
   };
   for (const face of faces) {
-    const dir = byDir.size ? face.copies.map((c) => downloadedIn(parentOf(c.path))).find((id) => id !== null) : undefined;
+    const dirs = byDir.size ? face.copies.map((c) => downloadedIn(parentOf(c.path))) : [];
+    const dir = dirs.find((id) => id !== null);
     if (dir) {
-      holding(dir).downloaded.push(face);
+      const h = holding(dir);
+      h.downloaded.push(face);
+      face.copies.forEach((c, i) => {
+        if (dirs[i] === dir) h.files.add(c.path);
+      });
       continue;
     }
     const id = face.copies.map((c) => named(c.family)).find((x) => x !== null);
@@ -108,6 +145,23 @@ export function holdingsOf(families: readonly CatalogRef[], faces: readonly Face
 /** The styles a family's switch turns on and off, and its font page shows: the downloaded ones
  *  if it's downloaded, else your own copy's. */
 export const switchFaces = (h: Holding | undefined): Face[] => (!h ? [] : h.downloaded.length ? h.downloaded : h.yours);
+
+/**
+ * What the row's switch sends (library.activationIds). Off: every copy of its styles, since a
+ * style is on while any copy is. On, for a download: Google's copy of each style, never a copy
+ * of yours with the same PostScript name (as Get turns it on).
+ */
+export function switchIds(h: Holding | undefined, on: boolean): number[] {
+  const faces = switchFaces(h);
+  if (!on || !h?.downloaded.length) return activationIds(faces, on);
+  return activationIds(
+    faces.map((face) => {
+      const here = face.copies.filter((c) => h.files.has(c.path));
+      return here.length ? { ...face, primary: here[0], copies: here } : face;
+    }),
+    true,
+  );
+}
 
 /** Some style of the family is on now (for the Active filter). Fonts the OS always keeps on
  *  count, as they do for the library's Active filter. */
@@ -257,12 +311,18 @@ export function rowLabel(f: CatalogFamily, plan: RowPlan, h: Holding | undefined
 
 /**
  * What Remove's confirmation says: the downloaded files are turned off and deleted, and a copy
- * of your own isn't touched. (The message after it offers Undo.)
+ * of your own isn't touched, whether it's a style of its own or a copy of a downloaded style
+ * (the same PostScript name) outside the downloaded folder. (The message after it offers Undo.)
  */
 export function removalWords(family: string, h: Holding | undefined): string[] {
-  const files = new Set((h?.downloaded ?? []).flatMap((face) => face.copies.map((c) => c.path))).size;
+  const files = h?.files.size ?? 0;
   const what = files ? `its ${files.toLocaleString("en-US")} downloaded font ${files === 1 ? "file" : "files"}` : "its downloaded files";
   const out = [`Fontface turns off ${what} and deletes them from its Google Fonts folder.`];
-  if (h?.yours.length) out.push(`Your own copy of ${family} stays in your library, as it is.`);
+  const yoursToo = !!h && (h.yours.length > 0 || h.downloaded.some((face) => face.copies.some((c) => !h.files.has(c.path))));
+  if (yoursToo) out.push(`Your own copy of ${family} stays in your library, as it is.`);
   return out;
 }
+
+/** "Yours first"'s tooltip: what flipping it does now. */
+export const yoursFirstTip = (on: boolean) =>
+  on ? "Lists every family A to Z" : "Lists the families you have first, downloaded here or already in your library";

@@ -1,5 +1,6 @@
 import type { FontPageTab } from "./api";
 import type { CompareList, PairFonts } from "./compare.ts";
+import { keyHandled } from "./tips.ts";
 
 /**
  * Pages over the library list (see docs/ARCHITECTURE.md, Front end). The sidebar picks a place
@@ -221,8 +222,8 @@ export function backKeyIntent(e: KeyLike, ctx: BackContext): "back" | "leave-fie
   if (isBackShortcut(e, ctx.mac)) return ctx.focus === "popup" ? null : "back";
   if (e.key !== "Escape" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null;
   // Something already handled this Esc (a popover closing, a search box clearing its text).
-  // A disabled button only blocked it.
-  if ((e.defaultPrevented && ctx.focus !== "disabled") || e.isComposing) return null;
+  // A disabled button only blocked it, and a tooltip closing on it doesn't count (tips.ts).
+  if ((keyHandled(e) && ctx.focus !== "disabled") || e.isComposing) return null;
   if (ctx.focus === "popup") return null;
   return ctx.focus === "text" ? "leave-field" : "back";
 }

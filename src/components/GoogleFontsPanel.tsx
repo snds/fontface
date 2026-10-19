@@ -7,7 +7,21 @@ import { LIBRARY_LIST_ATTR } from "@/focusReturn";
 import type { FontTarget } from "@/fontActions";
 import { summarize } from "@/fontState";
 import { catalogItems } from "@/catalogOrder";
-import { CATEGORIES, categoryLabel, hasUpdate, noMatchText, openFace, removalWords, rowLabel, rowPlan, switchFaces, type Holding, type RowPlan } from "@/googleCatalog";
+import {
+  CATEGORIES,
+  categoryLabel,
+  hasUpdate,
+  noMatchText,
+  openFace,
+  removalWords,
+  rowLabel,
+  rowPlan,
+  switchFaces,
+  switchIds,
+  yoursFirstTip,
+  type Holding,
+  type RowPlan,
+} from "@/googleCatalog";
 import {
   describesRowFile,
   failNote,
@@ -29,7 +43,7 @@ import {
   useGooglePreview,
   type PreviewRequest,
 } from "@/googlePreviewStore";
-import { activationIds, type Family } from "@/library";
+import type { Family } from "@/library";
 import { ROW_HEIGHT } from "@/previewFit";
 import { isSampleKind, usePreviewProfile, useProfileWait } from "@/previewProfiles";
 import { applyCase } from "@/previewStyle";
@@ -85,9 +99,6 @@ import { IS_MAC } from "./TitleBar";
  * aria-activedescendant, arrow keys, Home/End and Page Up/Down move, and only the active row's
  * own buttons and switch are in the Tab order. One row is selected at a time.
  */
-
-/** "Yours first": what it does, for its tooltip and screen readers. */
-const YOURS_FIRST_HINT = "Families you have, downloaded here or already in your library, come first. Turn it off for A to Z.";
 
 /** How tall a group's heading is in the list ("Yours first"). */
 const HEADING_HEIGHT = 32;
@@ -390,7 +401,7 @@ function RowControls({
             );
           case "remove":
             return (
-              <Tip key={extra} tip={`Turns off ${name} and deletes the files Fontface downloaded`}>
+              <Tip key={extra} tip={`Turns off ${name} and deletes the files Fontface downloaded, after asking`}>
                 <Button size="icon-sm" variant="ghost" tabIndex={tab} aria-label={`Remove ${name}`} onClick={() => commands.remove(fam)}>
                   <Icon name="delete" size={16} />
                 </Button>
@@ -462,7 +473,7 @@ interface Props {
   size: number;
   /** Settings › General › "Show previews of Google Fonts you haven't downloaded". */
   onlinePreviews: boolean;
-  /** Opens Settings at that switch (the note at the bottom links to it). */
+  /** Opens Settings › General, which has that switch (the note at the bottom links to it). */
   onOpenSettings: () => void;
   /** "Yours first": families you have (downloaded, or already in your library) come first. */
   yoursFirst: boolean;
@@ -710,7 +721,7 @@ export function GoogleFontsPanel({
       removeConfirmed.current = false;
       setRemoving(fam);
     },
-    activate: (fam, on, scope) => onActivate(activationIds(switchFaces(holdings.get(fam.id)), on), on, scope),
+    activate: (fam, on, scope) => onActivate(switchIds(holdings.get(fam.id), on), on, scope),
   };
 
   // ---------------------------------------------------------------------------- view
@@ -772,19 +783,17 @@ export function GoogleFontsPanel({
           onChange={setCategory}
         />
         <span className="min-w-2 flex-1" />
-        <Tooltip>
-          <TooltipTrigger
-            render={<label className="flex cursor-default items-center gap-2 text-xs text-muted-foreground has-[button:focus-visible]:text-foreground" />}
-          >
-            <Switch checked={yoursFirst} onCheckedChange={(on) => onYoursFirst(on)} aria-describedby={yoursFirstHintId} />
+        {/* The whole label shows the tooltip (keyboard focus on the switch too). Its words, which
+            change with the switch, are the switch's description; its name is only "Yours first". */}
+        <Tip tip={yoursFirstTip(yoursFirst)} describe={false} contentClassName="max-w-xs">
+          <label className="flex cursor-default items-center gap-2 text-xs text-muted-foreground has-[[role=switch]:focus-visible]:text-foreground">
+            <Switch checked={yoursFirst} onCheckedChange={(on) => onYoursFirst(on)} aria-label="Yours first" aria-describedby={yoursFirstHintId} />
             Yours first
-            {/* The tooltip shows on hover; keyboard and screen-reader users get the same words here. */}
-            <span id={yoursFirstHintId} className="sr-only">
-              {YOURS_FIRST_HINT}
+            <span id={yoursFirstHintId} hidden>
+              {yoursFirstTip(yoursFirst)}
             </span>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-xs">{YOURS_FIRST_HINT}</TooltipContent>
-        </Tooltip>
+          </label>
+        </Tip>
         {updates.length > 0 && (
           <Tip
             tip={`Downloads the newest version of ${updates.length === 1 ? "the family" : `all ${updates.length.toLocaleString()} families`} with an update. What's on stays on.`}
@@ -939,7 +948,7 @@ export function GoogleFontsPanel({
           {onlinePreviews
             ? "Previews of families you haven't downloaded come from Google. You can turn them off in "
             : "Previews of families you haven't downloaded are off. You can turn them on in "}
-          <Tip tip="Opens Settings at the Google Fonts previews switch">
+          <Tip tip="Opens Settings › General, where you can turn these previews on or off">
             <button
               type="button"
               className="rounded-sm underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -965,17 +974,19 @@ export function GoogleFontsPanel({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                const fam = removing;
-                removeConfirmed.current = true;
-                setRemoving(null);
-                if (fam) void run(fam, () => onRemove(fam));
-              }}
-            >
-              Remove
-            </AlertDialogAction>
+            <Tip tip={`Turns off ${removingShown?.family ?? "the family"} and deletes the files Fontface downloaded. You can undo it for 10 seconds.`}>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  const fam = removing;
+                  removeConfirmed.current = true;
+                  setRemoving(null);
+                  if (fam) void run(fam, () => onRemove(fam));
+                }}
+              >
+                Remove
+              </AlertDialogAction>
+            </Tip>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

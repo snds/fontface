@@ -94,6 +94,7 @@ export function ActivationSwitch({ state, single = false, label, busy = false, t
         <Switch
           checked={checked}
           disabled={busy}
+          focusableWhenDisabled
           aria-busy={busy}
           onCheckedChange={(on) => {
             onChange(on, switchScope(on, alt.current, mode));

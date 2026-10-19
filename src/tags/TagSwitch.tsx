@@ -66,6 +66,7 @@ export function TagSwitch({ tag, set }: { tag: Tag; set: readonly Face[] }) {
           size="sm"
           checked={checked}
           disabled={!!run}
+          focusableWhenDisabled
           aria-busy={!!run}
           aria-label={`All fonts in “${tag.name}”`}
           aria-describedby={descId}

@@ -155,3 +155,57 @@ export function joinIds(...ids: (string | null | undefined | false)[]): string |
   const all = ids.filter((id): id is string => !!id);
   return all.length ? all.join(" ") : undefined;
 }
+
+// ---------------------------------------------------------------------- Esc and tooltips
+
+/*
+ * Esc closes an open tooltip, and Base UI then marks the key as handled (preventDefault). Keyboard
+ * focus or a resting pointer opens a tooltip on almost every control, so Esc's own jobs (going
+ * Back, leaving Settings) would otherwise take two presses: the first would only close the
+ * tooltip. So ui/tooltip.tsx lets the key go on after a tooltip closes on it and notes it here
+ * (`noteTooltipEscape`), and those jobs ask `keyHandled` instead of `defaultPrevented`: it leaves
+ * out a closing tooltip's own preventDefault, and nothing else.
+ */
+
+/** Esc presses whose default only closing tooltips prevented. */
+const tooltipOnly = new WeakSet<object>();
+/** Esc presses whose next preventDefault is a closing tooltip's own (Base UI's, straight after
+ *  it tells the tooltip it's closing). */
+const tooltipNext = new WeakSet<object>();
+/** Esc presses already seen by `noteTooltipEscape`. */
+const noted = new WeakSet<object>();
+
+/**
+ * Call as a tooltip closes on an Esc press, before Base UI prevents its default. Once anything
+ * else prevents it too (a list clearing its selection, a search box clearing its text), before
+ * the tooltip or after, the press counts as handled again.
+ */
+export function noteTooltipEscape(e: Event): void {
+  if (tooltipOnly.has(e)) {
+    // Another tooltip closing on the same press (or the same one, from its other listener).
+    tooltipNext.add(e);
+    return;
+  }
+  // Handled before the tooltip saw it, or since a tooltip last closed on it.
+  if (e.defaultPrevented || noted.has(e)) return;
+  noted.add(e);
+  tooltipOnly.add(e);
+  tooltipNext.add(e);
+  const prevent = e.preventDefault;
+  // This press's own preventDefault (React's calls the native event's): the tooltip's, or
+  // something else handling the key.
+  Object.defineProperty(e, "preventDefault", {
+    configurable: true,
+    value() {
+      if (tooltipNext.has(e)) tooltipNext.delete(e);
+      else tooltipOnly.delete(e);
+      prevent.call(e);
+    },
+  });
+}
+
+/** Something handled this key press: its default was prevented, and not only by a tooltip
+ *  closing on it (see `noteTooltipEscape`). */
+export function keyHandled(e: { defaultPrevented?: boolean }): boolean {
+  return !!e.defaultPrevented && !tooltipOnly.has(e);
+}

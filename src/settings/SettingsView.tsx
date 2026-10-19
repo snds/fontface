@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Tip } from "@/components/Tip";
+import { keyHandled } from "@/tips";
 import { SECTION_LIST, SettingGroup, SettingRow, type RowDef, type SectionDef, type SectionId } from "./parts";
 import { useSections, type SectionProps } from "./sections";
 import { SettingsNav } from "./SettingsNav";
@@ -70,7 +71,8 @@ export function SettingsScreen({ section, onSection, onClose, ...props }: Props)
       const target = e.target instanceof HTMLElement ? e.target : null;
       // Something inside already handled Esc. Except a disabled button that stays focusable
       // (Base UI's focusableWhenDisabled): it blocks every key but Tab, and that isn't handling Esc.
-      if (e.defaultPrevented && !target?.matches('[aria-disabled="true"]')) return;
+      // Nor is a tooltip closing on it (tips.ts): one Esc closes the tooltip and Settings.
+      if (keyHandled(e) && !target?.matches('[aria-disabled="true"]')) return;
       if (target?.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return;
       // The search field clears its own text first (its onKeyDown); once it's empty, Esc goes back.
       if (target instanceof HTMLInputElement && TEXT_INPUTS.has(target.type) && target.id !== SETTINGS_SEARCH_ID) {

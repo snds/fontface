@@ -24,7 +24,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { joinIds, shortcutAria, shortcutLabel, shortcutSaid, tipSaid, type ShortcutSpec } from "@/tips";
 import { IS_MAC } from "./TitleBar";
@@ -54,14 +54,18 @@ import { IS_MAC } from "./TitleBar";
  * with the shortcut as said ("Command-1"); the shortcut also goes on aria-keyshortcuts. Pass
  * `describe={false}` only when the control's name already says exactly the same. Keyboard focus
  * shows the tooltip as hover does. A greyed-out control must still take the pointer and focus,
- * or its tooltip can't show: on a Button, `disabled` with `focusableWhenDisabled` (and
- * `className="aria-disabled:opacity-50"` to look greyed out); on a plain <button>,
- * `aria-disabled` instead of `disabled`, and ignore the click.
+ * or its tooltip can't show: on a Button or a Switch, `disabled` with `focusableWhenDisabled`
+ * (they look greyed out by themselves); on a plain <button>, `aria-disabled` instead of
+ * `disabled` (with `aria-disabled:opacity-50`), and ignore the click.
+ *
+ * Esc closes an open tooltip and, in the same press, still does its other job there: closes the
+ * dialog or menu, goes Back, leaves Settings (ui/tooltip.tsx; window handlers ask tips.ts's
+ * `keyHandled`, not `defaultPrevented`).
  *
  * Timing: the app's TooltipProvider (App.tsx) opens a tooltip once the pointer rests on a
  * control for TIP_DELAY; once one is open, the next control's opens at once, as on macOS. Don't
  * pass `delay` unless the control is a big target the pointer crosses on its way elsewhere (a
- * list or sidebar row's name: ROW_TIP_DELAY).
+ * list or sidebar row's name: ROW_TIP_DELAY). Menu items each wait MENU_TIP_DELAY (TipItem).
  */
 
 /** How long the pointer rests on a control before its tooltip opens, app-wide (App.tsx's
@@ -92,21 +96,10 @@ export interface TipPayload {
 export type TipHandle = TooltipPrimitive.Handle<TipPayload>;
 export const createTipHandle = (): TipHandle => TooltipPrimitive.createHandle<TipPayload>();
 
-/**
- * Escape closes an open tooltip. Inside a dialog, popover or menu it closes that too, in the same
- * press: without this, Base UI keeps the key from reaching it, and the first Escape would only
- * close the tooltip. Elsewhere Escape stops at the tooltip, as usual.
- */
-function escapeReachesPopup(open: boolean, details: TooltipPrimitive.Root.ChangeEventDetails) {
-  if (open || details.reason !== "escape-key") return;
-  const target = details.event?.target;
-  if (target instanceof Element && target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) details.allowPropagation();
-}
-
 /** The one tooltip that a list's Tips with this `handle` share. Mount it once, beside the list. */
 export function TipHost({ handle }: { handle: TipHandle }) {
   return (
-    <TooltipPrimitive.Root handle={handle} onOpenChange={escapeReachesPopup}>
+    <Tooltip handle={handle}>
       {({ payload }) =>
         payload ? (
           <TooltipContent side={payload.side} align={payload.align} className={payload.className}>
@@ -114,7 +107,7 @@ export function TipHost({ handle }: { handle: TipHandle }) {
           </TooltipContent>
         ) : null
       }
-    </TooltipPrimitive.Root>
+    </Tooltip>
   );
 }
 
@@ -197,7 +190,7 @@ export function Tip({
   const tooltip = handle ? (
     <TooltipTrigger handle={handle} payload={{ content, side, align, className: contentClassName }} delay={delay} disabled={hide} id={own.id} render={trigger} />
   ) : (
-    <Tooltip disabled={hide} onOpenChange={escapeReachesPopup}>
+    <Tooltip disabled={hide}>
       <TooltipTrigger delay={delay} id={own.id} render={trigger} />
       <TooltipContent side={side} align={align} className={contentClassName}>
         {content}
@@ -286,19 +279,23 @@ export function TipItem({
   const Item = kit[as];
   const id = useId();
   return (
-    <Tooltip onOpenChange={escapeReachesPopup}>
-      <TooltipTrigger
-        delay={MENU_TIP_DELAY}
-        render={<Item disabled={disabled} aria-describedby={id} className={cn(disabled && "data-disabled:pointer-events-auto data-disabled:opacity-50", className)} {...rest} />}
-      >
-        {children}
-        <span id={id} hidden>
+    // Its own delay group: under the app's, once one item's tooltip showed, each next item's
+    // (and the first one's, just after the menu's trigger showed its own) would open at once.
+    <TooltipProvider delay={MENU_TIP_DELAY} timeout={0}>
+      <Tooltip>
+        <TooltipTrigger
+          delay={MENU_TIP_DELAY}
+          render={<Item disabled={disabled} aria-describedby={id} className={cn(disabled && "data-disabled:pointer-events-auto data-disabled:opacity-50", className)} {...rest} />}
+        >
+          {children}
+          <span id={id} hidden>
+            {tip}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side={as === "SubTrigger" ? "top" : "right"} className="max-w-64">
           {tip}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side={as === "SubTrigger" ? "top" : "right"} className="max-w-64">
-        {tip}
-      </TooltipContent>
-    </Tooltip>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

@@ -291,6 +291,13 @@ fn unavailable_reason(f: &CatalogFamily) -> Option<String> {
     }
 }
 
+/// The google/fonts folder a family was downloaded from (the last part of `source`), which
+/// `slug` of a catalog id names: how a twin id (Fontsource lists "bj-cree" and "bjcree") still
+/// finds the family downloaded under the other one.
+fn repo_folder(meta: &Sidecar) -> Option<&str> {
+    meta.source.strip_prefix("google/fonts:").and_then(|s| s.rsplit('/').next())
+}
+
 /// Installed families by catalog id, plus by repository folder (so a twin id still matches).
 fn installed_index(data_dir: &Path) -> (HashMap<String, Installed>, HashMap<String, Installed>) {
     let (mut by_id, mut by_repo) = (HashMap::new(), HashMap::new());
@@ -303,10 +310,11 @@ fn installed_index(data_dir: &Path) -> (HashMap<String, Installed>, HashMap<Stri
         }
         let dir = entry.path();
         if let Some(meta) = read_sidecar(&dir) {
+            let repo = repo_folder(&meta).map(str::to_string);
             let item =
                 Installed { dir: dir.to_string_lossy().into_owned(), last_modified: meta.last_modified, upstream: meta.upstream };
-            if let Some(repo) = meta.source.strip_prefix("google/fonts:").and_then(|s| s.rsplit('/').next()) {
-                by_repo.insert(repo.to_string(), item.clone());
+            if let Some(repo) = repo {
+                by_repo.insert(repo, item.clone());
             }
             by_id.insert(meta.id, item);
         }
@@ -781,20 +789,28 @@ pub struct Restored {
     pub files: Vec<String>,
 }
 
-/// Undo for Remove: the family's held folder (found by the catalog id in its install details)
-/// gets its name back, so it's installed again exactly as it was. Refused when a folder of that
-/// name is back already (it was downloaded again meanwhile), or when nothing is held (Fontface
-/// quit since, which deleted it).
+/// Undo for Remove: the family's held folder (found as `installed_dir` finds an installed one:
+/// by the catalog id in its install details, else by its repository folder, for a twin id) gets
+/// its name back, so it's installed again exactly as it was. Refused when a folder of that name
+/// is back already (it was downloaded again meanwhile), or when nothing is held (Fontface quit
+/// since, which deleted it).
 pub fn restore_removed(data_dir: &Path, id: &str) -> AppResult<Restored> {
     let root = service_dir(data_dir, "google").ok_or_else(|| AppError::Other("Google Fonts folder missing".into()))?;
-    let held = std::fs::read_dir(&root)
+    let held: Vec<(PathBuf, Sidecar)> = std::fs::read_dir(&root)
         .ok()
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(REMOVED_PREFIX)))
-        .find(|p| read_sidecar(p).is_some_and(|s| s.id == id))
+        .filter_map(|p| read_sidecar(&p).map(|s| (p, s)))
+        .collect();
+    let repo = slug(id);
+    let held = held
+        .iter()
+        .find(|(_, s)| s.id == id)
+        .or_else(|| held.iter().find(|(_, s)| repo_folder(s) == Some(repo.as_str())))
+        .map(|(p, _)| p.clone())
         .ok_or_else(|| AppError::NotFound("Its files are gone, so it can't be put back. Get it again instead.".into()))?;
     let name = held.file_name().unwrap_or_default().to_string_lossy()[REMOVED_PREFIX.len()..].to_string();
     let dest = held.with_file_name(&name);
@@ -955,11 +971,16 @@ mod tests {
     /// An installed family as `commit` leaves it: a folder named for the family, with a font
     /// file, its license and its install details. Returns the folder.
     fn installed_family(data: &Path, id: &str, family: &str) -> PathBuf {
+        installed_from(data, id, family, "google/fonts:ofl/x")
+    }
+
+    /// The same, downloaded from `source` (`google/fonts:<license>/<folder>`).
+    fn installed_from(data: &Path, id: &str, family: &str, source: &str) -> PathBuf {
         let dir = service_dir(data, "google").unwrap().join(family);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("{family}-Regular.ttf")), font(family, "abc")).unwrap();
         std::fs::write(dir.join("OFL.txt"), b"SIL Open Font License").unwrap();
-        let sidecar = Sidecar { id: id.into(), family: family.into(), last_modified: "2024-01-02".into(), source: "google/fonts:ofl/x".into(), upstream: BTreeMap::new() };
+        let sidecar = Sidecar { id: id.into(), family: family.into(), last_modified: "2024-01-02".into(), source: source.into(), upstream: BTreeMap::new() };
         std::fs::write(dir.join(SIDECAR), serde_json::to_vec(&sidecar).unwrap()).unwrap();
         dir
     }
@@ -996,6 +1017,33 @@ mod tests {
         assert!(leftovers(&data).is_empty());
         assert!(matches!(restore_removed(&data, "inter"), Err(AppError::NotFound(_))));
         assert!(other.join("Lora-Regular.ttf").exists());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn undo_finds_a_family_downloaded_under_its_twin_id() {
+        let data = data_dir("remove-twin");
+        // Downloaded as "bj-cree"; the catalog now lists its twin "bjcree" (the same google/fonts
+        // folder), and Remove found it by that folder.
+        let dir = installed_from(&data, "bj-cree", "BJ Cree", "google/fonts:ofl/bjcree");
+        assert_eq!(installed_dir(&data, "bjcree").as_deref(), Some(dir.as_path()));
+        hold_removed(&dir).unwrap();
+        assert!(installed_dir(&data, "bjcree").is_none());
+
+        // Undo with the id the catalog lists now puts it back, under its own name.
+        let back = restore_removed(&data, "bjcree").unwrap();
+        assert_eq!(Path::new(&back.dir).file_name().unwrap(), "BJ Cree");
+        assert_eq!(back.files, vec!["BJ Cree-Regular.ttf".to_string()]);
+        assert!(installed_dir(&data, "bjcree").is_some());
+        assert!(leftovers(&data).is_empty());
+
+        // An exact id wins over a twin's folder; another family's id finds nothing.
+        let other = installed_from(&data, "bjcree", "BJCree", "google/fonts:ofl/bjcree");
+        hold_removed(&dir).unwrap();
+        hold_removed(&other).unwrap();
+        let back = restore_removed(&data, "bjcree").unwrap();
+        assert_eq!(Path::new(&back.dir).file_name().unwrap(), "BJCree");
+        assert!(matches!(restore_removed(&data, "lora"), Err(AppError::NotFound(_))));
         let _ = std::fs::remove_dir_all(&data);
     }
 

@@ -223,8 +223,7 @@ export function TextSetting({
  * verb. `title` is the question (the dialog's title), not a tooltip: `tip` is the button's
  * tooltip, `confirmTip` the dialog's action button's (what happens once you confirm), and
  * `disabledReason` what the button's tooltip says while it's greyed out (keep the button
- * focusable then: `focusableWhenDisabled` and `className="aria-disabled:opacity-50"`, see
- * components/Tip.tsx).
+ * focusable then: `focusableWhenDisabled`, see components/Tip.tsx).
  */
 export function ConfirmButton({
   label,

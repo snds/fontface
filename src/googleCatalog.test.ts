@@ -6,6 +6,7 @@ import type { FontSummary } from "./api.ts";
 import {
   CATALOG_SHOWS,
   catalogCounts,
+  catalogLoader,
   countText,
   filterCatalog,
   holdingsOf,
@@ -17,6 +18,8 @@ import {
   rowLabel,
   rowPlan,
   switchFaces,
+  switchIds,
+  yoursFirstTip,
   type CatalogFamily,
 } from "./googleCatalog.ts";
 import { groupFamilies, type Face } from "./library.ts";
@@ -102,7 +105,7 @@ test("a style in a downloaded folder is that family's, whatever its name; your c
   assert.deepEqual(names(h.yours), ["Inter-Regular"]);
   // The switch works on the download when there is one, else on your copy.
   assert.deepEqual(names(switchFaces(h)), ["Inter Display-Regular"]);
-  assert.deepEqual(names(switchFaces({ downloaded: [], yours: h.yours })), ["Inter-Regular"]);
+  assert.deepEqual(names(switchFaces({ downloaded: [], yours: h.yours, files: new Set() })), ["Inter-Regular"]);
   assert.deepEqual(switchFaces(undefined), []);
 });
 
@@ -115,6 +118,32 @@ test("the same style downloaded and in your folder is one style with two copies,
   assert.equal(h.downloaded.length, 1);
   assert.equal(h.downloaded[0].copies.length, 2);
   assert.equal(h.yours.length, 0);
+  // Only the copy in the downloaded folder is the download.
+  assert.deepEqual([...h.files], [`${GOOGLE}/Lora/Lora-Regular.ttf`]);
+});
+
+test("a downloaded style with a copy of yours too: Remove counts only the download and says yours stays; the switch turns on Google's", () => {
+  // Your own Lora from fonts.google.com, then Get Google's Lora: the same PostScript name, so one
+  // style with two copies. Your copy is the newer file.
+  const google = font("Lora", "Regular", { path: `${GOOGLE}/Lora/Lora[wght].ttf`, postscriptName: "Lora-Regular", mtime: 1 });
+  const mine = font("Lora", "Regular", { path: "/Users/me/Fonts/Lora-VariableFont_wght.ttf", postscriptName: "Lora-Regular", mtime: 2 });
+  const h = holdingsOf([fam("lora", "Lora", { installed: downloadedAt("Lora") })], facesOf([google, mine])).get("lora")!;
+  assert.deepEqual(removalWords("Lora", h), [
+    "Fontface turns off its 1 downloaded font file and deletes them from its Google Fonts folder.",
+    "Your own copy of Lora stays in your library, as it is.",
+  ]);
+  // On: Google's copy, not yours (as Get turned it on). Off: every copy, so the style goes off.
+  assert.deepEqual(switchIds(h, true), [google.id]);
+  assert.deepEqual(switchIds(h, false).sort(), [google.id, mine.id].sort());
+  // Your copy alone (nothing downloaded): the switch works on it, as the library's does.
+  const yours = holdingsOf([fam("lora", "Lora")], facesOf([mine])).get("lora")!;
+  assert.deepEqual(switchIds(yours, true), [mine.id]);
+  assert.deepEqual(switchIds(undefined, true), []);
+});
+
+test("Yours first's tooltip says what flipping it does", () => {
+  assert.equal(yoursFirstTip(true), "Lists every family A to Z");
+  assert.equal(yoursFirstTip(false), "Lists the families you have first, downloaded here or already in your library");
 });
 
 test("Active: some style of the family is on, downloaded here or your own copy", () => {
@@ -211,10 +240,55 @@ test("a family's page opens on its most regular style", () => {
 
 test("Remove's confirmation counts the downloaded files and leaves your copy alone", () => {
   assert.deepEqual(removalWords("Inter", HOLDINGS.get("inter")), ["Fontface turns off its 2 downloaded font files and deletes them from its Google Fonts folder."]);
-  const both = { downloaded: HOLDINGS.get("inter")!.downloaded.slice(0, 1), yours: HOLDINGS.get("roboto")!.yours };
+  const one = HOLDINGS.get("inter")!.downloaded.slice(0, 1);
+  const both = { downloaded: one, yours: HOLDINGS.get("roboto")!.yours, files: new Set(one.flatMap((f) => f.copies.map((c) => c.path))) };
   assert.deepEqual(removalWords("Inter", both), [
     "Fontface turns off its 1 downloaded font file and deletes them from its Google Fonts folder.",
     "Your own copy of Inter stays in your library, as it is.",
   ]);
   assert.deepEqual(removalWords("Inter", undefined), ["Fontface turns off its downloaded files and deletes them from its Google Fonts folder."]);
+});
+
+/** A promise to settle by hand. */
+function later<T>() {
+  let settle!: { resolve: (v: T) => void; reject: (e: unknown) => void };
+  const promise = new Promise<T>((resolve, reject) => (settle = { resolve, reject }));
+  return { promise, ...settle };
+}
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+test("a load asked for during a refresh waits for it, so the refresh's answer isn't lost to the saved copy", async () => {
+  const asked: boolean[] = [];
+  const network = later<string>();
+  const load = catalogLoader((refresh) => {
+    asked.push(refresh);
+    return refresh ? network.promise : Promise.resolve("saved, with the new download");
+  });
+  // Refresh clicked; a download finishes while it waits on the network.
+  const refresh = load(true);
+  const after = load(false);
+  await tick();
+  assert.deepEqual(asked, [true], "the plain load hasn't asked yet");
+  assert.ok(!refresh.newest() && after.newest());
+  network.resolve("fresh");
+  assert.equal(await refresh.result, "fresh");
+  // Then it reads the catalog the refresh saved, with what's installed now; it's the one that lands.
+  assert.equal(await after.result, "saved, with the new download");
+  assert.deepEqual(asked, [true, false]);
+
+  // No refresh under way: a plain load asks at once.
+  const plain = load(false);
+  await tick();
+  assert.deepEqual(asked, [true, false, false]);
+  assert.ok(plain.newest());
+});
+
+test("a refresh that fails still lets the waiting load go ahead", async () => {
+  const network = later<string>();
+  const load = catalogLoader((refresh) => (refresh ? network.promise : Promise.resolve("saved")));
+  const refresh = load(true);
+  const after = load(false);
+  network.reject(new Error("offline"));
+  await assert.rejects(refresh.result, /offline/);
+  assert.equal(await after.result, "saved");
 });

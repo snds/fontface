@@ -615,6 +615,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 {...describe(ids)}
                 checked={s.sidebar[r.key]}
                 disabled={off}
+                focusableWhenDisabled
                 onCheckedChange={(on) => update({ sidebar: { [r.key]: on } })}
               />
             </Tip>
@@ -769,6 +770,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                   {...describe(ids)}
                   checked={purchases?.watching ?? false}
                   disabled={!purchases || outside.watchBusy}
+                  focusableWhenDisabled
                   onCheckedChange={outside.setWatching}
                 />
               </Tip>

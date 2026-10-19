@@ -344,12 +344,17 @@ export function StylePicker({
         </SelectTrigger>
       </Tip>
       <SelectContent className="max-h-80">
-        {face.family.faces.map((f) => (
-          <SelectItem key={f.key} value={f.key} disabled={f.key !== face.face.key && taken.includes(f.key)}>
-            <span className="truncate">{styleLabel(f)}</span>
-            <span className="ml-auto pl-3 font-mono text-xs text-muted-foreground">{f.traits.weight}</span>
-          </SelectItem>
-        ))}
+        {face.family.faces.map((f) => {
+          // Shown in another column already: greyed out, and it says so.
+          const shown = f.key !== face.face.key && taken.includes(f.key);
+          return (
+            <SelectItem key={f.key} value={f.key} disabled={shown}>
+              <span className="truncate">{styleLabel(f)}</span>
+              {shown && <span className="ml-auto shrink-0 pl-3 text-xs text-muted-foreground">In Compare</span>}
+              <span className={cn("pl-3 font-mono text-xs text-muted-foreground", !shown && "ml-auto")}>{f.traits.weight}</span>
+            </SelectItem>
+          );
+        })}
       </SelectContent>
     </Select>
   );

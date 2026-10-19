@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type GoogleCatalog, type GoogleFamily } from "@/api";
-import { catalogCounts, filterCatalog, holdingsOf, type CatalogCounts, type CatalogFilters, type CatalogShow, type Holding } from "@/googleCatalog";
+import { catalogCounts, catalogLoader, filterCatalog, holdingsOf, type CatalogCounts, type CatalogFilters, type CatalogShow, type Holding } from "@/googleCatalog";
 import type { Face } from "@/library";
 
 /** The Google Fonts view's catalog and filters (App keeps them, so the toolbar can show them). */
@@ -51,19 +51,21 @@ export function useGoogleView({
   const [error, setError] = useState<string | null>(null);
   const [show, setShow] = useState<CatalogShow>("all");
   const [category, setCategory] = useState("");
-  // Only the newest load lands (a refresh and a reload after a download can overlap).
-  const seq = useRef(0);
+  // Only the newest load lands, and one asked for during a refresh waits for it (catalogLoader).
+  const [load] = useState(() => catalogLoader((refresh) => api.googleCatalog(refresh)));
 
-  const reload = useCallback((refresh = false) => {
-    const my = ++seq.current;
-    setLoading(true);
-    setError(null);
-    api
-      .googleCatalog(refresh)
-      .then((c) => my === seq.current && setCatalog(c))
-      .catch((e) => my === seq.current && setError(String(e)))
-      .finally(() => my === seq.current && setLoading(false));
-  }, []);
+  const reload = useCallback(
+    (refresh = false) => {
+      const { result, newest } = load(refresh);
+      setLoading(true);
+      setError(null);
+      result
+        .then((c) => newest() && setCatalog(c))
+        .catch((e) => newest() && setError(String(e)))
+        .finally(() => newest() && setLoading(false));
+    },
+    [load],
+  );
 
   // Not before the view is first shown (it may ask the network); after that, kept up to date.
   const loadedVersion = useRef<number | null>(null);

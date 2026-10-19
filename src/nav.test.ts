@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { backKeyIntent, EMPTY_NAV, findIntent, isBackShortcut, navReducer, topPage as top, type FontPageEntry, type KeyLike, type NavState, type NewPage, type Page } from "./nav.ts";
+import { noteTooltipEscape } from "./tips.ts";
 
 /** The top page, as a font page (these tests open font pages unless they say otherwise). */
 const topPage = (state: NavState) => top(state) as FontPageEntry | undefined;
@@ -84,6 +85,14 @@ test("Esc goes back outside text fields, menus and popovers", () => {
   // Already handled: a popover closing, or a search box clearing its text.
   assert.equal(backKeyIntent(key("Escape", { defaultPrevented: true }), { ...mac, focus: "other" }), null);
   assert.equal(backKeyIntent(key("Escape", { isComposing: true }), { ...mac, focus: "other" }), null);
+  // A tooltip closing on it (focus or the pointer opened one) doesn't count: one Esc goes back.
+  const tipClosed = Object.assign(new Event("keydown", { cancelable: true }), key("Escape"));
+  noteTooltipEscape(tipClosed);
+  tipClosed.preventDefault();
+  assert.equal(backKeyIntent(tipClosed, { ...mac, focus: "other" }), "back");
+  // But a list that also took it (clearing its selection) did handle it.
+  tipClosed.preventDefault();
+  assert.equal(backKeyIntent(tipClosed, { ...mac, focus: "other" }), null);
   // A disabled button that keeps focus (Reset with nothing to reset) takes every key without
   // handling it: Esc still goes back.
   assert.equal(backKeyIntent(key("Escape", { defaultPrevented: true }), { ...mac, focus: "disabled" }), "back");

@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { shortcutText } from "./fontActions.ts";
-import { joinIds, shortcutAria, shortcutLabel, shortcutSaid, tipSaid } from "./tips.ts";
+import { joinIds, keyHandled, noteTooltipEscape, shortcutAria, shortcutLabel, shortcutSaid, tipSaid } from "./tips.ts";
 
 test("Mod is Command on macOS and Ctrl on Windows", () => {
   assert.equal(shortcutLabel("Mod+1", true), "⌘1");
@@ -90,4 +90,47 @@ test("description ids keep the control's own first", () => {
   assert.equal(joinIds(undefined, "tip"), "tip");
   assert.equal(joinIds("own", undefined), "own");
   assert.equal(joinIds(undefined, null, false, ""), undefined);
+});
+
+/** An Esc press as the browser makes it: not handled yet. */
+const escape = () => new Event("keydown", { cancelable: true });
+
+test("an Esc that only closed a tooltip isn't handled; anything else that takes it is", () => {
+  // Nothing took it.
+  assert.ok(!keyHandled(escape()));
+
+  // A tooltip closes on it (Base UI prevents its default straight after): still not handled, so
+  // Esc can go Back or leave Settings in the same press.
+  const closed = escape();
+  noteTooltipEscape(closed);
+  closed.preventDefault();
+  assert.ok(closed.defaultPrevented);
+  assert.ok(!keyHandled(closed));
+  // Two tooltips closing on it (or one, from both of its listeners) is still only tooltips.
+  noteTooltipEscape(closed);
+  closed.preventDefault();
+  assert.ok(!keyHandled(closed));
+
+  // Something else takes it after the tooltip closed (a list clearing its selection): handled.
+  const after = escape();
+  noteTooltipEscape(after);
+  after.preventDefault();
+  after.preventDefault();
+  assert.ok(keyHandled(after));
+  // ...and a tooltip closing on it later doesn't undo that.
+  noteTooltipEscape(after);
+  after.preventDefault();
+  assert.ok(keyHandled(after));
+
+  // Something took it before the tooltip saw it (a search box clearing its text): handled.
+  const before = escape();
+  before.preventDefault();
+  noteTooltipEscape(before);
+  before.preventDefault();
+  assert.ok(keyHandled(before));
+
+  // Plain key objects (no tooltip ever saw them) go by defaultPrevented.
+  assert.ok(keyHandled({ defaultPrevented: true }));
+  assert.ok(!keyHandled({ defaultPrevented: false }));
+  assert.ok(!keyHandled({}));
 });

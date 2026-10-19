@@ -223,7 +223,8 @@ function FeatureRow({
   return (
     <li className="flex min-h-11 items-center gap-3 border-b py-1.5 last:border-b-0">
       {/* The page's switch, for the test text and the Specimen (every style, while the page is
-          open). Vertical-text features can't show here, so their switch is greyed out. */}
+          open). Vertical-text features can't show here, so their switch is greyed out (still
+          focusable, so its tooltip can say why from the keyboard too). */}
       <Tip
         tip={`${on ? "Turns off" : "Turns on"} ${feature.label} in the test text and Specimen`}
         disabledReason={!feature.switchable && "Changes only vertical text, which these previews don't show"}
@@ -231,6 +232,7 @@ function FeatureRow({
         <Switch
           checked={on}
           disabled={!feature.switchable}
+          focusableWhenDisabled
           onCheckedChange={(v) => onToggle(v)}
           aria-labelledby={`${id}-label`}
           aria-describedby={`${id}-detail`}
