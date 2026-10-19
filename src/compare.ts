@@ -58,6 +58,28 @@ export function moveInCompare(list: CompareList, key: string, by: -1 | 1): Compa
   return { ...list, faces };
 }
 
+/** After a lane moves (`by` from place `at`, of `count`): the lane's new place, and which of its
+ *  Move buttons keeps focus. The one pressed, unless the lane has reached that end, where that
+ *  button is off: then the other. Null if the lane didn't move. */
+export function focusAfterMove(at: number, by: -1 | 1, count: number): { lane: number; by: -1 | 1 } | null {
+  const to = at + by;
+  if (at < 0 || to < 0 || to >= count) return null;
+  const atEnd = by < 0 ? to === 0 : to === count - 1;
+  return { lane: to, by: atEnd ? (by < 0 ? 1 : -1) : by };
+}
+
+/** The families Add Fonts… leaves out (by Family.id): picking a family adds its usual style
+ *  (its representative), so a family already shown in that style isn't offered again. One
+ *  shown only in another style can still be added. */
+export function shownFamilies(faces: readonly string[], familyOf: (key: string) => { family: Family } | undefined): string[] {
+  const out = new Set<string>();
+  for (const key of faces) {
+    const family = familyOf(key)?.family;
+    if (family && family.representative.key === key) out.add(family.id);
+  }
+  return [...out];
+}
+
 /** Pair: a heading font and a body font (face keys). */
 export interface PairFonts {
   heading: string;

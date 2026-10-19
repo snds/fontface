@@ -1,6 +1,6 @@
 import { createContext, useContext, useRef } from "react";
 import type { ActivationMode } from "@/api";
-import { optionClickHint, switchScope } from "@/fontActions";
+import { fontShortcut, optionClickHint, switchScope } from "@/fontActions";
 import { LOCK_LABELS, MARK_ICONS, markOf, stateDetails, switchLook, type LockKind, type StateMark as Mark, type StateSummary, type StateWording } from "@/fontState";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icon";
@@ -51,7 +51,7 @@ interface SwitchProps {
 export function ActivationSwitch({ state, label, busy = false, tabIndex, compact = false, describedBy, onChange }: SwitchProps) {
   const { checked, partial, dim } = switchLook(state);
   const counted = `${state.on} of ${state.total} styles on${state.waiting ? `, ${state.waiting} more set to turn on` : ""}`;
-  const { mode = "persistent" } = useStateWording();
+  const { mode = "persistent", untilQuit = false } = useStateWording();
   /** Option was held for the press that's changing the switch. */
   const alt = useRef(false);
   return (
@@ -62,7 +62,13 @@ export function ActivationSwitch({ state, label, busy = false, tabIndex, compact
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
       onPointerDownCapture={(e) => (alt.current = e.altKey)}
-      onKeyDownCapture={(e) => (alt.current = e.altKey)}
+      onKeyDownCapture={(e) => {
+        alt.current = e.altKey;
+        // Cmd+Return, Option-Cmd+Return and Shift-Cmd+Return are the Font menu's Turn On and Turn
+        // Off (App runs them on the selection or the page). The switch would also take the
+        // Return as a press and flip itself first; a prevented key press doesn't press it.
+        if (fontShortcut(e, IS_MAC)) e.preventDefault();
+      }}
       onClickCapture={(e) => {
         // A click from the keyboard (detail 0) keeps what its key press said.
         if (e.detail > 0) alt.current = e.altKey;
@@ -93,13 +99,15 @@ export function ActivationSwitch({ state, label, busy = false, tabIndex, compact
               }}
               aria-label={label}
               aria-describedby={describedBy}
-              tabIndex={tabIndex}
+              // Only when given: Base UI's props take an explicit undefined as "no tabindex", which
+              // would leave the font page's switches out of the Tab order.
+              {...(tabIndex !== undefined && { tabIndex })}
               size={compact ? "sm" : "default"}
               className={cn("data-checked:bg-active", partial && "data-unchecked:bg-active/40", dim && "data-checked:bg-active/45")}
             />
           }
         />
-        <TooltipContent className="max-w-xs">{optionClickHint(mode, IS_MAC)}</TooltipContent>
+        <TooltipContent className="max-w-xs">{optionClickHint(mode, IS_MAC, untilQuit)}</TooltipContent>
       </Tooltip>
     </span>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
-import type { Face, Family } from "@/library";
+import type { Family } from "@/library";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import type { Tag, TagColor } from "./api";
 import { ColorSwatches } from "./ColorSwatches";
-import { openTagDialog, useTagDialog } from "./dialogs";
+import { openTagDialog, useTagDialog, type TagDialog } from "./dialogs";
 import { joinedGroupNote } from "./drag";
 import { ExportDialog } from "./ExportDialog";
 import { describeFaces } from "./FontMenu";
@@ -41,7 +41,7 @@ export function TagDialogHost({ families, onDeleted }: { families: Family[]; onD
   return (
     <>
       <NameDialog dialog={dialog?.kind === "create" || dialog?.kind === "rename" ? dialog : null} />
-      <PickDialog faces={dialog?.kind === "pick" ? dialog.faces : null} />
+      <PickDialog dialog={dialog?.kind === "pick" ? dialog : null} />
       <DeleteDialog tag={dialog?.kind === "delete" ? dialog.tag : null} families={families} onDeleted={onDeleted} />
       <ImportDialog
         open={dialog?.kind === "import"}
@@ -54,16 +54,21 @@ export function TagDialogHost({ families, onDeleted }: { families: Family[]; onD
   );
 }
 
-/** Find a tag by typing and tick it, from a font's right-click menu. */
-function PickDialog({ faces }: { faces: Face[] | null }) {
+/** Find a tag by typing and tick it, from a font's right-click menu or Cmd+T on the selection. */
+function PickDialog({ dialog }: { dialog: Extract<TagDialog, { kind: "pick" }> | null }) {
+  // The last one stays drawn while the dialog fades out; each new one starts afresh.
+  const [shown, setShown] = useState<{ dialog: Extract<TagDialog, { kind: "pick" }>; n: number } | null>(null);
+  if (dialog && dialog !== shown?.dialog) setShown({ dialog, n: (shown?.n ?? 0) + 1 });
+  const faces = shown?.dialog.faces ?? null;
   return (
-    <Dialog open={!!faces} onOpenChange={(o) => !o && close()}>
-      <DialogContent className="sm:max-w-sm">
+    <Dialog open={!!dialog} onOpenChange={(o) => !o && close()}>
+      {/* It opens from code, so focus goes back to what had it as it was asked for. */}
+      <DialogContent className="sm:max-w-sm" finalFocus={() => shown?.dialog.returnFocus?.() ?? true}>
         <DialogHeader>
           <DialogTitle>Tags</DialogTitle>
           <DialogDescription className="truncate">{faces ? describeFaces(faces) : ""}</DialogDescription>
         </DialogHeader>
-        {faces && <TagPicker faces={faces} />}
+        {faces && <TagPicker key={shown?.n} faces={faces} />}
         <DialogFooter>
           <Button onClick={close}>Done</Button>
         </DialogFooter>

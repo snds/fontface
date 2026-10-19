@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { addToCompare, COMPARE_MAX, COMPARE_TEXT, moveInCompare, removeFromCompare, replaceInCompare, type CompareList } from "@/compare";
+import { addToCompare, COMPARE_MAX, COMPARE_TEXT, focusAfterMove, moveInCompare, removeFromCompare, replaceInCompare, shownFamilies, type CompareList } from "@/compare";
 import { faceName, useFontFace, type FaceState } from "@/fontLoader";
+import { isSampleKind, usePreviewProfile } from "@/previewProfiles";
+import { sampleFor } from "@/sampleText";
 import type { Face, Family } from "@/library";
 import type { CompareMode, ComparePageEntry, PagePatch } from "@/nav";
 import { Button } from "@/components/ui/button";
@@ -10,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { ChoiceGroup } from "./ChoiceGroup";
+import { MissingHint } from "./FacePreview";
 import { useFontPicker } from "./FontPicker";
 import { BackButton, styleLabel } from "./fontPage/PageHeader";
 import { FaceStateMessage } from "./fontPage/parts";
@@ -62,10 +65,13 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
   const size = sizes[mode];
   const list: CompareList = { faces: page.faces, left: page.left };
   const update = (next: CompareList) => onChange({ faces: next.faces, left: next.left });
-  const sample = text || previewText || COMPARE_TEXT[mode];
+  // What you typed (here, else in the toolbar) is shown as typed; else each font shows these
+  // words, or text it can draw (sampleText.ts).
+  const typed = text || previewText;
   const count = page.faces.length;
   const laneName = (ref: FaceRef | undefined) => (ref ? `${ref.family.name} ${styleLabel(ref.face)}` : "A font that's no longer in your library");
   const openId = (i: number) => `${base}-open-${i}`;
+  const moveId = (i: number, by: -1 | 1) => `${base}-move-${i}-${by < 0 ? "up" : "down"}`;
 
   const addFonts = () =>
     pick({
@@ -73,6 +79,8 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
       description: `Compare shows up to ${COMPARE_MAX} fonts at once.`,
       multiple: true,
       confirm: "Add",
+      // A family adds its usual style: one already shown in that style isn't offered again.
+      exclude: shownFamilies(page.faces, faceOf),
       onPick: (families) => {
         const next = addToCompare(list, families.map((f) => f.representative.key));
         update(next);
@@ -89,16 +97,21 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
     requestAnimationFrame(() => (document.getElementById(openId(i)) ?? document.getElementById(openId(i - 1)) ?? addRef.current)?.focus());
   };
 
+  // Lanes are keyed by place, not by font: choosing another style keeps the lane (and its focused
+  // style picker) where it is, and moving one keeps every lane's controls in place, with focus
+  // following the moved font (below).
   const lanes = page.faces.map((key, i) => {
     const ref = faceOf(key);
     return (
       <Lane
-        key={key}
+        key={i}
         mode={mode}
         name={laneName(ref)}
         face={ref}
         openId={openId(i)}
-        sample={sample}
+        moveId={(by) => moveId(i, by)}
+        typed={typed}
+        words={COMPARE_TEXT[mode]}
         size={size}
         first={i === 0}
         last={i === count - 1}
@@ -107,7 +120,10 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
         onStyle={(to) => update(replaceInCompare(list, key, to))}
         onMove={(by) => {
           update(moveInCompare(list, key, by));
-          announce(`Moved ${laneName(ref)} ${by < 0 ? "up" : "down"}`);
+          announce(`Moved ${laneName(ref)} ${by < 0 ? (mode === "lines" ? "up" : "left") : mode === "lines" ? "down" : "right"}`);
+          // Focus goes with the font to its new place (the other Move button once it's at the end).
+          const next = focusAfterMove(i, by, count);
+          if (next) requestAnimationFrame(() => document.getElementById(moveId(next.lane, next.by))?.focus());
         }}
         onRemove={() => remove(key, i)}
       />
@@ -189,7 +205,9 @@ function Lane({
   name,
   face,
   openId,
-  sample,
+  moveId,
+  typed,
+  words,
   size,
   first,
   last,
@@ -203,7 +221,11 @@ function Lane({
   name: string;
   face: FaceRef | undefined;
   openId: string;
-  sample: string;
+  /** The Move buttons' ids (focus follows a moved font). */
+  moveId: (by: -1 | 1) => string;
+  /** Text you typed, shown as typed; else `words`, or text the font can draw. */
+  typed: string;
+  words: string;
   size: number;
   first: boolean;
   last: boolean;
@@ -215,6 +237,7 @@ function Lane({
   onRemove: () => void;
 }) {
   const lines = mode === "lines";
+  const { profile } = usePreviewProfile(face?.face.primary);
   return (
     <section aria-label={name} className={cn("flex min-w-0 flex-col gap-2", lines ? "border-b px-6 py-4" : "")}>
       <div className="flex min-w-0 items-center gap-2">
@@ -224,6 +247,8 @@ function Lane({
               <span className="truncate">{face.family.name}</span>
             </Button>
             <StylePicker face={face} taken={taken} onChange={onStyle} />
+            {/* Typed text this font can't draw: those characters show in another font. */}
+            {typed && <MissingHint text={typed} profile={profile} />}
           </>
         ) : (
           <span id={openId} tabIndex={-1} className="truncate text-sm text-muted-foreground italic outline-none">
@@ -231,17 +256,17 @@ function Lane({
           </span>
         )}
         <span className="flex-1" />
-        <Button variant="ghost" size="icon-xs" disabled={first} aria-label={`Move ${name} ${lines ? "up" : "left"}`} onClick={() => onMove(-1)}>
+        <Button id={moveId(-1)} variant="ghost" size="icon-xs" disabled={first} aria-label={`Move ${name} ${lines ? "up" : "left"}`} onClick={() => onMove(-1)}>
           <Icon name={lines ? "arrow_upward" : "arrow_back"} size={16} />
         </Button>
-        <Button variant="ghost" size="icon-xs" disabled={last} aria-label={`Move ${name} ${lines ? "down" : "right"}`} onClick={() => onMove(1)}>
+        <Button id={moveId(1)} variant="ghost" size="icon-xs" disabled={last} aria-label={`Move ${name} ${lines ? "down" : "right"}`} onClick={() => onMove(1)}>
           <Icon name={lines ? "arrow_downward" : "arrow_forward"} size={16} />
         </Button>
         <Button variant="ghost" size="icon-xs" aria-label={`Remove ${name} from Compare`} onClick={onRemove}>
           <Icon name="close" size={16} />
         </Button>
       </div>
-      {face && <FaceSample face={face.face} text={sample} size={size} lineHeight={lines ? 1.2 : 1.5} />}
+      {face && <FaceSample face={face.face} typed={typed} words={words} size={size} lineHeight={lines ? 1.2 : 1.5} />}
     </section>
   );
 }
@@ -284,15 +309,40 @@ export function SizeSlider({ label, value, min, max, step = 1, unit = "px", onCh
   );
 }
 
-/** Text set in one style, wrapping. Hidden while its font loads; a font that can't be drawn says why. */
-export function FaceSample({ face, text, size, lineHeight, className, style }: { face: Face; text: string; size: number; lineHeight: number; className?: string; style?: React.CSSProperties }) {
+/**
+ * Text set in one style, wrapping: what you typed, else `words` if the font can draw them, else
+ * text it can (sampleText.ts), so a caps-only, symbol or non-Latin font never shows another
+ * font's letters under its own name. A sample of the font's characters (not words) is hidden from
+ * screen readers. Hidden while its font loads; a font that can't be drawn says why.
+ */
+export function FaceSample({
+  face,
+  typed = "",
+  words,
+  size,
+  lineHeight,
+  className,
+  style,
+}: {
+  face: Face;
+  typed?: string;
+  words: string;
+  size: number;
+  lineHeight: number;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
   const state: FaceState = useFontFace(face.primary, true);
+  const { profile } = usePreviewProfile(face.primary);
   if (state !== "loading" && state !== "ready") return <FaceStateMessage state={state} />;
   const name = faceName(face.primary);
+  const text = sampleFor(typed, words, profile, face.primary.family);
+  const sample = !typed && text === profile?.familyText && isSampleKind(profile);
   return (
     <div
       dir="ltr"
       data-face={name}
+      aria-hidden={sample || undefined}
       className={cn("break-words transition-opacity", state === "loading" && "preview-loading", className)}
       style={{ ...style, fontFamily: `"${name}"`, fontSize: size, lineHeight }}
     >

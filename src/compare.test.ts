@@ -5,10 +5,12 @@ import {
   addToCompare,
   COMPARE_MAX,
   compareList,
+  focusAfterMove,
   moveInCompare,
   removeFromCompare,
   replaceInCompare,
   searchFamilies,
+  shownFamilies,
   swapPair,
 } from "./compare.ts";
 import type { Family } from "./library.ts";
@@ -108,4 +110,24 @@ test("Compare and Pair keep their changes in their stack entries", () => {
   const swapped = navReducer(pair, { type: "update", id: pid, patch: swapPair(topPage(pair) as PairPageEntry) });
   assert.deepEqual([(topPage(swapped) as PairPageEntry).heading, (topPage(swapped) as PairPageEntry).body], ["b", "a"]);
   assert.equal(navReducer(swapped, { type: "update", id: pid, patch: { heading: "b" } }), swapped);
+});
+
+test("after a move, focus stays with the moved font: the button pressed, or the other at the end", () => {
+  assert.deepEqual(focusAfterMove(1, 1, 4), { lane: 2, by: 1 }, "Move down again moves it on");
+  assert.deepEqual(focusAfterMove(2, 1, 4), { lane: 3, by: -1 }, "now last: Move down is off, so Move up");
+  assert.deepEqual(focusAfterMove(2, -1, 4), { lane: 1, by: -1 });
+  assert.deepEqual(focusAfterMove(1, -1, 4), { lane: 0, by: 1 }, "now first: Move up is off, so Move down");
+  assert.deepEqual(focusAfterMove(0, 1, 2), { lane: 1, by: -1 }, "two fonts: they swap");
+  assert.equal(focusAfterMove(0, -1, 3), null, "the first can't move up");
+  assert.equal(focusAfterMove(2, 1, 3), null, "the last can't move down");
+});
+
+test("Add Fonts… leaves out families already shown in the style it would add", () => {
+  const fam = (id: string, faces: string[]) => ({ id, representative: { key: faces[0] }, faces: faces.map((key) => ({ key })) }) as unknown as Family;
+  const inter = fam("inter", ["inter-regular", "inter-bold"]);
+  const lora = fam("lora", ["lora-regular"]);
+  const familyOf = (key: string) => [inter, lora].map((family) => ({ family })).find((r) => r.family.faces.some((f) => f.key === key));
+  assert.deepEqual(shownFamilies(["inter-regular", "lora-regular"], familyOf), ["inter", "lora"]);
+  assert.deepEqual(shownFamilies(["inter-bold", "lora-regular"], familyOf), ["lora"], "Inter shown in Bold: adding it adds Regular");
+  assert.deepEqual(shownFamilies(["gone", "inter-regular", "inter-regular"], familyOf), ["inter"], "a font that left the library, and each family once");
 });

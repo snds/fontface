@@ -8,6 +8,7 @@ import {
   type ActivationMode,
   type Folder,
   type RemoveReport,
+  type FontPageTab,
   type FontSummary,
   type GoogleFamily,
   type LibraryLayout,
@@ -60,6 +61,7 @@ import {
 } from "@/fontActions";
 import { compareList } from "@/compare";
 import { copyText } from "@/lib/clipboard";
+import { byIdOnTop, focusBack as noteFocus } from "@/focusReturn";
 import { familySources } from "@/familyFacts";
 import { applyOutcomes } from "@/fontState";
 import { newestWins } from "@/newestWins";
@@ -346,7 +348,8 @@ export default function App() {
     const want = pendingPageFocus.current;
     if (want === undefined) return;
     pendingPageFocus.current = undefined;
-    const el = (want && document.getElementById(want)) || document.querySelector<HTMLElement>("[data-page-top] h1");
+    // By id on the page now on top: a font page further down the stack has the same ids.
+    const el = (want && byIdOnTop(want)) || document.querySelector<HTMLElement>("[data-page-top] h1");
     if (el) focusShown(el);
   }, [nav.pages]);
   const focusSearch = () => {
@@ -1189,10 +1192,11 @@ export default function App() {
       return next;
     });
 
-  /** Double-click or Return on a row: the family's page, on the last tab used. */
-  const openFont = (r: OpenRequest) => {
-    nav.open({ kind: "font", faceKey: r.faceKey, styleKey: r.styleKey, tab: settings?.fontPageTab ?? "specimen", returnTo: r.rowKey });
-    announce(`Opened ${r.name}`);
+  /** Double-click or Return on a row: the family's page, on the last tab used (Show Info: on
+   *  the Info tab, which leaves the tab Open uses as it was). */
+  const openFont = (r: OpenRequest, tab?: FontPageTab) => {
+    nav.open({ kind: "font", faceKey: r.faceKey, styleKey: r.styleKey, tab: tab ?? settings?.fontPageTab ?? "specimen", returnTo: r.rowKey });
+    announce(tab === "info" ? `Opened ${r.name}, on Info` : `Opened ${r.name}`);
   };
   const revealFont = (id: number) => api.revealFont(id).catch((e) => toast.error(String(e)));
 
@@ -1222,11 +1226,14 @@ export default function App() {
   // font page's family, else the list's selection (as the list last reported it).
   const userFolderIds = useMemo(() => new Set(folders.filter((f) => f.kind === "user").map((f) => f.id)), [folders]);
   const actionContext = useMemo<ActionContext>(
-    () => ({ mode: activationMode, removable: (font) => userFolderIds.has(font.folderId), revealLabel: REVEAL_LABEL }),
-    [activationMode, userFolderIds],
+    () => ({ mode: activationMode, untilQuit, removable: (font) => userFolderIds.has(font.folderId), revealLabel: REVEAL_LABEL }),
+    [activationMode, untilQuit, userFolderIds],
   );
   const listTarget = useRef<FontTarget | null>(null);
   const [picker, setPicker] = useState<PickRequest | null>(null);
+  /** The font picker, for Compare and Pair (their pages ask through FontPickerContext). What has
+   *  focus now gets it back when the picker closes, else `returnTo` (focusReturn.ts). */
+  const openPicker = useCallback((request: PickRequest, returnTo?: string) => setPicker({ returnFocus: noteFocus(returnTo), ...request }), []);
   /** Remove from Library… waiting for its confirmation. `closePage`: the font page it came from,
    *  closed once its whole family is gone. */
   const [removal, setRemoval] = useState<(RemovalRequest & { closePage: number | null }) | null>(null);
@@ -1290,6 +1297,13 @@ export default function App() {
       case "open":
         openFont({ faceKey: first.face.key, styleKey: first.face.key, rowKey: first.rowKey ?? "", name: first.family.ungroupedFrom ?? first.family.name });
         return;
+      case "info":
+        // On the font page: its Info tab, for the style it's on (or the line right-clicked).
+        if (target.where === "page" && top?.kind === "font") {
+          nav.update(top.id, { styleKey: first.face.key, tab: "info" });
+          announce(`Info for ${first.family.name} ${first.face.style}`);
+        } else openFont({ faceKey: first.face.key, styleKey: first.face.key, rowKey: first.rowKey ?? "", name: first.family.ungroupedFrom ?? first.family.name }, "info");
+        return;
       case "turnOn":
       case "turnOnOther": {
         const scope = scopeOf(action, activationMode);
@@ -1301,37 +1315,44 @@ export default function App() {
         void setActivation(activationIds(switchable, false), false).then(() => announce(`Turned off ${name}`));
         return;
       case "tags":
-        // The open page's family: its own Tags popover. Anything else: the tag picker.
+        // The open page's family: its own Tags popover. Anything else: the tag picker, which gives
+        // focus back to what had it (the list, say) when it closes.
         if (target.where === "page" && first.kind === "family" && top?.kind === "font") setTagsAsk((t) => ({ page: top.id, n: t.n + 1 }));
-        else openTagDialog({ kind: "pick", faces: target.faces });
+        else openTagDialog({ kind: "pick", faces: target.faces, returnFocus: noteFocus(opts.returnTo) });
         return;
       case "compare": {
         const keys = compareKeysOf(target);
         if (keys.length > 1) return openCompare(keys, returnTo);
-        setPicker({
-          title: `Compare ${name} with…`,
-          multiple: true,
-          confirm: "Compare",
-          // Picking its own family again would only show it once.
-          exclude: first.face.key === first.family.representative.key ? [first.family.id] : [],
-          onPick: (families) => {
-            openCompare([keys[0], ...families.map((f) => f.representative.key)], returnTo);
-            return true;
+        openPicker(
+          {
+            title: `Compare ${name} with…`,
+            multiple: true,
+            confirm: "Compare",
+            // Picking its own family again would only show it once.
+            exclude: first.face.key === first.family.representative.key ? [first.family.id] : [],
+            onPick: (families) => {
+              openCompare([keys[0], ...families.map((f) => f.representative.key)], returnTo);
+              return true;
+            },
           },
-        });
+          opts.returnTo,
+        );
         return;
       }
       case "pair":
         if (target.items.length === 2) return openPair(target.items[0].face.key, target.items[1].face.key, returnTo);
-        setPicker({
-          title: `Pair ${name} with…`,
-          description: `${name} is the heading font: pick the body font. Swap them on the Pair page.`,
-          multiple: false,
-          onPick: ([family]) => {
-            openPair(first.face.key, family.representative.key, returnTo);
-            return true;
+        openPicker(
+          {
+            title: `Pair ${name} with…`,
+            description: `${name} is the heading font: pick the body font. Swap them on the Pair page.`,
+            multiple: false,
+            onPick: ([family]) => {
+              openPair(first.face.key, family.representative.key, returnTo);
+              return true;
+            },
           },
-        });
+          opts.returnTo,
+        );
         return;
       case "familyGroup":
         return openFamilyGroups(target.faces, { returnTo: opts.returnTo });
@@ -1355,7 +1376,7 @@ export default function App() {
         const plan = removalPlan(target.faces, allFaces, actionContext.removable);
         if (!plan.files.length) return;
         const wholeFamily = target.where === "page" && first.kind === "family" && plan.leaving === target.faces.length;
-        setRemoval({ what: name, plan, closePage: wholeFamily && top?.kind === "font" ? top.id : null });
+        setRemoval({ what: name, plan, closePage: wholeFamily && top?.kind === "font" ? top.id : null, returnFocus: noteFocus(opts.returnTo) });
         return;
       }
     }
@@ -1373,12 +1394,14 @@ export default function App() {
       return;
     } finally {
       mutationEpoch.current++;
-      await loadFonts().catch(() => {});
+      // The folders too: a folder that's now empty shows 0 in the sidebar, not its old count.
+      await refresh().catch(() => {});
     }
     for (const f of report.failures) toast.error(fileName(f.path), { description: f.error });
     if (!report.removed.length) return;
-    // From its own page: the page goes too, once nothing of the family is left to show.
-    if (closePage !== null && nav.pages[nav.pages.length - 1]?.id === closePage) nav.back();
+    // From its own page: the page goes too, once nothing of the family is left to show (unless
+    // Back already closed it while the fonts were being removed).
+    if (closePage !== null) nav.backFrom(closePage);
     const files = report.removed.length;
     announce(`Removed ${what} from the library`);
     toast.success(`Removed ${what} from the library`, {
@@ -1396,7 +1419,7 @@ export default function App() {
       const folder = foldersRef.current.find((f) => f.id === id);
       if (folder) await rescan(folder);
     }
-    await loadFonts();
+    await refresh();
   };
 
   /** Undo for Remove from Library: put back, and turned back on the way each file was on. */
@@ -1523,7 +1546,7 @@ export default function App() {
       <FamilyGroupsContext.Provider value={openFamilyGroups}>
       <StateWordingContext.Provider value={stateWording}>
       <FontActionsContext.Provider value={fontActionsApi}>
-      <FontPickerContext.Provider value={setPicker}>
+      <FontPickerContext.Provider value={openPicker}>
       <TooltipProvider>
         <div className="relative h-full">
           {/* While settings are open, the library stays as it was, hidden and out of reach underneath. */}
@@ -1743,7 +1766,8 @@ export default function App() {
                       }}
                       onActivate={(ids, on, scope) => void setActivation(ids, on, undefined, scope)}
                       onReveal={revealFont}
-                      tagsAsk={tagsAsk.page === page.id ? tagsAsk.n : 0}
+                      // Only the page asked gets the count: a covered font page never opens its Tags.
+                      tagsAsk={tagsAsk.page === page.id ? tagsAsk.n : undefined}
                     />
                     )}
                   </div>

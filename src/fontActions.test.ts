@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FontSummary } from "./api.ts";
 import {
+  ACTION_ORDER,
   BACK_ITEM,
   BIGGER_ITEM,
   commandName,
@@ -17,6 +18,7 @@ import {
   menuCommand,
   menuStateKey,
   nativeMenuState,
+  newTagsAsk,
   optionClickHint,
   pageTarget,
   postScriptNames,
@@ -30,6 +32,7 @@ import {
   SORT_DESC_ITEM,
   SORT_ITEMS,
   switchScope,
+  turnOnLabel,
   type ActionContext,
   type FontTarget,
   type ShortcutKey,
@@ -90,6 +93,13 @@ function listTarget(...rows: string[]): FontTarget {
 }
 
 
+test("the menus have every action the plan lists (3.5), Show Info after Open", () => {
+  const ids = ACTION_ORDER.map((a) => a.id);
+  for (const id of ["open", "info", "turnOn", "turnOnOther", "turnOff", "tags", "compare", "pair", "familyGroup", "reveal"] as const) assert.ok(ids.includes(id), id);
+  assert.equal(ids.indexOf("info"), ids.indexOf("open") + 1);
+  assert.deepEqual([...ids].sort(), Object.keys(FONT_ITEMS).sort(), "the Font menu has the same actions");
+});
+
 test("nothing selected: every action is off, with its usual name", () => {
   const s = fontActionStates(null, ctx);
   assert.ok(Object.values(s).every((a) => !a.enabled));
@@ -98,9 +108,11 @@ test("nothing selected: every action is off, with its usual name", () => {
   assert.equal(s.remove.label, "Remove from Library…");
 });
 
-test("one family in the list: Open, Show in Finder, the With… forms of Compare and Pair", () => {
+test("one family in the list: Open, Show Info, Show in Finder, the With… forms of Compare and Pair", () => {
   const s = fontActionStates(listTarget("Inter"), ctx);
   assert.ok(s.open.enabled);
+  assert.ok(s.info.enabled);
+  assert.equal(s.info.label, "Show Info");
   assert.ok(s.reveal.enabled);
   assert.equal(s.compare.label, "Compare With…");
   assert.equal(s.pair.label, "Pair With…");
@@ -117,6 +129,7 @@ test("two rows: Compare and Pair act at once; Open and Show in Finder need one",
   assert.equal(s.compare.label, "Compare");
   assert.equal(s.pair.label, "Pair");
   assert.ok(!s.open.enabled && !s.reveal.enabled);
+  assert.ok(!s.info.enabled, "Show Info is for one font");
   const three = fontActionStates(listTarget("Inter", "Lora", "Roboto"), ctx);
   assert.ok(three.compare.enabled);
   assert.ok(!three.pair.enabled, "Pair takes one or two");
@@ -158,6 +171,20 @@ test("Option-click turns on the other way; turning off is the same either way", 
   assert.equal(optionClickHint("temporary", false), "Alt-click to turn on until you turn it off.");
 });
 
+test("when quitting Fontface turns temporary fonts off, the words say so", () => {
+  // Settings › Activation › "Turn temporary fonts off when Fontface quits".
+  assert.equal(optionClickHint("persistent", true, true), "Option-click to turn on until you quit Fontface.");
+  assert.equal(optionClickHint("temporary", true, true), "Option-click to turn on until you turn it off.", "the other way is unchanged");
+  assert.equal(turnOnLabel("temporary"), "Turn On Until Logout");
+  assert.equal(turnOnLabel("temporary", true), "Turn On Until Fontface Quits");
+  assert.equal(turnOnLabel("persistent", true), "Turn On");
+  const s = fontActionStates(listTarget("Lora"), { ...ctx, untilQuit: true });
+  assert.equal(s.turnOn.label, "Turn On");
+  assert.equal(s.turnOnOther.label, "Turn On Until Fontface Quits");
+  const t = fontActionStates(listTarget("Lora"), { ...ctx, mode: "temporary", untilQuit: true });
+  assert.equal(t.turnOn.label, "Turn On Until Fontface Quits", "the saved way goes first");
+});
+
 test("on the font page: the family's styles, the chosen style's name and file", () => {
   const regular = fam("Lora").representative;
   assert.deepEqual(pageTarget(fam("Lora"), regular, regular).faces, [regular], "a right-clicked line covers its style");
@@ -166,6 +193,7 @@ test("on the font page: the family's styles, the chosen style's name and file", 
   const t = pageTarget(inter, bold);
   const s = fontActionStates(t, ctx);
   assert.ok(!s.open.enabled, "already open");
+  assert.ok(s.info.enabled, "Show Info goes to the page's Info tab");
   assert.equal(s.copyPostScript.label, "Copy PostScript Name");
   assert.deepEqual(postScriptNames(t), ["Inter-Bold"]);
   assert.equal(revealFontOf(t)?.id, bold.primary.id);
@@ -217,7 +245,12 @@ test("the removal plan: what goes, what stays, and other styles in the same file
 
 const key = (k: string, mods: Partial<ShortcutKey> = {}): ShortcutKey => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
 
-test("font shortcuts: Cmd+T, Cmd+Return, Option-Cmd+Return, Shift-Cmd+Return", () => {
+test("font shortcuts: Cmd+I, Cmd+T, Cmd+Return, Option-Cmd+Return, Shift-Cmd+Return", () => {
+  assert.equal(fontShortcut(key("i", { metaKey: true }), true), "info");
+  assert.equal(fontShortcut(key("ˆ", { metaKey: true, code: "KeyI" }), true), "info", "the physical I key");
+  assert.equal(fontShortcut(key("i", { metaKey: true, shiftKey: true }), true), null);
+  assert.equal(fontShortcut(key("i", { ctrlKey: true }), false), "info", "Ctrl on Windows");
+  assert.equal(shortcutText("info", true), "⌘I");
   assert.equal(fontShortcut(key("t", { metaKey: true }), true), "tags");
   assert.equal(fontShortcut(key("†", { metaKey: true, code: "KeyT" }), true), "tags", "the physical T key");
   assert.equal(fontShortcut(key("t", { ctrlKey: true }), true), null, "Ctrl isn't Cmd on macOS");
@@ -230,6 +263,17 @@ test("font shortcuts: Cmd+T, Cmd+Return, Option-Cmd+Return, Shift-Cmd+Return", (
   assert.equal(shortcutText("turnOnOther", true), "⌥⌘↩");
   assert.equal(shortcutText("tags", false), "Ctrl+T");
   assert.equal(shortcutText("open", true), undefined);
+});
+
+test("a Cmd+T ask opens only the page it was for, and only once", () => {
+  // Page A was asked (count 1) and has seen it. Then font page B, opened over A from Compare,
+  // is asked (count 2): A gets no count (undefined), so its Tags popover stays shut.
+  assert.equal(newTagsAsk(1, undefined), false, "an ask for another page");
+  assert.equal(newTagsAsk(0, 2), true, "B's first ask");
+  assert.equal(newTagsAsk(2, 2), false, "the same ask again (a re-render)");
+  assert.equal(newTagsAsk(1, 3), true, "A asked again later");
+  assert.equal(newTagsAsk(3, 1), false, "never an older ask");
+  assert.equal(newTagsAsk(0, 0), false, "the first render isn't an ask");
 });
 
 test("the shortcut guard drops a menu echo of a key press, once", () => {
@@ -257,6 +301,7 @@ test("every menu id parses back to its command, and names it for the guard", () 
   assert.deepEqual(menuCommand(SMALLER_ITEM), { kind: "size", step: -1 });
   assert.deepEqual(menuCommand(BACK_ITEM), { kind: "back" });
   assert.deepEqual(menuCommand(FONT_ITEMS.remove), { kind: "font", action: "remove" });
+  assert.deepEqual(menuCommand(FONT_ITEMS.info), { kind: "font", action: "info" });
   assert.equal(menuCommand("settings"), null, "the app menu's own items aren't the page's");
   assert.equal(commandName({ kind: "back" }), "back");
   assert.equal(commandName({ kind: "size", step: 1 }), "size:1");

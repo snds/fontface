@@ -924,11 +924,11 @@ fn view_and_font_menu_items_are_unique_and_keep_the_standard_shortcuts_free() {
     for taken in ["CmdOrCtrl+,", "CmdOrCtrl+C", "CmdOrCtrl+V", "CmdOrCtrl+X", "CmdOrCtrl+Z", "CmdOrCtrl+A", "CmdOrCtrl+W", "CmdOrCtrl+M", "CmdOrCtrl+Q", "CmdOrCtrl+H"] {
         assert!(!keys.contains(&taken), "{taken} belongs to a standard menu");
     }
-    for (id, key) in [("view.tiles", "CmdOrCtrl+1"), ("view.table", "CmdOrCtrl+3"), ("view.back", "CmdOrCtrl+["), ("view.bigger", "CmdOrCtrl+="), ("font.tags", "CmdOrCtrl+T")] {
+    for (id, key) in [("view.tiles", "CmdOrCtrl+1"), ("view.table", "CmdOrCtrl+3"), ("view.back", "CmdOrCtrl+["), ("view.bigger", "CmdOrCtrl+="), ("font.info", "CmdOrCtrl+I"), ("font.tags", "CmdOrCtrl+T")] {
         assert_eq!(entries.iter().find(|e| e.id == id).and_then(|e| e.accelerator), Some(key), "{id}");
     }
     assert!(entries.iter().filter(|e| e.id.starts_with("view.") || e.id.starts_with("sort.")).count() >= 12);
-    assert!(entries.iter().filter(|e| e.id.starts_with("font.")).count() == 11, "the Font menu has the right-click menu's actions");
+    assert!(entries.iter().filter(|e| e.id.starts_with("font.")).count() == 12, "the Font menu has the right-click menu's actions");
     assert!(entries.iter().filter(|e| e.check).all(|e| e.id.starts_with("view.") || e.id.starts_with("sort.")), "only View items are check items");
 }
 
@@ -968,4 +968,35 @@ fn menu_state_changes_only_what_differs() {
     assert!(back.contains(&MenuUpdate::Text("font.turnOn", "Turn On".into())));
     assert!(back.contains(&MenuUpdate::Text("font.turnOnOther", "Turn On Until Logout".into())));
     assert!(menu_updates(&start, &state(json!({ "texts": { "font.open": "  " } }))).is_empty(), "a blank name keeps the usual one");
+}
+
+#[test]
+fn a_chosen_check_item_keeps_the_mark_the_page_gave_it() {
+    use window::{menu_updates, CheckMarks, MenuState};
+    let state = |v: serde_json::Value| -> MenuState { serde_json::from_value(v).unwrap() };
+    let marks = CheckMarks::new();
+    let tiles = state(json!({ "enabled": ["view.tiles", "view.rows"], "checked": ["view.tiles", "sort.name", "sort.asc"] }));
+    for update in menu_updates(&MenuState::default(), &tiles) {
+        marks.note(&update);
+    }
+    // macOS flips a check item's mark when it's chosen; it goes back to the page's. Choosing
+    // Tiles in Tiles (or Name when sorted by name) changes nothing, so it stays checked; Rows
+    // chosen while a popover is open is ignored by the page, so it stays unchecked.
+    assert_eq!(marks.after_choice("view.tiles"), Some(true));
+    assert_eq!(marks.after_choice("sort.name"), Some(true));
+    assert_eq!(marks.after_choice("sort.asc"), Some(true));
+    assert_eq!(marks.after_choice("view.rows"), Some(false));
+    assert_eq!(marks.after_choice("view.group"), Some(false));
+    // Plain items have no mark to put back.
+    assert_eq!(marks.after_choice("view.back"), None);
+    assert_eq!(marks.after_choice("font.tags"), None);
+    assert_eq!(marks.after_choice("settings"), None);
+
+    // The page then switches to Rows: the marks follow what it sends.
+    let rows = state(json!({ "enabled": ["view.tiles", "view.rows"], "checked": ["view.rows", "sort.name", "sort.asc"] }));
+    for update in menu_updates(&tiles, &rows) {
+        marks.note(&update);
+    }
+    assert_eq!(marks.after_choice("view.tiles"), Some(false));
+    assert_eq!(marks.after_choice("view.rows"), Some(true));
 }

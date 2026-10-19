@@ -5,15 +5,10 @@
 //! On macOS the title bar is an overlay (src-tauri/tauri.macos.conf.json): the page draws the
 //! top row and marks it as the place to drag the window from (src/components/TitleBar.tsx).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 #[cfg(target_os = "macos")]
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, Ordering::Relaxed},
-        Mutex,
-    },
-};
+use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
 use tauri::{Emitter, WebviewWindow};
@@ -99,6 +94,7 @@ pub const VIEW_MENU: &[Slot] = &[
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const FONT_MENU: &[Slot] = &[
     item("font.open", "Open", None),
+    item("font.info", "Show Info", Some("CmdOrCtrl+I")),
     Slot::Separator,
     item("font.turnOn", "Turn On", Some("CmdOrCtrl+Enter")),
     item("font.turnOnOther", "Turn On Until Logout", Some("Alt+CmdOrCtrl+Enter")),
@@ -183,6 +179,42 @@ fn shown_text<'a>(state: &'a MenuState, entry: &MenuEntry) -> &'a str {
     state.texts.get(entry.id).map(String::as_str).filter(|t| !t.trim().is_empty()).unwrap_or(entry.text)
 }
 
+/// The checkmark each check item of the View menu should show: the page's last word on it.
+///
+/// macOS (muda) flips a check item's mark by itself when it's chosen, before the page hears of
+/// it. The page decides what really changes: choosing Tiles while in Tiles, Name while sorted by
+/// name, or any item while a popover is open over the list changes nothing, and the page says
+/// nothing back. So the mark is put back as soon as the choice arrives (`after_choice`), and
+/// whatever the page then changes comes in with `set_menu_state` as usual.
+///
+/// Read on the main thread while `set_menu_state` may hold its lock and wait for that thread,
+/// so it's lock-free: one flag per item, fixed when the menus are built.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub struct CheckMarks(HashMap<&'static str, AtomicBool>);
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+impl CheckMarks {
+    /// Every check item of the View and Font menus, unchecked (as they're built).
+    pub fn new() -> Self {
+        Self(menu_entries().into_iter().filter(|e| e.check).map(|e| (e.id, AtomicBool::new(false))).collect())
+    }
+
+    /// Notes a change the page asked for (`menu_updates`); other kinds of change don't matter here.
+    pub fn note(&self, update: &MenuUpdate) {
+        if let MenuUpdate::Checked(id, on) = update {
+            if let Some(mark) = self.0.get(id) {
+                mark.store(*on, Relaxed);
+            }
+        }
+    }
+
+    /// The mark a chosen item goes back to: what the page last said. None for an item that isn't
+    /// a check item (nothing to put back).
+    pub fn after_choice(&self, id: &str) -> Option<bool> {
+        self.0.get(id).map(|mark| mark.load(Relaxed))
+    }
+}
+
 /// The page's id for a chosen menu item, if it's one of the View or Font menus' items.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn page_menu_id(id: &str) -> Option<&'static str> {
@@ -193,6 +225,8 @@ pub fn page_menu_id(id: &str) -> Option<&'static str> {
 #[cfg(target_os = "macos")]
 pub struct MenuHandles {
     items: HashMap<&'static str, MenuHandle>,
+    /// What the check items should show (see `CheckMarks`); never behind `shown`'s lock.
+    marks: CheckMarks,
     shown: Mutex<MenuState>,
 }
 
@@ -290,7 +324,7 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
     view.append(&Item::fullscreen(app, None)?)?;
     let font = Submenu::new(app, "Font", true)?;
     fill(app, &font, FONT_MENU, &mut handles)?;
-    app.manage(MenuHandles { items: handles, shown: Mutex::default() });
+    app.manage(MenuHandles { items: handles, marks: CheckMarks::new(), shown: Mutex::default() });
     // These ids make them macOS's Window menu (with the open windows listed) and Help menu
     // (with its search field), as in the default menu.
     let window = Submenu::with_id_and_items(
@@ -316,6 +350,13 @@ pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     if id != SETTINGS_ITEM && page_id.is_none() {
         return;
     }
+    // A check item's mark goes back to what the page said (macOS flipped it on the click); the
+    // page sends any real change. This runs on the main thread, so it's applied right here.
+    if let Some(handles) = app.try_state::<MenuHandles>() {
+        if let (Some(MenuHandle::Check(item)), Some(mark)) = (handles.items.get(id), handles.marks.after_choice(id)) {
+            let _ = item.set_checked(mark);
+        }
+    }
     if let Some(window) = app.get_webview_window("main") {
         show(&window);
     }
@@ -338,6 +379,8 @@ pub fn set_menu_state(app: AppHandle, state: MenuState) -> crate::error::AppResu
         let Some(handles) = app.try_state::<MenuHandles>() else { return Ok(()) };
         let mut shown = handles.shown.lock().unwrap_or_else(|p| p.into_inner());
         for update in menu_updates(&shown, &state) {
+            // Noted first, so an item chosen while this one is on its way goes back to the new mark.
+            handles.marks.note(&update);
             let result = match (&update, handles.items.get(update_id(&update))) {
                 (MenuUpdate::Enabled(_, on), Some(MenuHandle::Plain(item))) => item.set_enabled(*on),
                 (MenuUpdate::Enabled(_, on), Some(MenuHandle::Check(item))) => item.set_enabled(*on),

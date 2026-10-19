@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActivationMode } from "@/api";
-import { pageTarget, type FontActionId } from "@/fontActions";
+import { newTagsAsk, pageTarget, type FontActionId } from "@/fontActions";
 import { activationIds, type Face, type Family } from "@/library";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -46,7 +46,8 @@ interface Props {
   onBack: () => void;
   onChoose: (faceKey: string) => void;
   onActivate: (ids: number[], active: boolean, scope?: ActivationMode | null) => void;
-  /** Bumped by Cmd+T (or the Font menu's Tags…) to open the Tags popover. */
+  /** Bumped by Cmd+T (or the Font menu's Tags…) to open the Tags popover; undefined while the
+   *  ask is for another page (see `newTagsAsk`). */
   tagsAsk?: number;
 }
 
@@ -63,15 +64,16 @@ export const FONT_PAGE_MORE_ID = "font-page-more";
  * (Compare With…, Pair With…, Family Group…, Show in Finder, Copy PostScript Name, Remove from
  * Library…). As it narrows, the count and the Tags label go first.
  */
-export function FontPageHeader({ family, face, placeName, headingRef, busy, onBack, onChoose, onActivate, tagsAsk = 0 }: Props) {
+export function FontPageHeader({ family, face, placeName, headingRef, busy, onBack, onChoose, onActivate, tagsAsk }: Props) {
   const titleBar = useTitleBar();
   const styles = `${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`;
-  // Cmd+T opens Tags here (a new ask each time; the first render isn't one).
+  // Cmd+T opens Tags here: only an ask for this page that's newer than the last one seen (an
+  // ask for a font page opened over this one leaves it alone; the first render isn't one).
   const [tagsOpen, setTagsOpen] = useState(false);
-  const seenAsk = useRef(tagsAsk);
+  const seenAsk = useRef(tagsAsk ?? 0);
   useEffect(() => {
-    if (seenAsk.current === tagsAsk) return;
-    seenAsk.current = tagsAsk;
+    if (!newTagsAsk(seenAsk.current, tagsAsk)) return;
+    seenAsk.current = tagsAsk!;
     setTagsOpen(true);
   }, [tagsAsk]);
   return (

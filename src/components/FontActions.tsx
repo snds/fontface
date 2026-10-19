@@ -27,6 +27,7 @@ export const useFontActions = () => useContext(FontActionsContext);
 
 const ICONS: Record<FontActionId, string> = {
   open: "open_in_full",
+  info: "info",
   turnOn: "toggle_on",
   turnOnOther: "timer",
   turnOff: "toggle_off",
@@ -52,7 +53,7 @@ interface Props {
 }
 
 /**
- * One font action set, in one order, wherever a font's menu is: Open; Turn On, Turn On the other
+ * One font action set, in one order, wherever a font's menu is: Open, Show Info; Turn On, Turn On the other
  * way, Turn Off (the saved activation mode's Turn On first); Tags… (and, in a right-click menu,
  * Add to tag and Remove from tag); Compare, Pair, Family Group…; Show in Finder, Copy PostScript
  * Name; Remove from Library…. Ones that don't apply are shown dimmed, so the menu keeps its shape.

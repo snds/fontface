@@ -2,6 +2,7 @@ import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef
 import type { ActivationMode, LibraryLayout, SortOrder, TableColumnSetting, TableDensity } from "@/api";
 import type { Face, Family } from "@/library";
 import type { FontTarget, TargetItem } from "@/fontActions";
+import { LIBRARY_LIST_ATTR } from "@/focusReturn";
 import { listKeyCommand, type Selection } from "@/selection";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem } from "@/components/ui/context-menu";
@@ -114,7 +115,7 @@ export interface ListView {
   /** The element id of the item at an index (the active descendant). */
   optionId: (index: number) => string;
   /** Spread on the layout's scroll element, with its own role, ref and class. */
-  container: React.HTMLAttributes<HTMLDivElement> & { tabIndex: number };
+  container: React.HTMLAttributes<HTMLDivElement> & { tabIndex: number; [LIBRARY_LIST_ATTR]: "" };
   adapter: React.RefObject<LayoutAdapter>;
   /** Changes when the view or search changes; the layout then scrolls back to the top. */
   resetKey: string;
@@ -427,6 +428,8 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
 
   const container: ListView["container"] = {
     tabIndex: 0,
+    // Where focus goes back to from a dialog that has nowhere better (focusReturn.ts).
+    [LIBRARY_LIST_ATTR]: "",
     "aria-multiselectable": true,
     onKeyDown,
     onMouseDown: () => {

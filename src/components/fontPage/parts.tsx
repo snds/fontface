@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type FontDetail, type PreviewInfo } from "@/api";
+import { api, type FontDetail } from "@/api";
 import type { FaceState } from "@/fontLoader";
 import type { Face } from "@/library";
 import { Button } from "@/components/ui/button";
@@ -12,42 +12,8 @@ export function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{children}</h2>;
 }
 
-export const PANGRAM = "The quick brown fox jumps over the lazy dog";
-
-/** The Specimen tab's paragraph: Fontface's own words, with figures and punctuation in use. */
-export const PARAGRAPH =
-  "Every typeface has a voice. Set a few lines and you can hear it: whether the letters sit calmly or lean forward, whether the spaces between words breathe, and how the figures 0123456789 keep pace with the text around them. Good type disappears into the reading; it simply makes the next line a little easier than the last.";
-
-/** True if the font can draw every character of `text` (by its profile; unknown counts as yes). */
-const draws = (text: string, profile: PreviewInfo | undefined) => {
-  const missing = profile?.asciiMissing ?? "";
-  return ![...text].some((c) => missing.includes(c));
-};
-
-/** Symbol and Expert fonts: their letter keys hold pictures or extra characters, not letters. */
-const lettersMeanLetters = (profile: PreviewInfo | undefined) => !profile || (profile.kind !== "symbols" && profile.kind !== "expert");
-
-/**
- * The waterfall's text, first that fits: the typed text; the pangram, if the font has all its
- * letters; the pangram in UPPER or lower case; the profile's own text (the name, or a sample of
- * the font's characters).
- */
-export function waterfallText(typed: string, profile: PreviewInfo | undefined, family: string): string {
-  if (typed) return typed;
-  if (!profile) return PANGRAM;
-  if (lettersMeanLetters(profile)) {
-    for (const text of [PANGRAM, PANGRAM.toUpperCase(), PANGRAM.toLowerCase()]) if (draws(text, profile)) return text;
-  }
-  return profile.familyText ?? family;
-}
-
-/** The paragraph's text: the paragraph if the font can draw it (in either case), else what the waterfall shows. */
-export function paragraphText(profile: PreviewInfo | undefined, family: string): string {
-  if (lettersMeanLetters(profile)) {
-    for (const text of [PARAGRAPH, PARAGRAPH.toUpperCase(), PARAGRAPH.toLowerCase()]) if (draws(text, profile)) return text;
-  }
-  return waterfallText("", profile, family);
-}
+// The font page's sample texts, and how a font that can't draw them gets text it can.
+export { PANGRAM, PARAGRAPH, paragraphText, waterfallText } from "@/sampleText";
 
 export const formatBytes = (n: number) =>
   n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;

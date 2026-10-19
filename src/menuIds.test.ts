@@ -25,9 +25,9 @@ test("window.rs and fontActions.ts list the same menu items", () => {
 function press(accelerator: string): ShortcutKey {
   const parts = accelerator.split("+");
   const key = parts.pop()!;
-  const code = /^\d$/.test(key) ? `Digit${key}` : key === "=" ? "Equal" : key === "-" ? "Minus" : key === "[" ? "BracketLeft" : key === "T" ? "KeyT" : undefined;
+  const code = /^\d$/.test(key) ? `Digit${key}` : key === "=" ? "Equal" : key === "-" ? "Minus" : key === "[" ? "BracketLeft" : /^[A-Z]$/.test(key) ? `Key${key}` : undefined;
   return {
-    key: key === "T" ? "t" : key,
+    key: /^[A-Z]$/.test(key) ? key.toLowerCase() : key,
     code,
     metaKey: parts.includes("CmdOrCtrl"),
     ctrlKey: false,

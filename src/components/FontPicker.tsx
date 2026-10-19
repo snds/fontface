@@ -25,6 +25,9 @@ export interface PickRequest {
   /** The picked families, in the order picked. True when picking opens a page, whose heading
    *  then takes focus (the picker doesn't hand it back to where it was). */
   onPick: (families: Family[]) => boolean | void;
+  /** What takes focus when it closes without opening a page: what had focus when it was asked
+   *  for (App notes it: focusReturn.ts). Null or absent: the dialog's own choice. */
+  returnFocus?: () => HTMLElement | null;
 }
 
 /** Opens the font picker (App hosts it). */
@@ -90,8 +93,9 @@ function PickerBody({ request, families, onClose }: { request: PickRequest; fami
   return (
     <DialogContent
       className="flex flex-col sm:max-w-md"
-      // A pick that opened a page leaves focus on that page's heading.
-      finalFocus={() => !opensPage.current}
+      // A pick that opened a page leaves focus on that page's heading; otherwise focus goes back
+      // to what had it (the picker opens from code, so Base UI can't tell what that was).
+      finalFocus={() => (opensPage.current ? false : (request.returnFocus?.() ?? true))}
     >
       <DialogHeader>
         <DialogTitle>{request.title}</DialogTitle>

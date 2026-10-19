@@ -18,6 +18,7 @@ import { LAYOUTS, SORTS, stepSize } from "./viewOptions.ts";
 
 export type FontActionId =
   | "open"
+  | "info"
   | "turnOn"
   | "turnOnOther"
   | "turnOff"
@@ -32,6 +33,7 @@ export type FontActionId =
 /** The actions in menu order, with where the separators go (`gap` before it). */
 export const ACTION_ORDER: readonly { id: FontActionId; gap?: boolean }[] = [
   { id: "open" },
+  { id: "info" },
   { id: "turnOn", gap: true },
   { id: "turnOnOther" },
   { id: "turnOff" },
@@ -75,6 +77,9 @@ export function pageTarget(family: Family, chosen: Face, line?: Face): FontTarge
 export interface ActionContext {
   /** The saved activation mode (Settings › Activation). */
   mode: ActivationMode;
+  /** Fonts turned on until logout go off when Fontface quits (Settings › Activation), so the
+   *  words say "until Fontface quits". */
+  untilQuit?: boolean;
   /** The font's file is in one of your folders, where Remove from Library works. */
   removable: (font: FontSummary) => boolean;
   /** "Show in Finder" on macOS, "Show in Explorer" on Windows. */
@@ -92,8 +97,12 @@ export type ActionStates = Record<FontActionId, ActionState>;
 
 export const otherMode = (mode: ActivationMode): ActivationMode => (mode === "persistent" ? "temporary" : "persistent");
 
-/** "Turn On" keeps fonts on until you turn them off; "Turn On Until Logout" until you log out. */
-export const TURN_ON_LABELS: Record<ActivationMode, string> = { persistent: "Turn On", temporary: "Turn On Until Logout" };
+/** "Turn On" keeps fonts on until you turn them off; "Turn On Until Logout" until you log out
+ *  (or, when quitting Fontface turns those fonts off, "Turn On Until Fontface Quits"). */
+export function turnOnLabel(mode: ActivationMode, untilQuit = false): string {
+  if (mode === "persistent") return "Turn On";
+  return untilQuit ? "Turn On Until Fontface Quits" : "Turn On Until Logout";
+}
 
 /** The scope a turn-on action asks the back end for: null for the saved mode, else the other one. */
 export function scopeOf(action: "turnOn" | "turnOnOther", mode: ActivationMode): ActivationMode | null {
@@ -106,10 +115,12 @@ export function switchScope(on: boolean, alt: boolean, mode: ActivationMode): Ac
   return on && alt ? otherMode(mode) : null;
 }
 
-/** What a switch's tooltip says while it would turn fonts on. */
-export function optionClickHint(mode: ActivationMode, mac: boolean): string {
+/** What a switch's tooltip says while it would turn fonts on. `untilQuit`: fonts on until
+ *  logout go off when Fontface quits, so the other way lasts until then. */
+export function optionClickHint(mode: ActivationMode, mac: boolean, untilQuit = false): string {
   const click = mac ? "Option-click" : "Alt-click";
-  return mode === "persistent" ? `${click} to turn on until you log out.` : `${click} to turn on until you turn it off.`;
+  if (mode === "temporary") return `${click} to turn on until you turn it off.`;
+  return untilQuit ? `${click} to turn on until you quit Fontface.` : `${click} to turn on until you log out.`;
 }
 
 // --------------------------------------------------------------------------- the actions
@@ -143,8 +154,10 @@ export function fontActionStates(target: FontTarget | null, ctx: ActionContext):
   const state = (enabled: boolean, label: string): ActionState => ({ enabled, label });
   return {
     open: state(target?.where === "list" && n === 1, "Open"),
-    turnOn: state(offNow, TURN_ON_LABELS[ctx.mode]),
-    turnOnOther: state(offNow, TURN_ON_LABELS[otherMode(ctx.mode)]),
+    // The font page on its Info tab (on the font page: that tab, for the style it's on).
+    info: state(n === 1, "Show Info"),
+    turnOn: state(offNow, turnOnLabel(ctx.mode, ctx.untilQuit)),
+    turnOnOther: state(offNow, turnOnLabel(otherMode(ctx.mode), ctx.untilQuit)),
     turnOff: state(
       can.some((f) => f.active || f.copies.some((c) => c.activated)),
       "Turn Off",
@@ -178,7 +191,7 @@ export interface ShortcutKey {
 }
 
 /** The font actions with a shortcut. */
-export type ShortcutAction = "tags" | "turnOn" | "turnOnOther" | "turnOff";
+export type ShortcutAction = "info" | "tags" | "turnOn" | "turnOnOther" | "turnOff";
 
 /** Shortcut text for menus, by action: Cmd on macOS, Ctrl on Windows. */
 export function shortcutText(action: FontActionId, mac: boolean): string | undefined {
@@ -187,6 +200,8 @@ export function shortcutText(action: FontActionId, mac: boolean): string | undef
   const shift = mac ? "⇧" : "Shift+";
   const ret = mac ? "↩" : "Enter";
   switch (action) {
+    case "info":
+      return `${cmd}I`;
     case "tags":
       return `${cmd}T`;
     case "turnOn":
@@ -200,12 +215,14 @@ export function shortcutText(action: FontActionId, mac: boolean): string | undef
   }
 }
 
-/** Cmd+T: Tags. Cmd+Return: turn on (the saved way); Option-Cmd+Return: the other way;
- *  Shift-Cmd+Return: turn off. Ctrl on Windows (Alt for Option). */
+/** Cmd+I: Show Info. Cmd+T: Tags. Cmd+Return: turn on (the saved way); Option-Cmd+Return: the
+ *  other way; Shift-Cmd+Return: turn off. Ctrl on Windows (Alt for Option). */
 export function fontShortcut(e: ShortcutKey, mac: boolean): ShortcutAction | null {
   const command = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   if (!command) return null;
-  if ((e.key.toLowerCase() === "t" || e.code === "KeyT") && !e.altKey && !e.shiftKey) return "tags";
+  const plain = !e.altKey && !e.shiftKey;
+  if ((e.key.toLowerCase() === "i" || e.code === "KeyI") && plain) return "info";
+  if ((e.key.toLowerCase() === "t" || e.code === "KeyT") && plain) return "tags";
   if (e.key !== "Enter") return null;
   if (e.altKey && e.shiftKey) return null;
   if (e.altKey) return "turnOnOther";
@@ -239,6 +256,16 @@ export function createShortcutGuard(windowMs = 250) {
 
 export type ShortcutGuard = ReturnType<typeof createShortcutGuard>;
 
+/**
+ * Cmd+T on a font page opens that page's Tags popover. App counts the asks (the count only
+ * grows) and hands the count to the page that was asked; every other font page gets undefined,
+ * including one still mounted under Compare or Family groups. A page opens its popover only for
+ * an ask newer than the last one it saw, so an ask for another page never opens it.
+ */
+export function newTagsAsk(seen: number, ask: number | undefined): boolean {
+  return ask !== undefined && ask > seen;
+}
+
 // ---------------------------------------------------------------------- macOS menus
 
 /**
@@ -256,6 +283,7 @@ export const SMALLER_ITEM = "view.smaller";
 export const BACK_ITEM = "view.back";
 export const FONT_ITEMS: Record<FontActionId, string> = {
   open: "font.open",
+  info: "font.info",
   turnOn: "font.turnOn",
   turnOnOther: "font.turnOnOther",
   turnOff: "font.turnOff",

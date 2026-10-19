@@ -1,3 +1,4 @@
+import { focusBack } from "@/focusReturn";
 import type { Face } from "@/library";
 import {
   ContextMenuGroup,
@@ -54,7 +55,7 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
           Add to tag
         </ContextMenuSubTrigger>
         <ContextMenuSubContent className={subContent}>
-          <ContextMenuItem onClick={() => openTagDialog({ kind: "pick", faces })}>
+          <ContextMenuItem onClick={() => openTagDialog({ kind: "pick", faces, returnFocus: focusBack() })}>
             <Icon name="search" size={16} />
             Find a tag…
           </ContextMenuItem>

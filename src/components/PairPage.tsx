@@ -3,8 +3,10 @@ import { PAIR_TEXT, swapPair, type PairFonts } from "@/compare";
 import type { PagePatch, PairPageEntry } from "@/nav";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { usePreviewProfile } from "@/previewProfiles";
 import { useFontPicker } from "./FontPicker";
 import { FaceSample, SizeSlider, StylePicker, type FaceRef } from "./ComparePage";
+import { MissingHint } from "./FacePreview";
 import { BackButton } from "./fontPage/PageHeader";
 import { dragRegion, useTitleBar } from "./TitleBar";
 
@@ -76,7 +78,7 @@ export function PairPage({ page, faceOf, placeName, previewText, onBack, onChang
         </Button>
       </header>
       <div className="flex shrink-0 flex-col gap-2 border-b px-6 py-2.5">
-        <FontControls role="heading" face={heading} onChoose={() => choose("heading")} onStyle={(key) => onChange({ heading: key })}>
+        <FontControls role="heading" face={heading} typed={previewText} onChoose={() => choose("heading")} onStyle={(key) => onChange({ heading: key })}>
           <SizeSlider label="Size" value={headingSize} min={16} max={128} onChange={setHeadingSize} />
         </FontControls>
         <FontControls role="body" face={body} onChoose={() => choose("body")} onStyle={(key) => onChange({ body: key })}>
@@ -88,14 +90,15 @@ export function PairPage({ page, faceOf, placeName, previewText, onBack, onChang
         <section aria-label="Preview" className="mx-auto flex max-w-3xl flex-col gap-3 px-8 pt-10 pb-16">
           {heading ? (
             <>
-              <FaceSample face={heading.face} text={previewText || PAIR_TEXT.heading} size={headingSize} lineHeight={1.1} />
-              <FaceSample face={heading.face} text={PAIR_TEXT.subheading} size={Math.max(14, Math.round(headingSize * 0.45))} lineHeight={1.25} className="text-muted-foreground" />
+              {/* Each in words the font can draw (a caps-only or symbol font gets text it has). */}
+              <FaceSample face={heading.face} typed={previewText} words={PAIR_TEXT.heading} size={headingSize} lineHeight={1.1} />
+              <FaceSample face={heading.face} words={PAIR_TEXT.subheading} size={Math.max(14, Math.round(headingSize * 0.45))} lineHeight={1.25} className="text-muted-foreground" />
             </>
           ) : (
             <Missing role="heading" onChoose={() => choose("heading")} />
           )}
           {body ? (
-            <FaceSample face={body.face} text={PAIR_TEXT.body} size={bodySize} lineHeight={leading} className="mt-3 max-w-[68ch]" />
+            <FaceSample face={body.face} words={PAIR_TEXT.body} size={bodySize} lineHeight={leading} className="mt-3 max-w-[68ch]" />
           ) : (
             <Missing role="body" onChoose={() => choose("body")} />
           )}
@@ -105,8 +108,24 @@ export function PairPage({ page, faceOf, placeName, previewText, onBack, onChang
   );
 }
 
-/** One font's controls: which font (opens the library search), its style, and its sizes. */
-function FontControls({ role, face, onChoose, onStyle, children }: { role: Role; face: FaceRef | undefined; onChoose: () => void; onStyle: (key: string) => void; children: React.ReactNode }) {
+/** One font's controls: which font (opens the library search), its style, and its sizes. `typed`:
+ *  text from the toolbar it shows, marked when the font can't draw all of it. */
+function FontControls({
+  role,
+  face,
+  typed = "",
+  onChoose,
+  onStyle,
+  children,
+}: {
+  role: Role;
+  face: FaceRef | undefined;
+  typed?: string;
+  onChoose: () => void;
+  onStyle: (key: string) => void;
+  children: React.ReactNode;
+}) {
+  const { profile } = usePreviewProfile(face?.face.primary);
   return (
     <div role="group" aria-label={`${ROLES[role]} font`} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
       <span className="w-14 shrink-0 text-xs font-medium text-muted-foreground">{ROLES[role]}</span>
@@ -115,6 +134,7 @@ function FontControls({ role, face, onChoose, onStyle, children }: { role: Role;
         <Icon name="unfold_more" size={14} className="text-muted-foreground" />
       </Button>
       {face && <StylePicker face={face} label={`${ROLES[role]} style`} onChange={onStyle} />}
+      {face && typed && <MissingHint text={typed} profile={profile} />}
       {children}
     </div>
   );

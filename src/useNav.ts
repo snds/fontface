@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { IS_MAC } from "@/components/TitleBar";
-import { backKeyIntent, EMPTY_NAV, isBackShortcut, MOUSE_BACK_BUTTON, navReducer, type FocusKind, type NavState, type NewPage, type Page, type PagePatch } from "@/nav";
+import { backKeyIntent, EMPTY_NAV, isBackShortcut, MOUSE_BACK_BUTTON, navReducer, topPage, type FocusKind, type NavState, type NewPage, type Page, type PagePatch } from "@/nav";
 
 const TEXT_INPUTS = new Set(["text", "search", "number", "email", "url", "tel", "password"]);
 /** Menus, popovers, dialogs and select lists: they handle their own Esc. */
@@ -29,6 +29,9 @@ export interface Nav {
   open: (page: NewPage) => void;
   /** Closes the top page. */
   back: () => void;
+  /** Closes the top page if it's still this one (by id), as the stack is now, not as it was
+   *  when the caller last rendered: an await later, Back may already have closed it. */
+  backFrom: (id: number) => void;
   /** A sidebar click: every page closes. */
   clear: () => void;
   update: (id: number, patch: PagePatch) => void;
@@ -66,6 +69,10 @@ export function useNav({ blocked, onBack, allowKeyBack }: Options): Nav {
     options.current.onBack?.(closed, current.current.pages);
   }, []);
 
+  const backFrom = useCallback((id: number) => {
+    if (topPage(current.current)?.id === id) back();
+  }, [back]);
+
   const open = useCallback((page: NewPage) => dispatch({ type: "open", page }), []);
   const clear = useCallback(() => dispatch({ type: "clear" }), []);
   const update = useCallback((id: number, patch: PagePatch) => dispatch({ type: "update", id, patch }), []);
@@ -98,5 +105,5 @@ export function useNav({ blocked, onBack, allowKeyBack }: Options): Nav {
     };
   }, [anyOpen, back]);
 
-  return useMemo(() => ({ pages: state.pages, open, back, clear, update }), [state.pages, open, back, clear, update]);
+  return useMemo(() => ({ pages: state.pages, open, back, backFrom, clear, update }), [state.pages, open, back, backFrom, clear, update]);
 }
