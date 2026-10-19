@@ -158,7 +158,7 @@ pub struct FamilyChange {
     pub names: Vec<NameEdit>,
 }
 
-/// At most this many edits in one change ("Merge all suggestions" on a big library stays well under).
+/// At most this many edits in one change (a whole big library's choices stay well under).
 const MAX_EDITS: usize = 50_000;
 /// Family, style and name text, in characters.
 const MAX_TEXT: usize = 200;
@@ -413,7 +413,7 @@ pub fn families_undo(state: State<'_, AppState>, change: FamilyChange) -> AppRes
     state.write_local(|conn| apply(conn, &change))
 }
 
-/// Several changes as one, with one undo ("Merge all suggestions").
+/// Several changes as one, with one undo.
 #[tauri::command(async)]
 pub fn families_apply(state: State<'_, AppState>, change: FamilyChange) -> AppResult<FamilyChange> {
     state.write_local(|conn| apply(conn, &change))

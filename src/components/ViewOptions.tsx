@@ -86,6 +86,9 @@ interface Props {
   onLayout: (layout: LibraryLayout) => void;
   groupStyles: boolean;
   onGroupStyles: (on: boolean) => void;
+  /** "Group families by name" (settings.groupByName), automatic groups included. */
+  groupByName: boolean;
+  onGroupByName: (on: boolean) => void;
   sort: SortOrder;
   onSort: (sort: SortOrder) => void;
   density: TableDensity;
@@ -101,13 +104,14 @@ interface Props {
 }
 
 /**
- * The View options popover (the tune button): layout, "Group styles into families", sort, in
- * Table its row height and columns, and the preview styling (PreviewOptions.tsx). Every choice
- * is saved as a setting. Under about 800px the toolbar drops its own layout switch, and this is
- * where the layout is picked.
+ * The View options popover (the tune button): layout, "Group styles into families", "Group
+ * families by name", sort, in Table its row height and columns, and the preview styling
+ * (PreviewOptions.tsx). Every choice is saved as a setting. Under about 800px the toolbar drops
+ * its own layout switch, and this is where the layout is picked.
  */
 export function ViewOptions(props: Props) {
-  const { layout, onLayout, groupStyles, onGroupStyles, sort, onSort, density, onDensity, columns, onColumns, onFamilyGroups, preview, onPreview, dark } = props;
+  const { layout, onLayout, groupStyles, onGroupStyles, groupByName, onGroupByName, sort, onSort, density, onDensity, columns, onColumns, onFamilyGroups, preview, onPreview, dark } =
+    props;
   const id = useId();
   const info = sortInfo(sort.key);
   // The main sorts, plus the current one if it came from a Table header (Format, Source…).
@@ -156,6 +160,23 @@ export function ViewOptions(props: Props) {
             className="mt-0.5"
           />
         </label>
+        <label className="flex items-start justify-between gap-3">
+          <span className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium" id={`${id}-byname`}>
+              Group families by name
+            </span>
+            <span className="text-xs text-muted-foreground" id={`${id}-byname-desc`}>
+              Joins fonts whose names differ only by a style word, like “AmintaBold” or “Arial Narrow”. Off: each font keeps its own family name.
+            </span>
+          </span>
+          <Switch
+            checked={groupByName}
+            onCheckedChange={(on) => onGroupByName(on)}
+            aria-labelledby={`${id}-byname`}
+            aria-describedby={`${id}-byname-desc`}
+            className="mt-0.5"
+          />
+        </label>
         <PopoverClose
           render={<Button variant="outline" size="sm" className="self-start" />}
           onClick={onFamilyGroups}
@@ -165,7 +186,7 @@ export function ViewOptions(props: Props) {
           Family groups…
         </PopoverClose>
         <span id={`${id}-families-desc`} className="-mt-2 text-xs text-muted-foreground">
-          How styles are grouped into families by name, with suggestions and your changes.
+          See what was grouped and why, and keep any family separate.
         </span>
 
         <Section label="Sort by" id={`${id}-sort`}>

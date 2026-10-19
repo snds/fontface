@@ -116,7 +116,7 @@ import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/
 import { useSyncEvents } from "@/sync/store";
 import { popupOpen, useNav } from "@/useNav";
 import { findIntent, type CatalogPageEntry, type GroupsFilter, type Page, type PageReturn } from "@/nav";
-import { suggestGroups, type GroupingOptions } from "@/familyGroups";
+import type { GroupingOptions } from "@/familyGroups";
 import { FamilyGroupsContext, reloadFamilyChoices, useFamilyChoices, type OpenFamilyGroups } from "@/families/store";
 import { FamilyGroupsPage, GROUPS_SEARCH_ID } from "@/components/FamilyGroupsPage";
 
@@ -1013,7 +1013,7 @@ export default function App() {
     });
 
   // Group the whole library once; views filter faces, so each Face keeps all of its copies.
-  // Families group by name (unless that's off in Settings), and by your choices (familyGroups.ts).
+  // Families group by name (unless that's off in View options), and by your choices (familyGroups.ts).
   const familyChoices = useFamilyChoices();
   const groupByName = settings?.groupByName ?? DEFAULT_SETTINGS.groupByName;
   const grouping = useMemo<GroupingOptions>(
@@ -1086,6 +1086,10 @@ export default function App() {
   const chooseGrouping = (on: boolean) => {
     updateSettings({ groupStyles: on });
     announce(on ? "Styles grouped into families" : "Every style listed on its own");
+  };
+  const chooseGroupByName = (on: boolean) => {
+    updateSettings({ groupByName: on });
+    announce(on ? "Families grouped by name" : "Families use the fonts' own names");
   };
   /** Cmd+= and Cmd+- (and View › Bigger and Smaller Preview): the next size step. */
   const stepPreviewSize = useCallback(
@@ -1212,16 +1216,11 @@ export default function App() {
       const focus = faces?.map((f) => f.key) ?? [];
       const filter: GroupsFilter = options.filter ?? "all";
       nav.open({ kind: "groups", filter, focus, returnTo: options.returnTo ? { element: options.returnTo } : null });
-      announce(filter === "suggested" ? "Opened Family groups, on the suggestions" : "Opened Family groups");
+      announce(filter === "automatic" ? "Opened Family groups, on the automatic groups" : "Opened Family groups");
       closeSettings({ restoreFocus: false });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [nav.open, announce, closeSettings],
-  );
-  // How many suggestions Settings › Library mentions: worked out only while settings are open.
-  const familySuggestions = useMemo(
-    () => (settingsOpen ? suggestGroups(library.families, library.plan, grouping).length : 0),
-    [settingsOpen, library, grouping],
   );
 
 
@@ -1623,6 +1622,8 @@ export default function App() {
                     onLayout={chooseLayout}
                     groupStyles={groupStyles}
                     onGroupStyles={chooseGrouping}
+                    groupByName={groupByName}
+                    onGroupByName={chooseGroupByName}
                     sort={sort}
                     onSort={chooseSort}
                     density={tableDensity}
@@ -1706,6 +1707,7 @@ export default function App() {
                         locations={locations}
                         onBack={nav.back}
                         onFilter={(filter) => nav.update(page.id, { filter })}
+                        onGroupByName={chooseGroupByName}
                         announce={announce}
                       />
                     ) : page.kind === "catalog" ? (
@@ -1808,9 +1810,7 @@ export default function App() {
                 // The page's heading takes focus (not the Settings button).
                 closeSettings({ restoreFocus: false });
               }}
-              familySuggestions={familySuggestions}
-              // "Review n suggestions" opens them; with none, the button reads "Family groups…" and opens every family.
-              onReviewFamilyGroups={() => openFamilyGroups(undefined, { filter: familySuggestions > 0 ? "suggested" : "all" })}
+              onReviewFamilyGroups={() => openFamilyGroups()}
               onPutBack={async (paths) => {
                 await putBack(paths);
                 toast.success(paths.length === 1 ? "Put back in the library" : `Put ${paths.length.toLocaleString()} font files back in the library`);

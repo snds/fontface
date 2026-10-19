@@ -3,8 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FamilyChange, FontSummary } from "./api.ts";
-import { familyRuleKey, familyRuleKeys, mergeChange, mergeEdits, nameRef, yourEdits } from "./familyEdits.ts";
-import { suggestGroups, type FaceChoice, type GroupingOptions, type NameRule } from "./familyGroups.ts";
+import { familyRuleKey, familyRuleKeys, nameRef, yourEdits } from "./familyEdits.ts";
+import { autoGroups, type FaceChoice, type GroupingOptions, type NameRule } from "./familyGroups.ts";
 import { groupLibrary, type Family } from "./library.ts";
 
 let nextId = 1;
@@ -71,7 +71,7 @@ const named = (families: readonly Family[], name: string) => {
   return f;
 };
 
-test("Merge all on chained suggestions leaves no family behind, and nothing left to suggest (F4, S4)", () => {
+test("chained automatic groups leave no family behind, and nothing left to group (F4, S4)", () => {
   // "A TF" into "A Text", and "A Text" with "A Display" into a new family "A".
   const fonts = [
     font("Neutra Text", "Book", { postscriptName: "NeutraText-Book" }),
@@ -80,13 +80,33 @@ test("Merge all on chained suggestions leaves no family behind, and nothing left
     font("Neutra Display", "Titling", { postscriptName: "NeutraDisplay-Titling" }),
   ];
   const saved = new Saved();
-  const before = groupLibrary(fonts, saved.options());
-  const suggestions = suggestGroups(before.families, before.plan, saved.options());
-  saved.apply(mergeChange(suggestions.map((s) => ({ families: s.sources.map((src) => src.family), into: s.into }))));
-  const after = groupLibrary(fonts, saved.options());
-  assert.deepEqual(names(after.families), ["Neutra"]);
-  assert.equal(named(after.families, "Neutra").faces.length, 4);
-  assert.deepEqual(suggestGroups(after.families, after.plan, saved.options()), []);
+  const lib = groupLibrary(fonts, saved.options());
+  assert.deepEqual(names(lib.families), ["Neutra"]);
+  assert.equal(named(lib.families, "Neutra").faces.length, 4);
+  assert.deepEqual(autoGroups(lib.families, lib.plan, saved.options()), [], "grouping again finds nothing more");
+});
+
+test("Keep separate wins over an automatic group, and clearing it (Undo) groups it again", () => {
+  const fonts = [
+    font("Neutra Text", "Book", { postscriptName: "NeutraText-Book" }),
+    font("Neutra Text TF", "Book", { postscriptName: "NeutraTextTF-Book", hasTypoFamily: true }),
+    font("Neutra Display", "Titling", { postscriptName: "NeutraDisplay-Titling" }),
+    font("Neutra Display", "Bold", { postscriptName: "NeutraDisplay-Bold", weight: 700 }),
+  ];
+  const saved = new Saved();
+  assert.deepEqual(names(groupLibrary(fonts, saved.options()).families), ["Neutra"]);
+  // The Family groups page's Keep separate, on Neutra Text: Neutra Text TF still joins it, and
+  // Neutra Display alone would only get another name, so it keeps its own.
+  saved.keepSeparate([nameRef("Neutra Text")]);
+  const kept = groupLibrary(fonts, saved.options());
+  assert.deepEqual(names(kept.families), ["Neutra Display", "Neutra Text"]);
+  assert.deepEqual(kept.auto.map((g) => [g.into, g.sources.map((s) => s.family.name)]), [["Neutra Text", ["Neutra Text TF"]]]);
+  assert.deepEqual(yourEdits(named(kept.families, "Neutra Text").faces), { faces: [], nameKeys: ["neutratext"] });
+  // Undo forgets the rule, the way Clear my choices does.
+  saved.reset([], ["neutratext"]);
+  assert.deepEqual(names(groupLibrary(fonts, saved.options()).families), ["Neutra"]);
+  // Off, nothing is grouped automatically, and the rule changes nothing.
+  assert.deepEqual(names(groupLibrary(fonts, saved.options(false)).families), ["Neutra Display", "Neutra Text", "Neutra Text TF"]);
 });
 
 test("rules follow a face whichever copy is shown, and Clear my choices finds them (S1)", () => {
@@ -114,16 +134,6 @@ test("rules follow a face whichever copy is shown, and Clear my choices finds th
   assert.equal(saved.rules.size, 0);
 });
 
-test("merging writes a rule per family name and a choice for styles you'd moved (mergeEdits)", () => {
-  const fonts = [font("Aminta"), font("AmintaBold", "Regular", { postscriptName: "AmintaBold" }), font("Display", "Regular", { postscriptName: "DisplayRegular" })];
-  const saved = new Saved();
-  saved.apply({ faces: [{ faceKey: "ps:DisplayRegular|static|r", set: { family: "Aminta", style: null } }], names: [] });
-  const lib = groupLibrary(fonts, saved.options());
-  const { names: refs, faces } = mergeEdits([named(lib.families, "Aminta")]);
-  assert.deepEqual(refs.map((r) => r.nameKey).sort(), ["aminta", "amintabold"]);
-  assert.deepEqual(faces, ["ps:DisplayRegular|static|r"]);
-});
-
 test("Keep separate on a family grouped by name is listed and can be cleared (S3)", () => {
   const fonts = [
     font("Amplitude", "Regular", { postscriptName: "Amplitude-Regular" }),
@@ -132,15 +142,17 @@ test("Keep separate on a family grouped by name is listed and can be cleared (S3
   ];
   const saved = new Saved();
   const before = groupLibrary(fonts, saved.options());
-  const comp = named(before.families, "AmplitudeComp");
-  assert.ok(comp.faces.every((f) => f.groupedBy === "name"), "a family no style is named");
-  const [s] = suggestGroups(before.families, before.plan, saved.options());
+  assert.deepEqual(names(before.families), ["Amplitude"], "AmplitudeComp joins Amplitude automatically");
+  const [s] = before.auto;
   assert.deepEqual([s.into, s.sources.map((src) => src.family.name)], ["Amplitude", ["AmplitudeComp"]]);
-  // The suggestion's Keep separate: a rule on the family's own name.
+  const comp = s.sources[0].family;
+  assert.ok(comp.faces.every((f) => f.groupedBy === "name" && f.name !== comp.name), "a family no style is named");
+  assert.deepEqual(comp.faces.map((f) => f.auto), [{ from: "AmplitudeComp", reason: "width", word: "Compressed" }, { from: "AmplitudeComp", reason: "width", word: "Compressed" }]);
+  // The automatic group's Keep separate: a rule on the family's own name.
   saved.keepSeparate([nameRef(comp.name)]);
   const after = groupLibrary(fonts, saved.options());
-  assert.deepEqual(names(after.families), ["Amplitude", "AmplitudeComp"], "nothing moves");
-  assert.deepEqual(suggestGroups(after.families, after.plan, saved.options()), [], "and it isn't suggested again");
+  assert.deepEqual(names(after.families), ["Amplitude", "AmplitudeComp"], "it stays as grouping by name made it");
+  assert.deepEqual(after.auto, [], "and it isn't grouped again");
   const kept = named(after.families, "AmplitudeComp");
   assert.equal(familyRuleKey(kept, saved.rules), "amplitudecomp", "listed under Your changes");
   const familyRules = familyRuleKeys(after.families, saved.rules);
@@ -150,7 +162,7 @@ test("Keep separate on a family grouped by name is listed and can be cleared (S3
   assert.deepEqual(mine, { faces: [], nameKeys: ["amplitudecomp"] });
   saved.reset(mine.faces, mine.nameKeys);
   const cleared = groupLibrary(fonts, saved.options());
-  assert.equal(suggestGroups(cleared.families, cleared.plan, saved.options()).length, 1, "suggested again");
+  assert.deepEqual([names(cleared.families), cleared.auto.length], [["Amplitude"], 1], "grouped automatically again");
   // A rule a style carries is the style's own, not the family's.
   saved.keepSeparate([nameRef("Amplitude")]);
   assert.equal(familyRuleKey(named(groupLibrary(fonts, saved.options()).families, "Amplitude"), saved.rules), undefined);
@@ -164,7 +176,8 @@ test("Keep separate on one spelling keeps both spellings together, under the one
   ];
   const saved = new Saved();
   const before = groupLibrary(fonts, saved.options());
-  assert.equal(named(before.families, "Aaux ProPoster").faces.length, 2);
+  assert.deepEqual(names(before.families), ["Aaux Pro"], "a size word: Aaux ProPoster joins Aaux Pro automatically");
+  assert.equal(named(before.auto[0].sources.map((s) => s.family), "Aaux ProPoster").faces.length, 2, "both spellings, as grouping by name made it");
   saved.keepSeparate([nameRef("Aaux ProPoster")]);
   const after = groupLibrary(fonts, saved.options());
   assert.deepEqual(names(after.families), ["Aaux Pro", "Aaux ProPoster"]);

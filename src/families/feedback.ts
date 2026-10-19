@@ -37,4 +37,4 @@ export const stylesText = (n: number) => plural(n, "style");
 export const familiesText = (n: number) => plural(n, "family", "families");
 
 // The changes themselves are worked out in familyEdits.ts (pure, tested).
-export { familyRuleKey, familyRuleKeys, mergeChange, mergeEdits, nameRef, yourEdits } from "@/familyEdits";
+export { familyRuleKey, familyRuleKeys, nameRef, yourEdits } from "@/familyEdits";

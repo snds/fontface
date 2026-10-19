@@ -529,7 +529,7 @@ export interface AppSettings {
   layout: LibraryLayout;
   /** Off: every style is its own item, "Family Style". */
   groupStyles: boolean;
-  /** Settings › Library › "Group families by name". Off: families use the fonts' own names
+  /** View options › "Group families by name". Off: families use the fonts' own names
    *  (your own family choices still apply). */
   groupByName: boolean;
   sort: SortOrder;
