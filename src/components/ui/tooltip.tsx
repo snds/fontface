@@ -44,6 +44,9 @@ function TooltipContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        // Fixed, so a tooltip that follows its control past the window's edge (a row the list
+        // scrolled away) never makes the page taller.
+        positionMethod="fixed"
         className="isolate z-50"
       >
         <TooltipPrimitive.Popup

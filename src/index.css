@@ -140,6 +140,13 @@
 
 @layer base {
   html, body, #root { height: 100%; }
+  /* The window itself never scrolls: only the lists and panes inside it do. Without this, a
+     tooltip or menu placed past the window's edge (one following a row the list scrolled away)
+     made the page taller, and scrolling past a list's end then moved the whole window's
+     contents up. `clip` also stops scrolling by code (focus, scrollIntoView); the page's own
+     scroll position has a guard in main.tsx, since the window's overflow can only be hidden. */
+  html, body { overflow: hidden; overscroll-behavior: none; }
+  #root { overflow: clip; }
   body { -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
   input, textarea, .selectable { user-select: text; -webkit-user-select: text; }
 }

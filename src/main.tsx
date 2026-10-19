@@ -11,6 +11,11 @@ import "./tags/colors.css";
 initTheme();
 // macOS: double-clicking the top row follows the system setting (zoom, minimize or nothing).
 watchTitleBarDoubleClick();
+// The window never scrolls (index.css), but code can still scroll a hidden page, say focus()
+// on something past its edge. Put it straight back.
+window.addEventListener("scroll", () => {
+  if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+});
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
