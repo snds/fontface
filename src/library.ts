@@ -1,4 +1,15 @@
-import type { FontSummary } from "./api";
+import type { FontSummary, SortOrder } from "./api";
+import {
+  activeRank,
+  addedAt,
+  designerOf,
+  fileNameOf,
+  fileSizeOf,
+  formatsOf,
+  foundryOf,
+  shortVersion,
+  weightSpan,
+} from "./familyFacts.ts";
 
 /**
  * One style of a family. Libraries often hold several copies of the same font (an .otf and a
@@ -31,6 +42,9 @@ export interface Family {
   switchable: Face[];
   /** How many switchable faces are on right now. */
   activeCount: number;
+  /** Set when "Group styles into families" is off and this item is one style on its own
+   *  (`ungroup`): the name of the family it belongs to. `name` is then "Family Style". */
+  ungroupedFrom?: string;
 }
 
 /** Where the fonts come from: everything, the OS-installed fonts ("Font Book"), one folder, or a
@@ -186,6 +200,96 @@ export function groupFamilies(fonts: FontSummary[]): Family[] {
   return [...byFamily.entries()]
     .map(([name, faces]) => makeFamily(familyId(name), name, sortFaces(faces)))
     .sort((a, b) => collator.compare(a.name, b.name));
+}
+
+/**
+ * "Group styles into families" off: every style becomes its own item, named "Family Style", in
+ * the order the families list them (so each family's styles stay together, lightest first).
+ * Each item's id is "u:" plus its face key, so it never matches a family's id.
+ */
+export function ungroup(families: readonly Family[]): Family[] {
+  const out: Family[] = [];
+  for (const family of families) {
+    const base = family.ungroupedFrom ?? family.name;
+    for (const face of family.faces) {
+      out.push({ ...makeFamily(`u:${face.key}`, `${base} ${face.primary.subfamily}`, [face]), ungroupedFrom: base });
+    }
+  }
+  return out;
+}
+
+/** Where a family's fonts come from, in words (the Table's Source column). Only the "source"
+ *  sort needs it. */
+export interface SortContext {
+  sourceOf?: (family: Family) => string;
+}
+
+/** The family name an item sorts under: its own, or for a single style its family's. */
+const nameKey = (f: Family) => f.ungroupedFrom ?? f.name;
+
+type SortValue = string | number | undefined;
+
+/** What each sort compares. Empty text and unknown values come back undefined: they go last. */
+function sortValue(f: Family, key: SortOrder["key"], ctx: SortContext): SortValue {
+  const text = (s: string | undefined) => s || undefined;
+  switch (key) {
+    case "name":
+      return nameKey(f);
+    case "added":
+      return addedAt(f.faces);
+    case "styles":
+      return f.faces.length;
+    case "weight": {
+      const span = weightSpan(f.faces);
+      // Lightest weight first, then the heaviest.
+      return span ? span.min * 2000 + span.max : undefined;
+    }
+    case "foundry":
+      return text(foundryOf(f));
+    case "active":
+      return activeRank(f);
+    case "format":
+      return text(formatsOf(f.faces));
+    case "source":
+      return text(ctx.sourceOf?.(f));
+    case "version":
+      return text(shortVersion(f.representative.primary.version));
+    case "designer":
+      return text(designerOf(f));
+    case "file":
+      return text(fileNameOf(f.representative.primary));
+    case "size":
+      return fileSizeOf(f.faces);
+    case "glyphs":
+      return f.representative.primary.glyphCount;
+  }
+}
+
+const compareValues = (a: string | number, b: string | number) =>
+  typeof a === "number" && typeof b === "number" ? a - b : collator.compare(String(a), String(b));
+
+/**
+ * The library's sort, run after filtering (and `ungroup`). `desc` turns the key's order round;
+ * unknown values (no foundry, no added date yet) always go last. Ties go by name A to Z, then
+ * keep the order they came in, so a family's styles stay lightest first. Name A to Z on a list
+ * that's already in that order (as `groupFamilies` leaves it) comes back as the same array.
+ */
+export function sortFamilies(families: Family[], sort: SortOrder, ctx: SortContext = {}): Family[] {
+  if (sort.key === "name" && !sort.desc && families.every((f, i) => i === 0 || collator.compare(nameKey(families[i - 1]), nameKey(f)) <= 0)) {
+    return families;
+  }
+  const sign = sort.desc ? -1 : 1;
+  const items = families.map((family, at) => ({ family, at, value: sortValue(family, sort.key, ctx), name: nameKey(family) }));
+  items.sort((a, b) => {
+    if (a.value !== b.value) {
+      if (a.value === undefined) return 1;
+      if (b.value === undefined) return -1;
+      const by = compareValues(a.value, b.value);
+      if (by !== 0) return sign * by;
+    }
+    return (sort.key === "name" ? 0 : collator.compare(a.name, b.name)) || a.at - b.at;
+  });
+  return items.map((i) => i.family);
 }
 
 const matches = (f: FontSummary, q: string) =>

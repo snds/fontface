@@ -339,6 +339,171 @@ mod library {
         assert!(folders.len() <= 3, "running twice must not duplicate folders");
     }
 
+    fn added_at(conn: &Connection, path: &Path) -> Option<i64> {
+        conn.query_row("SELECT added_at FROM fonts WHERE path = ?1", [path.to_string_lossy()], |r| r.get(0)).unwrap()
+    }
+
+    /// New fonts get their scan's start time; a scan that updates a font keeps its date.
+    #[test]
+    fn new_fonts_are_dated_by_their_scan_and_keep_the_date() {
+        let sb = Sandbox::new("added-scan");
+        let andale = sb.copy(ANDALE_MONO, "Andale.ttf");
+        let folder = sb.add_folder();
+        let before = crate::db::now();
+        sb.scan(folder);
+        let after = crate::db::now();
+        let conn = sb.conn();
+        let first = added_at(&conn, &andale).expect("a new font is dated");
+        assert!((before..=after).contains(&first), "{first} is the scan's start");
+
+        // The file changes (a longer file, a new modified time): the row is updated, not re-added.
+        conn.execute("UPDATE fonts SET added_at = 1000", []).unwrap();
+        let mut bytes = std::fs::read(&andale).unwrap();
+        bytes.extend_from_slice(&[0; 16]);
+        std::fs::write(&andale, bytes).unwrap();
+        std::process::Command::new("touch").args(["-t", "203001010000"]).arg(&andale).status().unwrap();
+        assert_eq!(sb.scan(folder).updated, 1);
+        assert_eq!(added_at(&conn, &andale), Some(1000), "an update leaves the date alone");
+
+        // A font that arrives later gets the later scan's time; the earlier one keeps its own.
+        let helvetica = sb.copy(HELVETICA_TTC, "Helvetica.ttc");
+        sb.scan(folder);
+        assert!(added_at(&conn, &helvetica).is_some_and(|t| t >= first));
+        let undated: i64 = conn.query_row("SELECT COUNT(*) FROM fonts WHERE added_at IS NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(undated, 0, "every face of the collection is dated");
+        assert_eq!(added_at(&conn, &andale), Some(1000));
+    }
+
+    /// Fonts from before `added_at` existed: the column arrives on its own, and the backfill
+    /// dates each file once, by its own date, else its folder's.
+    #[test]
+    fn older_fonts_get_their_file_date_once() {
+        let sb = Sandbox::new("added-backfill");
+        let andale = sb.copy(ANDALE_MONO, "Andale.ttf");
+        let gone = sb.copy(ANDALE_MONO, "sub/Gone.ttf");
+        let future = sb.copy(ANDALE_MONO, "Future.ttf");
+        let helvetica = sb.copy(HELVETICA_TTC, "Helvetica.ttc");
+        let folder = sb.add_folder();
+        sb.scan(folder);
+        {
+            // As a library from before: no column at all.
+            let conn = sb.conn();
+            conn.execute("UPDATE folders SET added_at = 777", []).unwrap();
+            conn.execute_batch("ALTER TABLE fonts DROP COLUMN added_at").unwrap();
+        }
+        let conn = sb.conn();
+        assert!(added_at(&conn, &andale).is_none(), "reopening adds the column back, empty");
+        drop(sb.conn()); // and a second open finds it there
+
+        let dates = |path: &Path| -> Option<i64> {
+            let name = path.file_name()?.to_str()?;
+            match name {
+                "Gone.ttf" => None,
+                "Future.ttf" => Some(i64::MAX / 2),
+                _ => Some(1_500_000_000),
+            }
+        };
+        let files = crate::db::backfill_added_at_with(&sb.db(), dates).unwrap();
+        assert_eq!(files, 4, "each file once, whatever its faces");
+        assert_eq!(added_at(&conn, &andale), Some(1_500_000_000), "the file's own date");
+        assert_eq!(added_at(&conn, &gone), Some(777), "no date for the file: its folder's");
+        let clamped = added_at(&conn, &future).unwrap();
+        assert!(clamped <= crate::db::now(), "a date in the future counts as now");
+        let faces: i64 =
+            conn.query_row("SELECT COUNT(*) FROM fonts WHERE path = ?1 AND added_at = 1500000000", [helvetica.to_string_lossy()], |r| r.get(0)).unwrap();
+        assert!(faces > 1, "every face of a collection gets the file's date");
+
+        assert_eq!(crate::db::backfill_added_at_with(&sb.db(), |_| Some(1)).unwrap(), 0, "once only");
+        assert_eq!(added_at(&conn, &andale), Some(1_500_000_000));
+
+        // The real date reader: a file's creation or modified date, never in the future.
+        conn.execute("UPDATE fonts SET added_at = NULL WHERE path = ?1", [andale.to_string_lossy()]).unwrap();
+        assert_eq!(crate::db::backfill_added_at(&sb.db()).unwrap(), 1);
+        let real = added_at(&conn, &andale).unwrap();
+        assert!(real > 1_600_000_000 && real <= crate::db::now(), "{real}");
+    }
+
+    /// The list carries what the Table shows: version, designer, foundry, glyphs, a variable
+    /// font's weights and the added date. Unknown ones are left out of the JSON.
+    #[test]
+    fn the_list_carries_the_table_fields() {
+        let sb = Sandbox::new("list-fields");
+        sb.copy(ANDALE_MONO, "Andale.ttf");
+        let sf = "/System/Library/Fonts/SFNS.ttf";
+        let variable = Path::new(sf).exists() && !scanner::parse_file(&std::fs::read(sf).unwrap()).unwrap()[0].family.starts_with('.');
+        if variable {
+            sb.copy(sf, "SFNS.ttf");
+        }
+        let folder = sb.add_folder();
+        sb.scan(folder);
+        let conn = sb.conn();
+        let fonts = db::list_fonts(&conn).unwrap();
+        let andale = fonts.iter().find(|f| f.family == "Andale Mono").unwrap();
+        let parsed = &scanner::parse_file(&std::fs::read(ANDALE_MONO).unwrap()).unwrap()[0];
+        assert_eq!(andale.version, parsed.version);
+        assert_eq!(andale.manufacturer, parsed.manufacturer);
+        assert_eq!(andale.designer, parsed.designer);
+        assert_eq!(andale.glyph_count, parsed.glyph_count);
+        assert!(andale.weight_range.is_none(), "a static font has no weight range");
+        assert!(andale.added_at.is_some());
+        let json = serde_json::to_value(andale).unwrap();
+        assert!(json.get("weightRange").is_none(), "left out, not null");
+        assert!(json["glyphCount"].as_u64().unwrap() > 100);
+        assert!(json["addedAt"].is_i64());
+
+        conn.execute("UPDATE fonts SET designer = NULL, added_at = NULL", []).unwrap();
+        let json = serde_json::to_value(&db::list_fonts(&conn).unwrap()[0]).unwrap();
+        assert!(json.get("designer").is_none() && json.get("addedAt").is_none(), "unknown fields are left out");
+
+        if variable {
+            let sf = fonts.iter().find(|f| f.variable).unwrap();
+            let [low, high] = sf.weight_range.expect("a variable font's weights");
+            assert!(low < high && low >= 1 && high <= 1000, "{low}–{high}");
+        }
+        // get_font still has everything, the list's fields included.
+        let detail = db::get_font(&conn, andale.id).unwrap().unwrap();
+        assert_eq!(detail.summary.version, andale.version);
+        let json = serde_json::to_value(&detail).unwrap();
+        assert_eq!(json.as_object().unwrap().keys().filter(|k| *k == "version").count(), 1);
+    }
+
+    /// The list is sorted in Rust, the way `ORDER BY family COLLATE NOCASE, italic, width,
+    /// weight` sorts it.
+    #[test]
+    fn the_list_comes_in_nocase_family_order() {
+        let sb = Sandbox::new("list-order");
+        let mut conn = sb.conn();
+        crate::preview::ensure_schema(&conn).unwrap();
+        let folder = db::insert_folder(&mut conn, &sb.fonts(), "user").unwrap();
+        let rows = [
+            ("zeta", 0, 5, 400),
+            ("Alpha", 1, 5, 400),
+            ("alpha", 0, 5, 700),
+            ("Alpha", 0, 3, 400),
+            ("Ärger", 0, 5, 400),
+            ("_under", 0, 5, 400),
+            ("Beta", 0, 5, 400),
+            ("ALPHA", 0, 5, 300),
+            ("1st", 0, 5, 400),
+            ("beta", 1, 5, 100),
+        ];
+        for (i, (family, italic, width, weight)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO fonts (folder_id, path, file_size, mtime, family, subfamily, weight, width, italic,
+                 monospace, variable, glyph_count, format)
+                 VALUES (?1, ?2, 1, 1, ?3, 'Regular', ?4, ?5, ?6, 0, 0, 1, 'TrueType')",
+                rusqlite::params![folder, format!("/x/{i}.ttf"), family, weight, width, italic],
+            )
+            .unwrap();
+        }
+        let ours: Vec<(String, bool, u16, u16)> =
+            db::list_fonts(&conn).unwrap().into_iter().map(|f| (f.family, f.italic, f.width, f.weight)).collect();
+        let mut stmt = conn.prepare("SELECT family, italic, width, weight FROM fonts ORDER BY family COLLATE NOCASE, italic, width, weight").unwrap();
+        let sql: Vec<(String, bool, u16, u16)> =
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+        assert_eq!(ours, sql);
+    }
+
     #[test]
     fn private_system_families_are_not_listed() {
         let sb = Sandbox::new("private");
@@ -1435,4 +1600,45 @@ fn watched_folders_cannot_nest() {
     assert!(check_not_nested(&existing, "/Users/x").is_err());
     assert!(check_not_nested(&existing, "/Users/x/Desktop").is_ok());
     assert!(check_not_nested(&existing, "/Users/x/Downloads").is_ok(), "re-adding the same folder is harmless");
+}
+
+/// How long the font list takes on a real library: the query, and the list as JSON (what goes
+/// to the window). Point it at a copy, never the live file (opening a library can add columns):
+/// `FONTFACE_BENCH_DB=/path/to/copy/library.sqlite3 cargo test --release list_fonts_timing -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn list_fonts_timing() {
+    let Some(path) = std::env::var_os("FONTFACE_BENCH_DB") else { return };
+    let conn = crate::db::open(Path::new(&path)).unwrap();
+    crate::preview::ensure_schema(&conn).unwrap();
+    // As after the first launch with added dates.
+    crate::db::backfill_added_at(Path::new(&path)).unwrap();
+    let runs = 30;
+    let (mut query, mut json, mut bytes, mut rows) = (Vec::new(), Vec::new(), 0, 0);
+    for i in 0..runs + 3 {
+        let start = std::time::Instant::now();
+        let fonts = crate::db::list_fonts(&conn).unwrap();
+        let listed = start.elapsed();
+        let payload = serde_json::to_vec(&fonts).unwrap();
+        let serialized = start.elapsed() - listed;
+        // The first few runs warm SQLite's page cache.
+        if i >= 3 {
+            query.push(listed.as_secs_f64() * 1000.0);
+            json.push(serialized.as_secs_f64() * 1000.0);
+        }
+        (bytes, rows) = (payload.len(), fonts.len());
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[v.len() / 2]
+    };
+    // The list is sorted in Rust; it must come out in SQLite's NOCASE order.
+    let ours: Vec<(String, bool, u16, u16)> =
+        crate::db::list_fonts(&conn).unwrap().into_iter().map(|f| (f.family, f.italic, f.width, f.weight)).collect();
+    let mut stmt = conn.prepare("SELECT family, italic, width, weight FROM fonts ORDER BY family COLLATE NOCASE, italic, width, weight").unwrap();
+    let sql: Vec<(String, bool, u16, u16)> =
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect();
+    assert!(ours == sql, "the list's order matches SQLite's");
+    let (q, j) = (median(&mut query), median(&mut json));
+    eprintln!("list_fonts: {rows} rows, query {q:.1} ms + JSON {j:.1} ms = {:.1} ms (median of {runs}), {bytes} bytes", q + j);
 }

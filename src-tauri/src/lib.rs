@@ -182,6 +182,22 @@ pub fn run() {
             });
             commands::restart_purchase_watcher(app.handle());
             sync::start(app.handle());
+            // "Added" dates for fonts listed before Fontface recorded them (once; see
+            // db::backfill_added_at). After the window's first list; it reloads when done.
+            {
+                let (handle, db_path) = (app.handle().clone(), db_path.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                    match db::backfill_added_at(&db_path) {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            eprintln!("fontface: dated {n} font files from before Fontface recorded when fonts were added");
+                            let _ = handle.emit("added-dates", n);
+                        }
+                        Err(e) => eprintln!("fontface: dating older fonts failed: {e}"),
+                    }
+                });
+            }
             // Preview profiles for fonts scanned before profiles existed (or after a PREVIEW_REV
             // bump). It waits a moment, so the window's first list and the launch scans go first.
             {

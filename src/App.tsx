@@ -9,11 +9,13 @@ import {
   type Folder,
   type FontSummary,
   type GoogleFamily,
+  type LibraryLayout,
   type PurchaseFind,
   type PurchaseImported,
   type ScanProgress,
   type ServiceId,
   type ServiceInfo,
+  type SortOrder,
   type SwitchOrigin,
 } from "@/api";
 import {
@@ -22,11 +24,14 @@ import {
   groupFamilies,
   INSTALLED_LABEL,
   onlyInOsFolders,
+  sortFamilies,
+  ungroup,
   viewKey,
   type Family,
   type LibraryView,
   type StatusFilter,
 } from "@/library";
+import { describeSort, layoutInfo, layoutShortcut, sizeShortcut, stepSize } from "@/viewOptions";
 import { newestWins } from "@/newestWins";
 import { listenForProfiles } from "@/previewProfiles";
 import {
@@ -46,7 +51,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { SETTINGS_BUTTON_ID, Sidebar, scanStatus } from "@/components/Sidebar";
 import { LIBRARY_SEARCH_ID, Toolbar } from "@/components/Toolbar";
-import { FontList, type ListHandle, type OpenRequest } from "@/components/FontList";
+import { LibraryPane, type ListHandle, type OpenRequest } from "@/components/library/LibraryPane";
+import { ViewOptions } from "@/components/ViewOptions";
 import { FontPage } from "@/components/fontPage/FontPage";
 import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
@@ -88,6 +94,8 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [previewText, setPreviewText] = useState("");
   const [size, setSize] = useState(32);
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
   /** Expanded families in the list, by Family.id. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [scans, setScans] = useState<Map<number, ScanProgress>>(new Map());
@@ -438,6 +446,13 @@ export default function App() {
   // "Ask me": fonts turned off while Fontface was closed are offered back once, at launch.
   useRestorePrompt(() => loadFonts().catch(() => {}));
   useSyncEvents(useCallback(() => void loadFonts().catch(() => {}), [loadFonts]));
+  // Older fonts' "Added" dates, worked out once in the background (db::backfill_added_at).
+  useEffect(() => {
+    const unlisten = listen("added-dates", () => loadFonts().catch(() => {}));
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [loadFonts]);
 
   // Cmd+, (Ctrl+, on Windows) opens settings, or goes to their search field if they're open.
   // On macOS the app menu's Settings… item has ⌘, too and sends "open-settings". The page sees
@@ -839,10 +854,60 @@ export default function App() {
   const locations = useLocations(folders, services);
   // A setting: All Fonts can leave out fonts that are only in the OS's font folders.
   const hideInstalled = settings ? !settings.showInstalledInAll : false;
-  const families = useMemo(
+  const filtered = useMemo(
     () => filterFamilies(allFamilies, view, { status, query, variableOnly, hideInstalled }, filterContext),
     [allFamilies, view, status, query, variableOnly, hideInstalled, filterContext],
   );
+  // The View options (settings): layout, grouping, sort and the Table's columns. Grouping off
+  // lists every style on its own; the sort runs after filtering.
+  const { layout, groupStyles, sort, tableColumns, tableDensity } = settings ?? DEFAULT_SETTINGS;
+  const sortContext = useMemo(() => ({ sourceOf: (f: Family) => locations.sourceOf(f.representative.primary) }), [locations]);
+  const families = useMemo(
+    () => sortFamilies(groupStyles ? filtered : ungroup(filtered), sort, sortContext),
+    // Only the Source sort reads where fonts are, so a location color change doesn't re-sort.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filtered, groupStyles, sort.key, sort.desc, sort.key === "source" ? sortContext : null],
+  );
+  const { update: updateSettings } = settingsStore;
+  const chooseLayout = useCallback(
+    (next: LibraryLayout) => {
+      updateSettings({ layout: next });
+      announce(`${layoutInfo(next).label} layout`);
+    },
+    [updateSettings, announce],
+  );
+  const chooseSort = (next: SortOrder) => {
+    updateSettings({ sort: next });
+    announce(describeSort(next));
+  };
+  const chooseGrouping = (on: boolean) => {
+    updateSettings({ groupStyles: on });
+    announce(on ? "Styles grouped into families" : "Every style listed on its own");
+  };
+  // Cmd+1/2/3 pick the layout and Cmd+= / Cmd+- step the preview size (Ctrl on Windows), while
+  // the library list is showing (not under settings, a page or a service's own page).
+  const listShowing = !settingsOpen && !pageOpen && view.kind !== "service";
+  useEffect(() => {
+    if (!listShowing) return;
+    const onKey = (e: KeyboardEvent) => {
+      const next = layoutShortcut(e, IS_MAC);
+      if (next) {
+        e.preventDefault();
+        chooseLayout(next);
+        return;
+      }
+      const step = sizeShortcut(e, IS_MAC);
+      if (step) {
+        e.preventDefault();
+        const to = stepSize(sizeRef.current, step);
+        sizeRef.current = to;
+        setSize(to);
+        announce(`Preview size ${to} pixels`);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [listShowing, chooseLayout, announce]);
   // A font page finds its family by face key, whatever the list shows (filters don't apply there).
   const familyOfFace = useMemo(() => {
     const map = new Map<string, Family>();
@@ -864,7 +929,7 @@ export default function App() {
               ? (view.path.split("/").pop() ?? "the folder")
               : { google: "Google Fonts", adobe: "Adobe Fonts", purchases: "Purchases" }[view.id];
   placeNameRef.current = placeName;
-  const styleCount = useMemo(() => families.reduce((n, f) => n + f.faces.length, 0), [families]);
+  const styleCount = useMemo(() => filtered.reduce((n, f) => n + f.faces.length, 0), [filtered]);
   const counts = useMemo(() => {
     let all = 0;
     let installed = 0;
@@ -880,7 +945,7 @@ export default function App() {
   const viewScan = view.kind === "folder" ? scans.get(view.id) : [...scans.values()][0];
   const resetKey = `${viewKey(view)}:${status}:${variableOnly}:${query}`;
   // Empty list with filters on: say which fonts were asked for, e.g. "No active variable fonts here."
-  const filtered = !!query || status !== "any" || variableOnly;
+  const filtersOn = !!query || status !== "any" || variableOnly;
   const kinds = [status !== "any" && status, variableOnly && "variable", "fonts"].filter(Boolean).join(" ");
   const where = view.kind === "tag" ? " with this tag" : view.kind === "location" ? " in this folder" : "";
   const noMatch = query ? `No ${kinds}${where} match “${query}”.` : `No ${kinds}${where || " here"}.`;
@@ -985,13 +1050,31 @@ export default function App() {
                 onVariableOnly={setVariableOnly}
                 size={size}
                 onSize={setSize}
-                familyCount={families.length}
+                familyCount={filtered.length}
                 fontCount={styleCount}
+                layout={layout}
+                onLayout={chooseLayout}
+                viewOptions={
+                  <ViewOptions
+                    layout={layout}
+                    onLayout={chooseLayout}
+                    groupStyles={groupStyles}
+                    onGroupStyles={chooseGrouping}
+                    sort={sort}
+                    onSort={chooseSort}
+                    density={tableDensity}
+                    onDensity={(d) => updateSettings({ tableDensity: d })}
+                    columns={tableColumns}
+                    onColumns={(c) => updateSettings({ tableColumns: c })}
+                  />
+                }
               />
               {families.length > 0 ? (
-                <FontList
+                <LibraryPane
                   ref={listRef}
+                  layout={layout}
                   families={families}
+                  orderKey={`${groupStyles}:${sort.key}:${sort.desc}`}
                   expanded={expanded}
                   onToggleExpanded={toggleExpanded}
                   previewText={previewText}
@@ -1002,6 +1085,13 @@ export default function App() {
                   locations={locations}
                   onActivate={setActivation}
                   onOpen={openFont}
+                  table={{
+                    sort,
+                    onSort: chooseSort,
+                    columns: tableColumns,
+                    onColumns: (c) => updateSettings({ tableColumns: c }),
+                    density: tableDensity,
+                  }}
                 />
               ) : viewScan ? (
                 <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
@@ -1015,7 +1105,7 @@ export default function App() {
                     </p>
                   )}
                 </div>
-              ) : filtered ? (
+              ) : filtersOn ? (
                 <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">{noMatch}</div>
               ) : view.kind === "tag" || view.kind === "location" ? (
                 <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">

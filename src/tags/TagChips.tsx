@@ -63,6 +63,41 @@ export function TagChips({ faces, index, max = 3, srId }: { faces: Face[]; index
 }
 
 /**
+ * The tags on some faces as colored dots (Tiles' card footer): at most `max`, then "+n". A tag
+ * only some of them have is a ring instead of a dot. Every name is in the tooltip and in the
+ * screen-reader text ("Tags: …", on `srId`), so the color is never the only sign.
+ */
+export function TagDots({ faces, index, max = 4, srId }: { faces: Face[]; index: TagIndex; max?: number; srId?: string }) {
+  const counts = new Map<number, number>();
+  for (const face of faces) for (const id of index.tagsOf(face)) counts.set(id, (counts.get(id) ?? 0) + 1);
+  if (!counts.size) return null;
+  const ordered = index.ordered.filter((n) => counts.has(n.tag.id)).map((n) => n.tag);
+  const partial = (t: Tag) => counts.get(t.id)! < faces.length;
+  const label = ordered.map((t) => (partial(t) ? `${t.name} (on ${counts.get(t.id)} of ${faces.length} styles)` : t.name)).join(", ");
+  const rest = ordered.length - max;
+  return (
+    <span className="flex shrink-0 items-center gap-1" title={ordered.map((t) => t.name).join(", ")}>
+      <span className="sr-only" id={srId}>
+        Tags: {label}.
+      </span>
+      {ordered.slice(0, max).map((t) => (
+        <span
+          key={t.id}
+          aria-hidden
+          className="size-2 rounded-full"
+          style={partial(t) ? { boxShadow: `inset 0 0 0 1.5px ${colorVar(t.color)}` } : { background: colorVar(t.color) }}
+        />
+      ))}
+      {rest > 0 && (
+        <span className="text-[11px] text-muted-foreground" aria-hidden>
+          +{rest}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
  * Small dots in the colors of the places these copies live. Several dots when copies are in
  * differently colored places. Hover lists the places. `srId` goes on the screen-reader text
  * ("In …").

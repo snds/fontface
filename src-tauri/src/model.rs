@@ -40,6 +40,22 @@ pub struct FontSummary {
     pub file_size: i64,
     /// What the OS reports right now. Can differ from `activated` if another app changed it.
     pub os_active: bool,
+    /// The font's version (name ID 5), designer (9) and foundry (8), for the Table's columns.
+    /// Left out of the list when the font doesn't say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub designer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    pub glyph_count: u16,
+    /// A variable font's weights: its `wght` axis, lowest and highest, rounded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight_range: Option<[u16; 2]>,
+    /// When the font came into the library, in Unix seconds (see `db::backfill_added_at`).
+    /// Left out until it's known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added_at: Option<i64>,
     /// What the preview draws (see preview/). None until the face has a current profile.
     pub preview: Option<crate::preview::PreviewInfo>,
 }
@@ -49,14 +65,10 @@ pub struct FontSummary {
 pub struct FontDetail {
     #[serde(flatten)]
     pub summary: FontSummary,
-    pub version: Option<String>,
-    pub designer: Option<String>,
-    pub manufacturer: Option<String>,
     pub copyright: Option<String>,
     pub license: Option<String>,
     pub license_url: Option<String>,
     pub axes: Vec<Axis>,
-    pub glyph_count: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

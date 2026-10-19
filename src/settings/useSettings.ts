@@ -30,6 +30,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tagBackups: true,
   tagBackupKeep: 10,
   fontPageTab: "specimen",
+  layout: "rows",
+  groupStyles: true,
+  sort: { key: "name", desc: false },
+  tableColumns: [],
+  tableDensity: "regular",
 };
 
 export interface Settings {

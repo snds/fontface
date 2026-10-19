@@ -202,3 +202,32 @@ test("keys: Cmd on macOS, Ctrl on Windows", () => {
   assert.equal(listKeyCommand(key("ArrowLeft", { altKey: true }), false), null);
   assert.equal(listKeyCommand(key("Enter", { metaKey: true }), true), null);
 });
+
+test("in a grid, Left and Right go item by item and Up and Down by line", () => {
+  // 10 items, 4 across: rows [0-3] [4-7] [8-9].
+  const grid = Array.from({ length: 10 }, (_, i) => `t${i}`);
+  const at = (i: number) => focusRow(NO_SELECTION, grid[i], true);
+  const go = (from: number, move: "up" | "down" | "prev" | "next") => moveFocus(at(from), grid, move, { extend: false, pageSize: 8, across: 4 }).focus;
+  assert.equal(go(5, "down"), "t9");
+  assert.equal(go(5, "up"), "t1");
+  assert.equal(go(1, "up"), "t1", "the top line stays put");
+  assert.equal(go(6, "down"), "t9", "nothing below: the last item, as in Finder");
+  assert.equal(go(9, "down"), "t9", "the last line stays put");
+  assert.equal(go(8, "down"), "t8");
+  assert.equal(go(3, "next"), "t4", "Right wraps to the next line");
+  assert.equal(go(4, "prev"), "t3");
+  assert.equal(go(0, "prev"), "t0");
+  assert.equal(moveFocus(at(1), grid, "pageDown", { extend: false, pageSize: 8, across: 4 }).focus, "t9");
+  // Shift extends from the anchor, in item order.
+  const range = moveFocus(at(1), grid, "down", { extend: true, pageSize: 8, across: 4 });
+  assert.deepEqual(keys(range), ["t1", "t2", "t3", "t4", "t5"]);
+  // In a list (across 1), Up and Down are one row, as before.
+  assert.equal(moveFocus(at(5), grid, "down", { extend: false, pageSize: 8 }).focus, "t6");
+});
+
+test("keys in a grid: Left and Right move instead of collapsing and expanding", () => {
+  assert.deepEqual(listKeyCommand(key("ArrowRight"), true, { grid: true }), { kind: "move", move: "next", extend: false });
+  assert.deepEqual(listKeyCommand(key("ArrowLeft", { shiftKey: true }), true, { grid: true }), { kind: "move", move: "prev", extend: true });
+  assert.deepEqual(listKeyCommand(key("ArrowRight"), true), { kind: "expand" });
+  assert.deepEqual(listKeyCommand(key("ArrowDown"), true, { grid: true }), { kind: "move", move: "down", extend: false });
+});

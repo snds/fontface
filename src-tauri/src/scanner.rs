@@ -316,6 +316,8 @@ pub fn scan_folder(
     let mut conn = db::open(db_path)?;
     // The scanner writes preview profiles with the fonts.
     preview::ensure_schema(&conn)?;
+    // When the fonts this scan finds came into the library (new rows only).
+    let added_at = db::now();
     let mut report = ScanReport { folder_id, ..Default::default() };
     let mut throttle = Throttle::new(PROGRESS_EVERY);
 
@@ -516,7 +518,8 @@ pub fn scan_folder(
                         }
                         match result {
                             Ok(faces) => {
-                                let written = upsert_faces(&conn, folder_id, &item.path_str, item.size, item.mtime, &faces)?;
+                                let file = FileStamp { path: &item.path_str, size: item.size, mtime: item.mtime, added_at };
+                                let written = upsert_faces(&conn, folder_id, &file, &faces)?;
                                 if written > 0 {
                                     conn.execute("DELETE FROM skipped_files WHERE path = ?1", [&item.path_str])?;
                                     if item.known { report.updated += 1 } else { report.added += 1 }
@@ -642,22 +645,26 @@ fn remember_skipped(conn: &Connection, folder_id: i64, item: &Pending, reason: &
     Ok(())
 }
 
-/// Writes every listable face of a file, with its preview profile. Returns how many rows were
-/// written.
-fn upsert_faces(
-    conn: &Connection,
-    folder_id: i64,
-    path: &str,
+/// A file the scanner writes: where it is, its size and modified time, and when a font first
+/// read from it counts as added (the scan's start).
+struct FileStamp<'a> {
+    path: &'a str,
     size: i64,
     mtime: i64,
-    faces: &[ParsedFace],
-) -> AppResult<usize> {
+    added_at: i64,
+}
+
+/// Writes every listable face of a file, with its preview profile. Returns how many rows were
+/// written. A face already in the library keeps its `added_at`; a new one gets the file's.
+fn upsert_faces(conn: &Connection, folder_id: i64, file: &FileStamp, faces: &[ParsedFace]) -> AppResult<usize> {
+    let FileStamp { path, size, mtime, added_at } = *file;
     let mut stmt = conn.prepare_cached(
         "INSERT INTO fonts (folder_id, path, face_index, file_size, mtime, family, subfamily,
             full_name, postscript_name, version, designer, manufacturer, copyright, license,
-            license_url, weight, width, italic, monospace, variable, axes, glyph_count, format)
+            license_url, weight, width, italic, monospace, variable, axes, glyph_count, format,
+            added_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-            ?18, ?19, ?20, ?21, ?22, ?23)
+            ?18, ?19, ?20, ?21, ?22, ?23, ?24)
          ON CONFLICT (path, face_index) DO UPDATE SET
             folder_id = excluded.folder_id, file_size = excluded.file_size, mtime = excluded.mtime,
             family = excluded.family, subfamily = excluded.subfamily, full_name = excluded.full_name,
@@ -682,7 +689,7 @@ fn upsert_faces(
                 folder_id, path, index as u32, size, mtime, f.family, f.subfamily, f.full_name,
                 f.postscript_name, f.version, f.designer, f.manufacturer, f.copyright, f.license,
                 f.license_url, f.weight, f.width, f.italic, f.monospace, f.variable, axes,
-                f.glyph_count, f.format
+                f.glyph_count, f.format, added_at
             ],
             |r| r.get(0),
         )?;

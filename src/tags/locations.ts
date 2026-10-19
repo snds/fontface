@@ -74,6 +74,9 @@ export interface Locations {
   colorOfCopy: (copy: FontSummary) => TagColor;
   /** Where a copy lives, in words: "Google Drive › Fonts › Inter/static". */
   describeCopy: (copy: FontSummary) => string;
+  /** Where a copy comes from, briefly (the Table's Source column): one of your folders by its
+   *  name, else the source ("Font Book", "Google Fonts", "Purchases"). */
+  sourceOf: (copy: FontSummary) => string;
   folderById: Map<number, Folder>;
   kindOf: (folder: Folder) => FolderKind;
 }
@@ -136,6 +139,12 @@ export function useLocations(folders: Folder[], services: ServiceInfo[]): Locati
       return parts.join(" › ");
     };
 
-    return { colorOf, defaultOf, colorOfCopy, describeCopy, folderById, kindOf };
+    const sourceOf = (copy: FontSummary): string => {
+      const folder = folderById.get(copy.folderId);
+      if (!folder) return "";
+      return folder.kind === "user" ? folder.label : kindOf(folder).source;
+    };
+
+    return { colorOf, defaultOf, colorOfCopy, describeCopy, sourceOf, folderById, kindOf };
   }, [folders, services, locationColors]);
 }

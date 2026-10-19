@@ -138,7 +138,25 @@ pub fn open(path: &Path) -> AppResult<Connection> {
     conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
     migrate(&conn)?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    ensure_schema(&conn)?;
     Ok(conn)
+}
+
+/// Columns added to `fonts` after the numbered migrations, the way the tag tables add theirs
+/// (`tags::ensure_column`): idempotent, so a library from any build opens. Run by `open` itself,
+/// not once at launch, because the list query reads them and the scanner, the backfills, sync
+/// and tests each open their own connection. The first open after an update adds the column (a
+/// quick schema change); later ones only look.
+///
+/// - `added_at`: when the font came into the library (Unix seconds). A new row gets its scan's
+///   start time; a scan that updates a row leaves it alone. Null for rows from before it
+///   existed, until `backfill_added_at` dates them.
+///
+/// A future migration that rebuilds `fonts` must list these columns too (v3's `SELECT *` would
+/// break on them).
+fn ensure_schema(conn: &Connection) -> AppResult<()> {
+    crate::tags::ensure_column(conn, "fonts", "added_at", "added_at INTEGER")?;
+    Ok(())
 }
 
 fn migrate(conn: &Connection) -> AppResult<()> {
@@ -231,7 +249,8 @@ pub fn ui_write_waiting() -> bool {
     UI_WRITES_WAITING.load(Ordering::SeqCst) > 0
 }
 
-fn now() -> i64 {
+/// Unix seconds now.
+pub(crate) fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
@@ -389,19 +408,24 @@ pub fn other_roots(conn: &Connection, except: i64) -> AppResult<Vec<PathBuf>> {
     Ok(rows.map(|r| r.map(PathBuf::from)).collect::<Result<_, _>>()?)
 }
 
-/// The list columns: the font's own (18), then its preview profile's (`preview::COLUMNS`).
+/// The list columns: the font's own (24), then its preview profile's (`preview::COLUMNS`). A
+/// static font's axes are always empty, so only a variable font's are read (for its weights).
 fn summary_columns() -> String {
     format!(
         "fonts.id, fonts.folder_id, fonts.path, fonts.face_index, fonts.family, \
          fonts.subfamily, fonts.full_name, fonts.postscript_name, fonts.weight, fonts.width, fonts.italic, \
          fonts.monospace, fonts.variable, fonts.format, fonts.activated, folders.kind = 'system', \
-         fonts.mtime, fonts.file_size, {}",
+         fonts.mtime, fonts.file_size, fonts.version, fonts.designer, fonts.manufacturer, \
+         fonts.glyph_count, CASE WHEN fonts.variable THEN fonts.axes END, fonts.added_at, {}",
         crate::preview::COLUMNS
     )
 }
 
+/// How many of `summary_columns` are the font's own, before the profile's.
+const FONT_COLUMNS: usize = 24;
+
 /// How many columns `summary_columns` lists.
-const SUMMARY_LEN: usize = 18 + crate::preview::COLUMN_COUNT;
+const SUMMARY_LEN: usize = FONT_COLUMNS + crate::preview::COLUMN_COUNT;
 
 /// Fonts with their folder, and their preview profile if it's current (a stale one reads as none).
 fn summary_from() -> String {
@@ -440,25 +464,48 @@ pub fn summary_from_row(r: &Row) -> rusqlite::Result<FontSummary> {
         mtime: r.get(16)?,
         file_size: r.get(17)?,
         os_active: false,
-        preview: crate::preview::info_from_row(r, 18)?,
+        version: r.get(18)?,
+        designer: r.get(19)?,
+        manufacturer: r.get(20)?,
+        glyph_count: r.get(21)?,
+        weight_range: weight_range(r.get::<_, Option<String>>(22)?.as_deref()),
+        added_at: r.get(23)?,
+        preview: crate::preview::info_from_row(r, FONT_COLUMNS)?,
     })
 }
 
+/// A variable font's lowest and highest weight, from its stored axes (`fonts.axes`, JSON).
+fn weight_range(axes: Option<&str>) -> Option<[u16; 2]> {
+    let axes: Vec<Axis> = serde_json::from_str(axes?).ok()?;
+    let wght = axes.iter().find(|a| a.tag == "wght")?;
+    let weight = |v: f32| v.round().clamp(1.0, 1000.0) as u16;
+    Some([weight(wght.min.min(wght.max)), weight(wght.max.max(wght.min))])
+}
+
+/// Every font, by family (ignoring ASCII case, as `COLLATE NOCASE` does), then italic, width
+/// and weight; ties in the order they were added. Sorted here rather than in SQL: SQLite's sort
+/// would carry every column of every row through its sorter, which costs more than the query.
 pub fn list_fonts(conn: &Connection) -> AppResult<Vec<FontSummary>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {} FROM {} \
-         ORDER BY fonts.family COLLATE NOCASE, fonts.italic, fonts.width, fonts.weight",
-        summary_columns(),
-        summary_from()
-    ))?;
+    let mut stmt = conn.prepare(&format!("SELECT {} FROM {} ORDER BY fonts.id", summary_columns(), summary_from()))?;
     let rows = stmt.query_map([], summary_from_row)?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    let mut fonts: Vec<FontSummary> = rows.collect::<Result<_, _>>()?;
+    fonts.sort_by(|a, b| {
+        nocase(&a.family, &b.family)
+            .then(a.italic.cmp(&b.italic))
+            .then(a.width.cmp(&b.width))
+            .then(a.weight.cmp(&b.weight))
+    });
+    Ok(fonts)
+}
+
+/// SQLite's NOCASE order: bytes compared with ASCII letters folded to lowercase.
+fn nocase(a: &str, b: &str) -> std::cmp::Ordering {
+    a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
 }
 
 pub fn get_font(conn: &Connection, id: i64) -> AppResult<Option<FontDetail>> {
     let sql = format!(
-        "SELECT {}, fonts.version, fonts.designer, fonts.manufacturer, fonts.copyright, \
-         fonts.license, fonts.license_url, fonts.axes, fonts.glyph_count \
+        "SELECT {}, fonts.copyright, fonts.license, fonts.license_url, fonts.axes \
          FROM {} WHERE fonts.id = ?1",
         summary_columns(),
         summary_from()
@@ -467,16 +514,80 @@ pub fn get_font(conn: &Connection, id: i64) -> AppResult<Option<FontDetail>> {
     let mut rows = stmt.query([id])?;
     let Some(r) = rows.next()? else { return Ok(None) };
     let n = SUMMARY_LEN;
-    let axes_json: String = r.get(n + 6)?;
+    let axes_json: String = r.get(n + 3)?;
     Ok(Some(FontDetail {
         summary: summary_from_row(r)?,
-        version: r.get(n)?,
-        designer: r.get(n + 1)?,
-        manufacturer: r.get(n + 2)?,
-        copyright: r.get(n + 3)?,
-        license: r.get(n + 4)?,
-        license_url: r.get(n + 5)?,
+        copyright: r.get(n)?,
+        license: r.get(n + 1)?,
+        license_url: r.get(n + 2)?,
         axes: serde_json::from_str::<Vec<Axis>>(&axes_json).unwrap_or_default(),
-        glyph_count: r.get(n + 7)?,
     }))
+}
+
+// ------------------------------------------------------------------------------- added dates
+
+/// Dates fonts listed before Fontface recorded `added_at`: each file's creation date (its
+/// modified date where the disk keeps none), else the date its folder was added. Reading a
+/// file's dates is a metadata lookup: it works on online-only files without downloading them,
+/// and Creative Cloud's files (which the library never lists) aren't looked at. Once at launch,
+/// in the background, on its own connection. Every row it dates stops being null, so later
+/// launches find nothing to do (one quick query).
+///
+/// The lookups happen before any writing, so a slow disk never holds a lock. Then the dates are
+/// saved in short transactions, each in the scan write turn and after any waiting UI write,
+/// like the preview backfill. Returns how many files it dated.
+pub fn backfill_added_at(db_path: &Path) -> AppResult<usize> {
+    backfill_added_at_with(db_path, file_date)
+}
+
+/// `backfill_added_at`, reading each file's date with `date_of` (tests pass their own).
+pub(crate) fn backfill_added_at_with(db_path: &Path, date_of: impl Fn(&Path) -> Option<i64>) -> AppResult<usize> {
+    let mut conn = open(db_path)?;
+    let undated: Vec<(String, i64)> = {
+        let mut stmt = conn.prepare(
+            "SELECT fonts.path, MIN(folders.added_at) FROM fonts JOIN folders ON folders.id = fonts.folder_id \
+             WHERE fonts.added_at IS NULL GROUP BY fonts.path",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    if undated.is_empty() {
+        return Ok(0);
+    }
+    let latest = now();
+    let dated: Vec<(String, i64)> = undated
+        .into_iter()
+        .map(|(path, folder_added)| {
+            let at = date_of(Path::new(&path)).filter(|&t| t > 0).map_or(folder_added, |t| t.min(latest));
+            (path, at)
+        })
+        .collect();
+    for chunk in dated.chunks(ADDED_AT_CHUNK) {
+        while ui_write_waiting() {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let _turn = scan_write_turn();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached("UPDATE fonts SET added_at = ?1 WHERE path = ?2 AND added_at IS NULL")?;
+            for (path, at) in chunk {
+                stmt.execute(params![at, path])?;
+            }
+        }
+        tx.commit()?;
+    }
+    Ok(dated.len())
+}
+
+/// Files dated per transaction, so a click waits at most for one short one.
+const ADDED_AT_CHUNK: usize = 500;
+
+/// A file's creation date (or modified date) in Unix seconds, from its metadata only.
+fn file_date(path: &Path) -> Option<i64> {
+    if crate::services::adobe::is_adobe_path(path) {
+        return None;
+    }
+    let meta = std::fs::metadata(path).ok()?;
+    let time = meta.created().or_else(|_| meta.modified()).ok()?;
+    time.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
 }

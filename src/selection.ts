@@ -6,7 +6,8 @@
  * - A click selects one row. Cmd-click (Ctrl-click on Windows) adds or removes a row,
  *   Shift-click selects a range from the anchor, and Cmd-Shift-click adds that range.
  * - Arrow keys, Home/End and Page Up/Down move the focused row and select it; with Shift they
- *   extend the selection from the anchor instead. Space adds or removes the focused row.
+ *   extend the selection from the anchor instead. Space adds or removes the focused row. In a
+ *   grid (Tiles), Left and Right go to the previous and next item and Up and Down a whole line.
  * - Rows are remembered by key, so a reload or an expanded family doesn't shift the selection.
  *   Rows that leave the list leave the selection for good; focus moves to a neighbor.
  * - Opening (double-click or Return) isn't part of the selection: the list does that.
@@ -144,26 +145,37 @@ export function focusRow(sel: Selection, key: string, select: boolean): Selectio
   return { keys: new Set([key]), anchor: key, focus: key };
 }
 
-export type MoveCommand = "up" | "down" | "home" | "end" | "pageUp" | "pageDown";
+export type MoveCommand = "up" | "down" | "prev" | "next" | "home" | "end" | "pageUp" | "pageDown";
 
 export interface MoveOptions {
   /** Shift: extend the selection from the anchor instead of selecting one row. */
   extend: boolean;
-  /** Rows on one screen, for Page Up and Page Down. */
+  /** Items on one screen, for Page Up and Page Down. */
   pageSize: number;
+  /** Items on one line: Up and Down move this many (a grid's columns). 1 in a list. */
+  across?: number;
 }
 
-export function moveFocus(sel: Selection, order: readonly string[], move: MoveCommand, { extend, pageSize }: MoveOptions): Selection {
+export function moveFocus(sel: Selection, order: readonly string[], move: MoveCommand, { extend, pageSize, across = 1 }: MoveOptions): Selection {
   const n = order.length;
   if (!n) return sel;
   const cur = currentIndex(sel, order);
   const page = Math.max(1, pageSize);
+  const line = Math.max(1, across);
   let to: number;
   switch (move) {
     case "up":
-      to = cur < 0 ? 0 : cur - 1;
+      // The top line stays where it is.
+      to = cur < 0 ? 0 : cur - line >= 0 ? cur - line : cur;
       break;
     case "down":
+      // Below the end of a grid's last full line, the last item (as in Finder); on the last line, stay.
+      to = cur < 0 ? 0 : cur + line < n ? cur + line : Math.floor((n - 1) / line) > Math.floor(cur / line) ? n - 1 : cur;
+      break;
+    case "prev":
+      to = cur < 0 ? 0 : cur - 1;
+      break;
+    case "next":
       to = cur + 1;
       break;
     case "pageUp":
@@ -218,9 +230,10 @@ const MOVES: Record<string, MoveCommand> = {
 
 /**
  * What a key does in a library list. `mac`: Cmd is the command key (Ctrl on Windows), and
- * Cmd-Up/Down go to the first and last row, as in Finder.
+ * Cmd-Up/Down go to the first and last row, as in Finder. `grid`: Left and Right move to the
+ * previous and next item (Tiles, where nothing expands) instead of collapsing and expanding.
  */
-export function listKeyCommand(e: ListKey, mac: boolean): ListCommand | null {
+export function listKeyCommand(e: ListKey, mac: boolean, { grid = false }: { grid?: boolean } = {}): ListCommand | null {
   const command = mac ? e.metaKey : e.ctrlKey;
   const other = mac ? e.ctrlKey : e.metaKey;
   if (e.altKey || other) return null;
@@ -232,6 +245,7 @@ export function listKeyCommand(e: ListKey, mac: boolean): ListCommand | null {
   }
   const move = MOVES[e.key];
   if (move) return { kind: "move", move, extend: e.shiftKey };
+  if (grid && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return { kind: "move", move: e.key === "ArrowLeft" ? "prev" : "next", extend: e.shiftKey };
   if (e.shiftKey) return null;
   switch (e.key) {
     case "Enter":

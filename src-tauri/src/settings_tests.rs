@@ -12,7 +12,10 @@ use serde_json::json;
 use crate::{
     activation::{launch_plan, temporary_after_swap, turn_on_plan, LaunchPlan, Scope, TurnOn},
     backups, db,
-    settings::{self, ActivationMode, AppSettings, FontPageTab, RestorePolicy, SidebarSections, Theme},
+    settings::{
+        self, ActivationMode, AppSettings, FontPageTab, Layout, RestorePolicy, SidebarSections, SortKey, SortOrder, TableColumn,
+        TableDensity, Theme,
+    },
     tags,
     window::{self, DoubleClick},
 };
@@ -51,6 +54,11 @@ fn defaults_match_the_spec() {
     assert!(d.tag_backups);
     assert_eq!(d.tag_backup_keep, 10);
     assert_eq!(d.font_page_tab, FontPageTab::Specimen);
+    assert_eq!(d.layout, Layout::Rows, "Rows stays the default layout");
+    assert!(d.group_styles);
+    assert_eq!(d.sort, SortOrder { key: SortKey::Name, desc: false });
+    assert!(d.table_columns.is_empty(), "no saved columns: the UI's defaults");
+    assert_eq!(d.table_density, TableDensity::Regular);
 }
 
 #[test]
@@ -73,7 +81,12 @@ fn serializes_in_the_shape_the_ui_expects() {
             "restoreOnLaunch": "always",
             "tagBackups": true,
             "tagBackupKeep": 10,
-            "fontPageTab": "specimen"
+            "fontPageTab": "specimen",
+            "layout": "rows",
+            "groupStyles": true,
+            "sort": { "key": "name", "desc": false },
+            "tableColumns": [],
+            "tableDensity": "regular"
         })
     );
 }
@@ -191,6 +204,94 @@ fn bad_values_are_refused_in_plain_words_and_change_nothing() {
 }
 
 #[test]
+fn view_options_change_by_patch_and_refuse_bad_values() {
+    let d = AppSettings::default();
+    let after = settings::apply_patch(&d, &json!({ "layout": "tiles", "groupStyles": false, "tableDensity": "compact" })).unwrap();
+    assert_eq!((after.layout, after.group_styles, after.table_density), (Layout::Tiles, false, TableDensity::Compact));
+    assert_eq!(AppSettings { layout: Layout::Rows, group_styles: true, table_density: TableDensity::Regular, ..after }, d);
+
+    // The sort: a key, and a direction that defaults to the usual one.
+    let sorted = settings::apply_patch(&d, &json!({ "sort": { "key": "weight", "desc": true } })).unwrap();
+    assert_eq!(sorted.sort, SortOrder { key: SortKey::Weight, desc: true });
+    let plain = settings::apply_patch(&sorted, &json!({ "sort": { "key": "glyphs" } })).unwrap();
+    assert_eq!(plain.sort, SortOrder { key: SortKey::Glyphs, desc: false });
+    for key in ["name", "added", "styles", "weight", "foundry", "active", "format", "source", "version", "designer", "file", "size", "glyphs"] {
+        let s = settings::apply_patch(&d, &json!({ "sort": { "key": key } })).unwrap();
+        assert_eq!(serde_json::to_value(s.sort).unwrap()["key"], json!(key), "every sort key round-trips");
+    }
+
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "layout": "grid" }))), "The layout must be “tiles”, “rows” or “table”");
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "groupStyles": 1 }))), "“Group styles into families” must be on or off");
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "tableDensity": "airy" }))), "Table density must be “compact” or “regular”");
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "sort": "name" }))), "The sort must say what to sort by");
+    assert!(error_text(settings::apply_patch(&d, &json!({ "sort": { "key": "colour" } }))).starts_with("The sort must be “name”, “added”"));
+    assert!(settings::apply_patch(&d, &json!({ "sort": { "key": "name", "desc": "yes" } })).is_err());
+    // A refused value changes nothing, even next to a good one.
+    assert!(settings::apply_patch(&d, &json!({ "layout": "table", "sort": {} })).is_err());
+}
+
+#[test]
+fn table_columns_are_checked_kept_in_order_and_clamped() {
+    let d = AppSettings::default();
+    let patch = json!({ "tableColumns": [
+        { "id": "name", "shown": true, "width": 4000 },
+        { "id": "preview", "shown": false },
+        { "id": "fromTheFuture", "shown": true, "width": 3 },
+        { "id": "name", "shown": false, "width": 100 },
+        { "id": "added", "shown": true, "width": 120.4 }
+    ] });
+    let after = settings::apply_patch(&d, &patch).unwrap();
+    assert_eq!(
+        after.table_columns,
+        vec![
+            TableColumn { id: "name".into(), shown: true, width: Some(1200) },
+            TableColumn { id: "preview".into(), shown: false, width: None },
+            // An id the UI doesn't know yet is kept for the version that does.
+            TableColumn { id: "fromTheFuture".into(), shown: true, width: Some(32) },
+            TableColumn { id: "added".into(), shown: true, width: Some(120) },
+        ],
+        "widths pulled into range, the second \"name\" dropped"
+    );
+    // Too many: the rest are dropped.
+    let many: Vec<_> = (0..60).map(|i| json!({ "id": format!("c{i}"), "shown": true })).collect();
+    let capped = settings::apply_patch(&d, &json!({ "tableColumns": many })).unwrap();
+    assert_eq!(capped.table_columns.len(), settings::MAX_COLUMNS);
+    // An empty list means the defaults again.
+    assert!(settings::apply_patch(&after, &json!({ "tableColumns": [] })).unwrap().table_columns.is_empty());
+
+    for bad in [
+        json!({ "tableColumns": {} }),
+        json!({ "tableColumns": ["name"] }),
+        json!({ "tableColumns": [{ "shown": true }] }),
+        json!({ "tableColumns": [{ "id": "", "shown": true }] }),
+        json!({ "tableColumns": [{ "id": "a b", "shown": true }] }),
+        json!({ "tableColumns": [{ "id": "name" }] }),
+        json!({ "tableColumns": [{ "id": "name", "shown": true, "width": "wide" }] }),
+    ] {
+        assert!(settings::apply_patch(&d, &bad).is_err(), "{bad} is refused");
+    }
+
+    // Stored and read back, as saved.
+    let dir = temp("columns");
+    let mut conn = db::open(&dir.join("library.sqlite3")).unwrap();
+    settings::ensure_schema(&conn).unwrap();
+    let mut custom = after.clone();
+    custom.layout = Layout::Table;
+    custom.sort = SortOrder { key: SortKey::Foundry, desc: true };
+    settings::save(&mut conn, &custom).unwrap();
+    assert_eq!(settings::load(&conn).unwrap(), custom);
+    // Settings saved before the View options existed take their defaults.
+    conn.execute("DELETE FROM app_settings WHERE key IN ('layout', 'sort', 'tableColumns', 'groupStyles', 'tableDensity')", []).unwrap();
+    let old = settings::load(&conn).unwrap();
+    assert_eq!((old.layout, old.sort, old.group_styles, old.table_density), (Layout::Rows, SortOrder::default(), true, TableDensity::Regular));
+    assert!(old.table_columns.is_empty());
+    // A damaged sort row is skipped without touching the rest.
+    conn.execute("INSERT INTO app_settings (key, value) VALUES ('sort', '{\"key\":\"sideways\"}')", []).unwrap();
+    assert_eq!(settings::load(&conn).unwrap().sort, SortOrder::default());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn preview_text_has_a_length_limit() {
     let d = AppSettings::default();
     let ok = "é".repeat(settings::MAX_PREVIEW_TEXT);
@@ -221,6 +322,14 @@ fn every_setting_can_be_changed_by_a_patch() {
         tag_backups: false,
         tag_backup_keep: 3,
         font_page_tab: FontPageTab::Characters,
+        layout: Layout::Table,
+        group_styles: false,
+        sort: SortOrder { key: SortKey::Added, desc: true },
+        table_columns: vec![
+            TableColumn { id: "name".into(), shown: true, width: Some(280) },
+            TableColumn { id: "preview".into(), shown: false, width: None },
+        ],
+        table_density: TableDensity::Compact,
     };
     let patch = serde_json::to_value(&custom).unwrap();
     assert_eq!(settings::apply_patch(&AppSettings::default(), &patch).unwrap(), custom);

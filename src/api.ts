@@ -35,6 +35,17 @@ export interface FontSummary {
   fileSize: number;
   /** What macOS reports right now. Drives the switches. */
   osActive: boolean;
+  /** The font's own version string, designer and foundry (name IDs 5, 9 and 8): the Table's
+   *  columns. Left out when the font doesn't say. */
+  version?: string;
+  designer?: string;
+  manufacturer?: string;
+  glyphCount: number;
+  /** A variable font's lowest and highest weight (its wght axis). */
+  weightRange?: [number, number];
+  /** When the font came into the library, in Unix seconds. Fonts from before Fontface recorded
+   *  it carry their file's date; left out until that's known. */
+  addedAt?: number;
   /** What the preview draws (src-tauri/src/preview). Null until the face has a current profile:
    *  the list then asks for one (`previewProfiles`) and draws the name meanwhile. */
   preview: PreviewInfo | null;
@@ -121,15 +132,12 @@ export interface Axis {
   hidden: boolean;
 }
 
+/** `getFont`: the list's fields (version, designer and foundry among them) and the rest. */
 export interface FontDetail extends FontSummary {
-  version: string | null;
-  designer: string | null;
-  manufacturer: string | null;
   copyright: string | null;
   license: string | null;
   licenseUrl: string | null;
   axes: Axis[];
-  glyphCount: number;
 }
 
 export interface ScanProgress {
@@ -347,6 +355,37 @@ export type RestorePolicy = "always" | "ask" | "never";
 /** A font page's tabs. "axes" shows only for variable styles (the page falls back to "specimen"). */
 export type FontPageTab = "specimen" | "characters" | "axes" | "info";
 
+/** How the library lists fonts: a grid of cards, the list of rows, or a sortable table. */
+export type LibraryLayout = "tiles" | "rows" | "table";
+/** What the library is sorted by: the View options' choices, and the Table's other columns. */
+export type SortKey =
+  | "name"
+  | "added"
+  | "styles"
+  | "weight"
+  | "foundry"
+  | "active"
+  | "format"
+  | "source"
+  | "version"
+  | "designer"
+  | "file"
+  | "size"
+  | "glyphs";
+/** `desc`: the other way round from smallest to largest (Z to A, newest first, most first). */
+export interface SortOrder {
+  key: SortKey;
+  desc: boolean;
+}
+export type TableDensity = "compact" | "regular";
+/** One Table column, in the order shown. `width` only once it has been dragged. The ids belong to
+ *  src/components/library/columns.ts; ones it doesn't know are ignored. */
+export interface TableColumnSetting {
+  id: string;
+  shown: boolean;
+  width?: number;
+}
+
 export interface SidebarSections {
   fontBook: boolean;
   google: boolean;
@@ -379,6 +418,14 @@ export interface AppSettings {
   tagBackupKeep: number;
   /** The font page tab used last; the next font page opens on it. */
   fontPageTab: FontPageTab;
+  /** The View options (the toolbar's layout switch too). */
+  layout: LibraryLayout;
+  /** Off: every style is its own item, "Family Style". */
+  groupStyles: boolean;
+  sort: SortOrder;
+  /** Empty: the default columns. */
+  tableColumns: TableColumnSetting[];
+  tableDensity: TableDensity;
 }
 
 /** Only the keys given change; `sidebar` may be partial too. */

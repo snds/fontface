@@ -66,6 +66,81 @@ pub enum FontPageTab {
     Info,
 }
 
+/// How the library lists fonts: a grid of cards, the list of rows, or a table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout {
+    Tiles,
+    #[default]
+    Rows,
+    Table,
+}
+
+/// What the library is sorted by: the View options' choices, and the Table's other columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortKey {
+    #[default]
+    Name,
+    Added,
+    Styles,
+    Weight,
+    Foundry,
+    Active,
+    Format,
+    Source,
+    Version,
+    Designer,
+    File,
+    Size,
+    Glyphs,
+}
+
+const SORT_KEYS: &[(&str, SortKey)] = &[
+    ("name", SortKey::Name),
+    ("added", SortKey::Added),
+    ("styles", SortKey::Styles),
+    ("weight", SortKey::Weight),
+    ("foundry", SortKey::Foundry),
+    ("active", SortKey::Active),
+    ("format", SortKey::Format),
+    ("source", SortKey::Source),
+    ("version", SortKey::Version),
+    ("designer", SortKey::Designer),
+    ("file", SortKey::File),
+    ("size", SortKey::Size),
+    ("glyphs", SortKey::Glyphs),
+];
+
+/// The library's sort: a key, and whether it runs the other way (Z–A, oldest first…).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SortOrder {
+    pub key: SortKey,
+    pub desc: bool,
+}
+
+/// How tall the Table's rows are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TableDensity {
+    Compact,
+    #[default]
+    Regular,
+}
+
+/// One of the Table's columns, in the order shown: whether it shows, and its width if the user
+/// dragged it. The ids belong to the UI (src/components/library/columns.ts), which drops any it
+/// doesn't know, so a column from a newer Fontface survives here untouched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableColumn {
+    pub id: String,
+    pub shown: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+}
+
 /// Which sections the sidebar shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -112,6 +187,14 @@ pub struct AppSettings {
     pub tag_backup_keep: u32,
     /// Remembered by the UI, not chosen in the settings screen.
     pub font_page_tab: FontPageTab,
+    /// The View options (and the toolbar's layout switch). Also remembered by the UI.
+    pub layout: Layout,
+    /// Off: every style is listed on its own, as "Family Style".
+    pub group_styles: bool,
+    pub sort: SortOrder,
+    /// Empty: the UI's default columns.
+    pub table_columns: Vec<TableColumn>,
+    pub table_density: TableDensity,
 }
 
 impl Default for AppSettings {
@@ -132,11 +215,20 @@ impl Default for AppSettings {
             tag_backups: true,
             tag_backup_keep: 10,
             font_page_tab: FontPageTab::Specimen,
+            layout: Layout::Rows,
+            group_styles: true,
+            sort: SortOrder::default(),
+            table_columns: Vec::new(),
+            table_density: TableDensity::Regular,
         }
     }
 }
 
 pub const PREVIEW_SIZE: RangeInclusive<u32> = 10..=128;
+/// A Table column's width in px.
+pub const COLUMN_WIDTH: RangeInclusive<u32> = 32..=1200;
+/// At most this many Table columns are kept.
+pub const MAX_COLUMNS: usize = 40;
 pub const BACKUP_KEEP: RangeInclusive<u32> = 1..=50;
 pub const MAX_PREVIEW_TEXT: usize = 500;
 
@@ -212,10 +304,55 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
                 ],
             )?
         }
+        "layout" => {
+            s.layout = choice(value, "The layout", &[("tiles", Layout::Tiles), ("rows", Layout::Rows), ("table", Layout::Table)])?
+        }
+        "groupStyles" => s.group_styles = flag(value, "Group styles into families")?,
+        "sort" => s.sort = sort_order(value)?,
+        "tableColumns" => s.table_columns = table_columns(value)?,
+        "tableDensity" => {
+            s.table_density =
+                choice(value, "Table density", &[("compact", TableDensity::Compact), ("regular", TableDensity::Regular)])?
+        }
         // A setting from a newer Fontface, or a typo: ignored.
         _ => {}
     }
     Ok(())
+}
+
+/// `{ key, desc }`: the key is required, the direction defaults to the usual one.
+fn sort_order(value: &Value) -> AppResult<SortOrder> {
+    let order = value.as_object().ok_or_else(|| invalid("The sort must say what to sort by"))?;
+    let key = choice(order.get("key").unwrap_or(&Value::Null), "The sort", SORT_KEYS)?;
+    let desc = match order.get("desc") {
+        None | Some(Value::Null) => false,
+        Some(v) => flag(v, "Reverse the sort")?,
+    };
+    Ok(SortOrder { key, desc })
+}
+
+/// A list of `{ id, shown, width? }`. Widths are pulled into range; a column listed twice keeps
+/// its first place; past `MAX_COLUMNS` the rest are dropped.
+fn table_columns(value: &Value) -> AppResult<Vec<TableColumn>> {
+    let bad = || invalid("Table columns must be a list of columns, each with a name and whether it shows");
+    let list = value.as_array().ok_or_else(bad)?;
+    let mut columns: Vec<TableColumn> = Vec::new();
+    for item in list {
+        let column = item.as_object().ok_or_else(bad)?;
+        let id = column.get("id").and_then(Value::as_str).ok_or_else(bad)?;
+        if id.is_empty() || id.len() > 32 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err(bad());
+        }
+        let shown = flag(column.get("shown").unwrap_or(&Value::Null), "Each table column")?;
+        let width = match column.get("width") {
+            None | Some(Value::Null) => None,
+            Some(w) => Some(number(w, "A column's width", COLUMN_WIDTH)?),
+        };
+        if columns.len() < MAX_COLUMNS && !columns.iter().any(|c| c.id == id) {
+            columns.push(TableColumn { id: id.to_string(), shown, width });
+        }
+    }
+    Ok(columns)
 }
 
 fn flag(value: &Value, label: &str) -> AppResult<bool> {

@@ -20,7 +20,7 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | On/off results confirmed with macOS | ✅ | ⬜ | Explains when another app or Font Book keeps a font on/off |
 | Duplicate copies shown as one style | ✅ | ⬜ | "×N" badge; turning on registers one preferred copy, turning off covers all copies |
 | Online-only files never stall a scan | ✅ | ⬜ | Fast readers skip them instantly; 3 background downloaders fetch them |
-| Group by family, expand to styles | ✅ | ⬜ | Representative face = closest to Regular |
+| Group by family, expand to styles | ✅ | ⬜ | Representative face = closest to Regular. Grouping can be turned off in View options |
 | Custom preview text + size | ✅ | ⬜ | An icon shows when the typed text uses characters the font doesn't have ("Not in this font: …") |
 | Previews for symbol, icon, Expert and script fonts | 🟡 | ⬜ | A font that can't draw its name shows its name tidied (™ dropped, "-" as a space) or in capitals or lowercase, its own sample text, or a run of its real characters with a quiet badge: Symbols, Expert set, the script's name, or Partial set. Expert sets are found by their shared placeholder shape, empty letter slots or Expert glyph names, plus "Expert"/"Exp" in a name. Icon fonts that can draw their names, but whose names say icons and that hold a big private-use icon set (Material Symbols, Google Symbols), show their icons too. Families show a style that can draw its name. Worked out by the scanner, once in the background for fonts scanned before, and on demand; online-only and Adobe files are never read for it. A file that's slow or stuck (say on a network share that stopped answering) never holds up other rows: a preview waits at most 300 ms for its profile, then shows the name (here and on the Google Fonts page). Not yet checked in the running app |
 | Previews never clipped; baselines line up | 🟡 | ⬜ | Tall fonts (LI Glyphs, Zapfino, Christiana) are fitted into the row instead of cut off: moved, and shrunk (to half size at most) only when taller than the row. Baselines sit at the same height from row to row. Also in the Google Fonts and Adobe Fonts lists. Not yet checked in the running app |
@@ -67,6 +67,24 @@ browser against a stand-in back end; not yet checked in the running app.
 | Back | 🟡 | ⬜ | The Back button, Cmd+[ (Alt+Left on Windows), the mouse's back button where the system passes it on, and Esc when focus isn't in a text field, menu or popover (in a text field Esc leaves the field first). The list comes back at the same scroll position, with the row that opened the page focused, and "Back to …" is announced. If that row has left the list meanwhile (a filter, or a tag removed on the page), the row that took its place is focused instead. A sidebar click closes the page instead; the list falling back to All Fonts by itself (a deleted or hidden tag, a removed folder) keeps it. Cmd+F leaves the page and puts focus in Search |
 | Keyboard in the list | 🟡 | ⬜ | The list is one Tab stop (plus the active row's expand, tag and on/off controls). Up/Down, Home/End and Page Up/Down move and select (Shift extends; Cmd-Up/Down go to the ends), Space adds or removes a row, Right and Left expand and collapse a family, Return opens, Cmd-A selects all, Esc clears, Shift-F10 opens the active row's menu. Tabbing into the list, or any of these keys, brings its active row back into view if it was scrolled away; while it's out of sight, the ring shows on the list. Focus on a row that leaves the list moves to a neighbor (a collapsed family's row, or the row that took its place). Screen readers hear each row's name, style count and on/off state, then its places, marks (Mono, duplicates, copies, a sample preview), missing characters and tags |
 | The font leaves the library while its page is open | 🟡 | ⬜ | The page says "This font isn't in your library anymore" and offers Back. A rescan or a removed folder can cause this |
+
+## Tiles, Table and View options (2026-10-18)
+
+The second stage of the library redesign. Checked with unit tests (`npm run test:ui`, `cargo
+test`) and in a browser against a stand-in back end with 12,000 families; not yet checked in the
+running app.
+
+| Feature | macOS | Windows | Notes |
+|---|---|---|---|
+| Three layouts: Tiles, Rows, Table | 🟡 | ⬜ | A switch at the right of the toolbar (it folds into View options when the toolbar is narrower than about 800px), Cmd+1, Cmd+2 and Cmd+3, or View options. Saved as a setting, so it survives a relaunch; Rows stays the default. Selecting, the keyboard, double-click or Return to open, right-click menus, dragging onto tags, previews, badges, locks and switches work the same in all three. Switching keeps the selection (a selected style becomes its family in Tiles), brings it into view, and keeps keyboard focus in the list. Every layout draws only what's on screen |
+| Tiles | 🟡 | ⬜ | A grid of cards: name, style count and a small switch or lock; one fitted preview line; places, up to 4 tag dots and "+n", Variable and Mono, and the sample badge. Cards are at least 5.5 × the preview size wide (180–520px), as many as fit across; the first family showing stays at the top when the window or the size changes. A grid for screen readers: Left and Right go card by card, Up and Down by line. Cards have no tag button (no room): tag from the right-click menu (Shift-F10), the selection bar, or by dragging |
+| Table | 🟡 | ⬜ | Columns: on/off, Name (with expand), Preview, Styles, Weights ("300–900", "Variable 100–900"), Foundry, Format, Source, Added and Tags; Version, Designer, File, Size and Glyphs can be added. Preview is on by default: 18px at the default size, following the slider within 12–32px; turned off, the table loads no font files at all. Click a header to sort (announced; again to turn it round). Right-click the header row, or use View options, to show or hide columns. Drag a column's edge, or press Shift+Left or Shift+Right on its header, to resize. The header stays at the top, and on/off and Name stay at the left while the table scrolls sideways. Compact (28px) or Regular (32px) rows, 40px or more with Preview. A treegrid for screen readers: the header row is one Tab stop, Right and Left expand and collapse families |
+| View options | 🟡 | ⬜ | The tune button: layout, Group styles into families, Sort by (with its direction), and in Table the row height and columns. Every choice is saved as a setting, so Reset covers it |
+| Group styles into families: off | 🟡 | ⬜ | Every style becomes its own item, named "Family Style", in every layout. Each family's styles stay together, lightest first |
+| Sort | 🟡 | ⬜ | Name, Date added (newest first), Number of styles, Weight (lightest first), Foundry, and On or off, each either way round; the Table's other columns (Format, Source, Version, Designer, File name, File size, Glyphs) sort from their headers. Fonts that don't say (no foundry, no date yet) go last; ties go by name. A new sort keeps the active row in view, else goes back to the top. The sort is announced |
+| Preview size shortcuts | 🟡 | ⬜ | Cmd+= and Cmd+- step through 12, 16, 24, 32, 48, 64, 96 and 128, and say the new size. Like the slider, the size isn't saved (the default size is in Settings) |
+| When fonts were added | 🟡 | ⬜ | A font is dated when a scan first lists it. Fonts listed before this version get their file's creation date (its modified date where the disk keeps none, else the date their folder was added), once, in the background at the next launch. That reads only file information, so online-only files aren't downloaded. Shown in the Table's Added column and used by Date added |
+| Loaded fonts stay bounded | 🟡 | ⬜ | Fonts that no row shows stay loaded up to 500; past that, the one unused longest leaves the page and loads again if it comes back on screen. Scrolling through 12,000 tiles keeps the page at about 540 loaded fonts |
 
 ## Settings (2026-10-12)
 
@@ -127,9 +145,9 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Activate / deactivate a whole collection | ⬜ | ⬜ |
 | Favorites | ⬜ | ⬜ |
 | Filters: classification, weight, width, mono (variable: see Views) | ⬜ | ⬜ |
-| Sort options | ⬜ | ⬜ |
+| Sort options (see Tiles, Table and View options) | 🟡 | ⬜ |
 | Live folder watching (no manual rescan) | ⬜ | ⬜ |
-| Grid view (tiles) alongside list view | ⬜ | ⬜ |
+| Grid view (Tiles) and a sortable Table alongside the list (Rows) | 🟡 | ⬜ |
 
 ## Phase 3: Inspecting
 

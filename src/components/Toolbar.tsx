@@ -1,3 +1,4 @@
+import type { LibraryLayout } from "@/api";
 import type { StatusFilter } from "@/library";
 import { Icon } from "@/components/ui/icon";
 import { ChoiceGroup } from "./ChoiceGroup";
@@ -6,6 +7,7 @@ import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { dragRegion, NO_DRAG, useTitleBar } from "./TitleBar";
+import { LayoutSwitch } from "./ViewOptions";
 
 /** The search field's id, so ⌘F can focus it (also from a font page). */
 export const LIBRARY_SEARCH_ID = "library-search";
@@ -23,6 +25,10 @@ interface Props {
   onSize: (s: number) => void;
   familyCount: number;
   fontCount: number;
+  layout: LibraryLayout;
+  onLayout: (layout: LibraryLayout) => void;
+  /** The View options button and its popover. */
+  viewOptions: React.ReactNode;
 }
 
 const STATUS: { value: StatusFilter; label: string }[] = [
@@ -44,14 +50,18 @@ export function Toolbar({
   onSize,
   familyCount,
   fontCount,
+  layout,
+  onLayout,
+  viewOptions,
 }: Props) {
   const titleBar = useTitleBar();
   return (
     // On macOS this row is also the window's title bar (see TitleBar.tsx). It can be narrow (a
-    // small window gives it well under 800px). So it gives way in
-    // steps as it narrows (container queries on the width inside its padding): under 960px the
-    // count goes (screen readers still hear it); under 880px Variable shows only its icon and the
-    // size slider gets shorter; under 620px the preview text box goes, and under 520px the
+    // small window gives it well under 800px). So it gives way in steps as it narrows (container
+    // queries on the width inside its padding): under 1120px the size slider and the preview
+    // text box get shorter; under 990px the count goes (screen readers still hear it); under
+    // 960px Variable shows only its icon; under 800px the layout switch folds into View options
+    // and search gets narrower; under 620px the preview text box goes, and under 520px the
     // slider. Search always keeps room to type, and nothing paints past the window's edge.
     <header
       className="@container/toolbar flex h-13 shrink-0 items-center gap-3 overflow-hidden border-b px-4 select-none"
@@ -78,12 +88,12 @@ export function Toolbar({
           >
             <Icon name="line_weight" size={16} />
             {/* The name stays for screen readers when only the icon shows. */}
-            <span className="@max-[880px]/toolbar:sr-only">Variable</span>
+            <span className="@max-[960px]/toolbar:sr-only">Variable</span>
           </TooltipTrigger>
           <TooltipContent>Show only variable fonts</TooltipContent>
         </Tooltip>
       </div>
-      <div className="relative w-56 min-w-36">
+      <div className="relative w-56 min-w-36 @max-[800px]/toolbar:min-w-32">
         <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           id={LIBRARY_SEARCH_ID}
@@ -95,7 +105,7 @@ export function Toolbar({
           className="pl-8"
         />
       </div>
-      <div className="relative min-w-32 flex-1 @max-[880px]/toolbar:min-w-24 @max-[620px]/toolbar:hidden">
+      <div className="relative min-w-32 flex-1 @max-[1120px]/toolbar:min-w-24 @max-[800px]/toolbar:min-w-20 @max-[620px]/toolbar:hidden">
         <Icon name="text_fields" size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           placeholder="Type to preview…"
@@ -107,7 +117,7 @@ export function Toolbar({
       </div>
       {/* Tauri doesn't see a slider as clickable, so keep it from moving the window. */}
       <div
-        className="flex w-44 shrink-0 items-center gap-2 @max-[880px]/toolbar:w-32 @max-[520px]/toolbar:hidden"
+        className="flex w-44 shrink-0 items-center gap-2 @max-[1120px]/toolbar:w-32 @max-[520px]/toolbar:hidden"
         {...NO_DRAG}
       >
         <Icon name="format_size" size={16} className="text-muted-foreground" />
@@ -120,7 +130,9 @@ export function Toolbar({
         />
         <span className="w-11 shrink-0 text-right font-mono text-xs text-muted-foreground tabular-nums">{size}px</span>
       </div>
-      <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums @max-[960px]/toolbar:sr-only">
+      {viewOptions}
+      <LayoutSwitch value={layout} onChange={onLayout} className="@max-[800px]/toolbar:hidden" />
+      <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums @max-[990px]/toolbar:sr-only">
         {familyCount.toLocaleString()} fam · {fontCount.toLocaleString()} styles
       </span>
     </header>

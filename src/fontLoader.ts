@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { FontSummary } from "./api";
 import { darkPaletteCss, darkPaletteOverride } from "./colorPalette";
+import { FaceMemory } from "./fontMemory";
 import { nextLoad } from "./loadOrder";
 
 // Previews load on demand. Each face becomes a page-only FontFace, so previews never depend
@@ -19,15 +20,29 @@ import { nextLoad } from "./loadOrder";
 // - A color font whose palette is all dark (Material Icons Two Tone) gets a light palette for
 //   the dark theme, used by elements marked `data-face` (see colorPalette.ts). Only for files
 //   fetched from the app; installed fonts loaded by name aren't read here.
+// - Loaded faces that no row shows are kept up to KEEP_UNUSED; past that the one unused longest
+//   leaves the page and its caches (fontMemory.ts), so scrolling through thousands of tiles
+//   never piles up thousands of fonts. It loads again if a row shows it later.
 
 export type FaceState = "loading" | "ready" | "error" | "cloud" | "too-large";
 type Outcome = Exclude<FaceState, "loading"> | "dropped";
 
 const MAX_CONCURRENT = 6;
+/** Loaded faces no row shows that stay loaded (fontMemory.ts). */
+const KEEP_UNUSED = 500;
 const cache = new Map<string, Promise<Outcome>>();
 /** Faces added to the page and ready to draw. */
 const loaded = new Set<string>();
-const users = new Map<string, number>();
+/** Each face's dark-theme palette rule, if it has one. */
+const paletteRules = new Map<string, Text>();
+/** Who shows which face, and which loaded faces to let go. */
+const memory = new FaceMemory<FontFace>(KEEP_UNUSED, (name, face) => {
+  document.fonts.delete(face);
+  loaded.delete(name);
+  cache.delete(name);
+  paletteRules.get(name)?.remove();
+  paletteRules.delete(name);
+});
 /** Faces shown big on a font page right now (its chosen style), by how many want them. */
 const urgentFaces = new Map<string, number>();
 const queue: { name: string; start: () => void; drop: () => void }[] = [];
@@ -43,7 +58,7 @@ export const faceName = (f: FileVersion) => `ff-${f.id}-${version(f)}`;
 function pump() {
   while (running < MAX_CONCURRENT && queue.length) {
     const [job] = queue.splice(nextLoad(queue, urgentFaces), 1);
-    if ((users.get(job.name) ?? 0) === 0) job.drop();
+    if (memory.usersOf(job.name) === 0) job.drop();
     else job.start();
   }
 }
@@ -82,9 +97,12 @@ async function fromApp(font: FontSummary, name: string): Promise<Outcome> {
   document.fonts.add(face);
   if (darkPalette) {
     paletteSheet ??= document.head.appendChild(document.createElement("style"));
-    paletteSheet.append(darkPaletteCss(name, darkPalette));
+    const rule = document.createTextNode(darkPaletteCss(name, darkPalette));
+    paletteSheet.append(rule);
+    paletteRules.set(name, rule);
   }
   loaded.add(name);
+  memory.loaded(name, face);
   return "ready";
 }
 
@@ -94,6 +112,7 @@ async function fromSystem(font: FontSummary, name: string): Promise<boolean> {
     const face = await new FontFace(name, `local("${font.postscriptName.replace(/["\\]/g, "\\$&")}")`).load();
     document.fonts.add(face);
     loaded.add(name);
+    memory.loaded(name, face);
     return true;
   } catch {
     return false; // e.g. WebKit doesn't expose this installed font by name
@@ -106,9 +125,9 @@ function loadFace(font: FontSummary): Promise<Outcome> {
   if (!pending) {
     pending = fromSystem(font, name).then((ok) => (ok ? "ready" : enqueue(name, () => fromApp(font, name))));
     cache.set(name, pending);
-    // Kept for the session: "ready", and "error"/"too-large" (that file won't change without
-    // a new version, which gets a new name). Retried next time a row shows it: "cloud" (it may
-    // have downloaded since) and "dropped".
+    // Kept: "ready" (until fontMemory lets the face go), and "error"/"too-large" (that file
+    // won't change without a new version, which gets a new name). Retried next time a row
+    // shows it: "cloud" (it may have downloaded since) and "dropped".
     pending.then((o) => (o === "cloud" || o === "dropped") && cache.delete(name));
   }
   return pending;
@@ -116,6 +135,9 @@ function loadFace(font: FontSummary): Promise<Outcome> {
 
 /** The face has loaded and was added to the page: text in it draws (and measures) in it. */
 export const isFaceLoaded = (name: string) => loaded.has(name);
+
+/** Loaded faces kept on the page, and how many of them no row shows (for checking the limit). */
+export const fontMemoryStats = () => ({ kept: memory.size, unused: memory.unused, limit: KEEP_UNUSED });
 
 /**
  * Whether a font's face is ready to draw. The state belongs to one face: when a row starts
@@ -134,7 +156,7 @@ export function useFontFace(font: FontSummary | undefined, urgent = false): Face
   useEffect(() => {
     if (!font || !name) return;
     let live = true;
-    users.set(name, (users.get(name) ?? 0) + 1);
+    memory.use(name);
     if (urgent) urgentFaces.set(name, (urgentFaces.get(name) ?? 0) + 1);
     const settle = (state: FaceState) => setCurrent({ name, state });
     settle(loaded.has(name) ? "ready" : "loading");
@@ -143,7 +165,7 @@ export function useFontFace(font: FontSummary | undefined, urgent = false): Face
     run();
     return () => {
       live = false;
-      users.set(name, (users.get(name) ?? 1) - 1);
+      memory.unuse(name);
       if (urgent) {
         const left = (urgentFaces.get(name) ?? 1) - 1;
         if (left > 0) urgentFaces.set(name, left);
