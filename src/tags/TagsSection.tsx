@@ -440,7 +440,7 @@ export function TagsSection({
               </TipItem>
               <TipItem
                 kit={DROPDOWN}
-                tip={index.tags.length ? "Save all your tags to a file, or to Finder tags or Font Book." : "There are no tags to export yet."}
+                tip={index.tags.length ? "Save all your tags to a file, to Finder tags, or to this Mac's font collections." : "There are no tags to export yet."}
                 disabled={!index.tags.length}
                 onClick={() => openTagDialog({ kind: "export" })}
               >
