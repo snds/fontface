@@ -191,8 +191,10 @@ export interface KeyLike {
   isComposing?: boolean;
 }
 
-/** Where focus is: a text field, inside a menu, popover or dialog, or anywhere else. */
-export type FocusKind = "text" | "popup" | "other";
+/** Where focus is: a text field, inside a menu, popover or dialog, a disabled button that stays
+ *  focusable (Base UI's `focusableWhenDisabled`, which takes every key but Tab without handling
+ *  it, Esc included), or anywhere else. */
+export type FocusKind = "text" | "popup" | "disabled" | "other";
 
 export interface BackContext {
   mac: boolean;
@@ -218,7 +220,8 @@ export function backKeyIntent(e: KeyLike, ctx: BackContext): "back" | "leave-fie
   if (isBackShortcut(e, ctx.mac)) return ctx.focus === "popup" ? null : "back";
   if (e.key !== "Escape" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null;
   // Something already handled this Esc (a popover closing, a search box clearing its text).
-  if (e.defaultPrevented || e.isComposing) return null;
+  // A disabled button only blocked it.
+  if ((e.defaultPrevented && ctx.focus !== "disabled") || e.isComposing) return null;
   if (ctx.focus === "popup") return null;
   return ctx.focus === "text" ? "leave-field" : "back";
 }

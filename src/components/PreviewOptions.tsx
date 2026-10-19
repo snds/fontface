@@ -55,10 +55,13 @@ export function PreviewOptionsSection({ preview, onPreview, dark }: Props) {
         <h2 id={`${id}-title`} className="text-sm font-medium">
           Preview
         </h2>
+        {/* Stays focusable once there's nothing to reset, so focus stays in the popover. */}
         <Button
           variant="ghost"
           size="xs"
           disabled={isDefaultPreview(preview)}
+          focusableWhenDisabled
+          className="aria-disabled:opacity-50"
           onClick={() => onPreview({ align: "left", case: "asTyped", outline: false, underline: false, ink: null, paper: null, features: [] })}
         >
           Reset preview
@@ -175,7 +178,8 @@ function Row({ label, id, children }: { label: string; id: string; children: Rea
 /**
  * Ink or paper: the theme's, a ready-made color (a radio group: one Tab stop, arrows move the
  * choice), or any color from the color well. A color picked in the well is saved once it stops
- * changing for a moment, so dragging through the picker doesn't save every step.
+ * changing for a moment, so dragging through the picker doesn't save every step; if the popover
+ * closes before then, it's saved as it closes.
  */
 function ColorChoice({
   label,
@@ -195,13 +199,33 @@ function ColorChoice({
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const [draft, setDraft] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  // The color waiting to be saved, and the latest onChange to save it with.
+  const pending = useRef<string | null>(null);
+  const save = useRef(onChange);
+  useEffect(() => {
+    save.current = onChange;
+  });
+  const commit = () => {
+    clearTimeout(timer.current);
+    const color = pending.current;
+    pending.current = null;
+    if (color) save.current(color);
+  };
+  // Closing the popover unmounts this: a color still waiting is saved, not dropped.
+  useEffect(() => () => commit(), []);
+  // A choice made meanwhile wins over the well's color still waiting.
+  const choose = (color: string | null) => {
+    clearTimeout(timer.current);
+    pending.current = null;
+    setDraft(null);
+    onChange(color);
+  };
   const shown = draft ?? value;
   const choices = [{ value: null as string | null, label: "Theme" }, ...presets];
   const checked = choices.findIndex((c) => c.value === (isColor(shown) ? shown.toLowerCase() : null));
   const pick = (i: number) => {
     const n = (i + choices.length) % choices.length;
-    onChange(choices[n].value);
+    choose(choices[n].value);
     refs.current[n]?.focus();
   };
   const custom = isColor(shown) && checked < 0;
@@ -242,7 +266,7 @@ function ColorChoice({
                 title={c.value ? c.label : "The theme's color"}
                 // One Tab stop: the chosen color, or Theme while a color from the well is chosen.
                 tabIndex={on || (checked < 0 && i === 0) ? 0 : -1}
-                onClick={() => onChange(c.value)}
+                onClick={() => choose(c.value)}
                 className={cn(
                   "flex size-6 items-center justify-center rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                   on ? "ring-2 ring-primary ring-offset-1 ring-offset-popover" : "",
@@ -284,9 +308,10 @@ function ColorChoice({
             onChange={(e) => {
               const next = e.target.value;
               setDraft(next);
+              pending.current = next;
               clearTimeout(timer.current);
               timer.current = setTimeout(() => {
-                onChange(next);
+                commit();
                 setDraft(null);
               }, 200);
             }}

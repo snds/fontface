@@ -84,6 +84,10 @@ test("Esc goes back outside text fields, menus and popovers", () => {
   // Already handled: a popover closing, or a search box clearing its text.
   assert.equal(backKeyIntent(key("Escape", { defaultPrevented: true }), { ...mac, focus: "other" }), null);
   assert.equal(backKeyIntent(key("Escape", { isComposing: true }), { ...mac, focus: "other" }), null);
+  // A disabled button that keeps focus (Reset with nothing to reset) takes every key without
+  // handling it: Esc still goes back.
+  assert.equal(backKeyIntent(key("Escape", { defaultPrevented: true }), { ...mac, focus: "disabled" }), "back");
+  assert.equal(backKeyIntent(key("[", { metaKey: true }), { ...mac, focus: "disabled" }), "back");
   assert.equal(backKeyIntent(key("Escape", { shiftKey: true }), { ...mac, focus: "other" }), null);
   assert.equal(backKeyIntent(key("x"), { ...mac, focus: "other" }), null);
 });

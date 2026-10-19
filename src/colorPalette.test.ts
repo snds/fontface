@@ -109,9 +109,18 @@ test("damaged tables are refused, never read past", () => {
   assert.equal(darkPaletteOverride(buffer(sfnt({ COLR, CPAL: shifted }))), null);
 });
 
-test("the CSS names the face's own palette and uses it only in the dark theme", () => {
+test("the CSS names the face's own palette and uses it on dark paper only", () => {
   const css = darkPaletteCss("ff-12-abc", "0 rgb(250 250 250 / 0.2)");
   assert.match(css, /@font-palette-values --ff-dark-ff-12-abc \{ font-family: "ff-12-abc"; override-colors: 0 rgb\(250 250 250 \/ 0\.2\); \}/);
-  assert.match(css, /\.dark \[data-face="ff-12-abc"\] \{ font-palette: --ff-dark-ff-12-abc; \}/);
+  const rules = css.split("\n").filter((r) => r.includes("font-palette:"));
+  assert.equal(rules.length, 2);
+  // The dark theme's page, or a dark paper on the preview or around it (navy in the light theme).
+  const [dark, light] = rules.map((r) => r.slice(0, r.indexOf("{")).split(",").map((x) => x.trim()));
+  assert.deepEqual(dark, ['.dark [data-face="ff-12-abc"]', '[data-paper="dark"][data-face="ff-12-abc"]', '[data-paper="dark"] [data-face="ff-12-abc"]']);
+  assert.match(rules[0], /\{ font-palette: --ff-dark-ff-12-abc; \}$/);
+  // A light paper keeps the font's own dark palette, in the dark theme too: same weight (two
+  // attribute or class selectors each), written after, so it wins.
+  assert.deepEqual(light, ['[data-paper="light"][data-face="ff-12-abc"]', '[data-paper="light"] [data-face="ff-12-abc"]']);
+  assert.match(rules[1], /\{ font-palette: normal; \}$/);
   assert.equal(darkPaletteCss('x"] { color: red } [y="', "0 red"), "", "only plain face names");
 });

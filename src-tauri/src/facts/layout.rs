@@ -7,7 +7,7 @@
 //! parameters); the samples follow each feature's lookups through ttf-parser. Every count is
 //! capped, so a damaged table can't make this slow.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
 use ttf_parser::{
@@ -20,10 +20,21 @@ use crate::tags::named_styles::{be16, name_string};
 
 /// At most this many feature records and scripts are read from one table.
 const MAX_RECORDS: usize = 2048;
-/// At most this many lookups per feature are followed for its sample.
-const MAX_LOOKUPS: usize = 16;
+/// At most this many lookups per feature are kept (from each record, and for each tag once a
+/// table's records are merged) and followed for its sample.
+pub const MAX_LOOKUPS: usize = 16;
+/// At most this many subtables per lookup are looked at for a sample. Real fonts split a big
+/// lookup into a few dozen at most (SF India's need more than 32).
+const MAX_SUBTABLES: usize = 64;
 /// At most this many covered glyphs per subtable are looked at for a sample.
 const MAX_COVERED: usize = 400;
+/// At most this many glyphs in all are looked at for one feature's sample, however its lookups
+/// are built. Far more than any real font's features need.
+const MAX_GLYPHS: usize = 200_000;
+/// A ligature of more glyphs than this isn't a sample anyone could read: left out.
+const MAX_COMPONENTS: u16 = 15;
+/// At most this many ligatures are collected to choose a sample from.
+const MAX_LIGATURES: usize = SAMPLE_ITEMS * 4;
 /// A sample shows at most this many characters (or ligatures).
 pub const SAMPLE_ITEMS: usize = 10;
 /// At most this many code points are mapped back to glyphs for samples.
@@ -62,6 +73,7 @@ pub struct RawFeature {
     pub tag: [u8; 4],
     /// Where its parameters start in the table, if it has any.
     pub params: Option<usize>,
+    /// Its first `MAX_LOOKUPS` lookup indexes: only those are ever followed.
     pub lookups: Vec<u16>,
 }
 
@@ -101,7 +113,7 @@ pub fn read_layout(t: &[u8]) -> Option<RawLayout> {
             let (Some(tag), Some(offset)) = (tag_at(t, rec), be16(t, rec + 4)) else { break };
             let at = feature_list + offset as usize;
             let (Some(params), Some(n)) = (be16(t, at), be16(t, at + 2)) else { continue };
-            let lookups = (0..n as usize).filter_map(|k| be16(t, at + 4 + 2 * k)).collect();
+            let lookups = (0..(n as usize).min(MAX_LOOKUPS)).filter_map(|k| be16(t, at + 4 + 2 * k)).collect();
             out.features.push(RawFeature { tag, params: (params != 0).then_some(at + params as usize), lookups });
         }
     }
@@ -182,14 +194,21 @@ pub fn features(face: &Face, name: &[u8]) -> (Vec<Feature>, Vec<Script>) {
     let mut by_tag: HashMap<[u8; 4], Feature> = HashMap::new();
     let mut lookups: HashMap<[u8; 4], Vec<u16>> = HashMap::new();
     let mut variant_chars: HashMap<[u8; 4], Vec<char>> = HashMap::new();
+    // Each tag's parameters are read once per table: a table that repeats a record for every
+    // script (or a damaged one that repeats it thousands of times) doesn't look its name up again.
+    let mut named_in: HashSet<([u8; 4], bool)> = HashSet::new();
     for (table, bytes, from_gsub) in [(&gsub, gsub_bytes, true), (&gpos, gpos_bytes, false)] {
         let Some(bytes) = bytes else { continue };
         for f in table.features.iter().filter(|f| listed(&f.tag)) {
             let entry = by_tag.entry(f.tag).or_insert_with(|| Feature { tag: tag_text(&f.tag), name: None, sample: None, gsub: false, gpos: false });
             if from_gsub {
                 entry.gsub = true;
+                // The first MAX_LOOKUPS distinct ones: only those are followed.
                 let list = lookups.entry(f.tag).or_default();
                 for l in &f.lookups {
+                    if list.len() >= MAX_LOOKUPS {
+                        break;
+                    }
                     if !list.contains(l) {
                         list.push(*l);
                     }
@@ -197,15 +216,17 @@ pub fn features(face: &Face, name: &[u8]) -> (Vec<Feature>, Vec<Script>) {
             } else {
                 entry.gpos = true;
             }
-            if let (None, Some(params)) = (&entry.name, f.params) {
-                if is_set(&f.tag) {
-                    entry.name = set_name(bytes, params, name);
-                } else if is_variant(&f.tag) {
-                    let (label, chars) = variant_params(bytes, params, name);
-                    entry.name = label;
-                    if !chars.is_empty() {
-                        variant_chars.entry(f.tag).or_insert(chars);
-                    }
+            let Some(params) = f.params else { continue };
+            if entry.name.is_some() || !named_in.insert((f.tag, from_gsub)) {
+                continue;
+            }
+            if is_set(&f.tag) {
+                entry.name = set_name(bytes, params, name);
+            } else if is_variant(&f.tag) {
+                let (label, chars) = variant_params(bytes, params, name);
+                entry.name = label;
+                if !chars.is_empty() {
+                    variant_chars.entry(f.tag).or_insert(chars);
                 }
             }
         }
@@ -302,41 +323,84 @@ fn shows_alone(c: char) -> bool {
     !c.is_control() && !c.is_whitespace() && !mark && !private
 }
 
-/// Up to `SAMPLE_ITEMS` distinct characters: letters first, then digits, then the rest, each
-/// group in code point order, joined by spaces.
+/// The best `SAMPLE_ITEMS` distinct characters offered so far: letters first, then digits, then
+/// the rest, each group in code point order. It keeps only those, however many it's offered.
+#[derive(Default)]
+struct BestChars(BTreeSet<(u8, char)>);
+
+impl BestChars {
+    fn offer(&mut self, c: char) {
+        if !shows_alone(c) {
+            return;
+        }
+        self.0.insert((if c.is_alphabetic() { 0 } else if c.is_numeric() { 1 } else { 2 }, c));
+        if self.0.len() > SAMPLE_ITEMS {
+            self.0.pop_last();
+        }
+    }
+
+    /// Joined by spaces, or None if there are none.
+    fn sample(self) -> Option<String> {
+        (!self.0.is_empty()).then(|| self.0.into_iter().map(|(_, c)| c.to_string()).collect::<Vec<_>>().join(" "))
+    }
+}
+
+/// Up to `SAMPLE_ITEMS` distinct characters (`BestChars`), joined by spaces.
 fn sample_of_chars(chars: impl Iterator<Item = char>) -> Option<String> {
-    let mut all: Vec<char> = chars.filter(|&c| shows_alone(c)).collect();
-    all.sort_by_key(|&c| (if c.is_alphabetic() { 0 } else if c.is_numeric() { 1 } else { 2 }, c));
-    all.dedup();
-    all.truncate(SAMPLE_ITEMS);
-    (!all.is_empty()).then(|| all.iter().map(char::to_string).collect::<Vec<_>>().join(" "))
+    let mut best = BestChars::default();
+    chars.for_each(|c| best.offer(c));
+    best.sample()
 }
 
 /// What a substitution feature changes: the ligatures it forms ("fi fl ffi"), else the
-/// characters its lookups cover.
+/// characters its lookups cover. Every loop is capped (`MAX_LOOKUPS` lookups, `MAX_SUBTABLES`
+/// subtables each, `MAX_GLYPHS` glyphs in all), and only the best characters so far are kept,
+/// so a damaged or crafted table can't make this slow or big.
 fn lookup_sample(table: &LayoutTable, lookups: &[u16], chars: &HashMap<u16, char>) -> Option<String> {
     let mut ligatures: Vec<String> = Vec::new();
-    let mut singles: Vec<char> = Vec::new();
-    for &index in lookups.iter().take(MAX_LOOKUPS) {
+    let mut singles = BestChars::default();
+    let mut budget = MAX_GLYPHS;
+    'lookups: for &index in lookups.iter().take(MAX_LOOKUPS) {
         let Some(lookup) = table.lookups.get(index) else { continue };
-        for subtable in lookup.subtables.into_iter::<SubstitutionSubtable>() {
+        for subtable in lookup.subtables.into_iter::<SubstitutionSubtable>().take(MAX_SUBTABLES) {
+            if budget == 0 {
+                break 'lookups;
+            }
             match subtable {
                 SubstitutionSubtable::Ligature(lig) => {
+                    if ligatures.len() >= MAX_LIGATURES {
+                        continue;
+                    }
                     let firsts = covered(&lig.coverage, MAX_COVERED);
-                    for (i, set) in lig.ligature_sets.into_iter().enumerate().take(MAX_COVERED) {
+                    budget = budget.saturating_sub(firsts.len());
+                    'sets: for (i, set) in lig.ligature_sets.into_iter().enumerate().take(MAX_COVERED) {
                         let Some(first) = firsts.get(i).and_then(|g| chars.get(&g.0)) else { continue };
                         for l in set.into_iter().take(8) {
+                            if budget == 0 {
+                                break 'sets;
+                            }
+                            if l.components.len() > MAX_COMPONENTS {
+                                continue;
+                            }
+                            budget = budget.saturating_sub(l.components.len() as usize);
                             let rest: Option<String> = l.components.into_iter().map(|g| chars.get(&g.0).copied()).collect();
                             if let Some(rest) = rest {
                                 let text = format!("{first}{rest}");
-                                if !ligatures.contains(&text) && ligatures.len() < SAMPLE_ITEMS * 4 {
+                                if !ligatures.contains(&text) {
                                     ligatures.push(text);
+                                    if ligatures.len() >= MAX_LIGATURES {
+                                        break 'sets;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                other => singles.extend(covered(&other.coverage(), MAX_COVERED).iter().filter_map(|g| chars.get(&g.0))),
+                other => {
+                    let glyphs = covered(&other.coverage(), MAX_COVERED.min(budget));
+                    budget -= glyphs.len();
+                    glyphs.iter().filter_map(|g| chars.get(&g.0)).for_each(|&c| singles.offer(c));
+                }
             }
         }
     }
@@ -346,5 +410,5 @@ fn lookup_sample(table: &LayoutTable, lookups: &[u16], chars: &HashMap<u16, char
         ligatures.truncate(SAMPLE_ITEMS);
         return Some(ligatures.join(" "));
     }
-    sample_of_chars(singles.into_iter())
+    singles.sample()
 }

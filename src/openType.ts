@@ -85,6 +85,9 @@ const KNOWN: Readonly<Record<string, Known>> = {
   ordn: { name: "Ordinals", group: "positions", sample: "1a 2o No", ownSample: true },
 
   calt: { name: "Contextual alternates", group: "alternates", on: true },
+  // Required variation alternates: shapes a variable font swaps at set points along its axes
+  // (a $ that loses its bar at heavy weights). Text engines always apply it.
+  rvrn: { name: "Alternates for variable styles", group: "alternates", on: true },
   salt: { name: "Stylistic alternates", group: "alternates" },
   swsh: { name: "Swashes", group: "alternates" },
   cswh: { name: "Contextual swashes", group: "alternates" },
@@ -179,10 +182,15 @@ const KNOWN: Readonly<Record<string, Known>> = {
   valt: { name: "Alternate vertical metrics", group: "vertical" },
 };
 
-/** Features that never draw outside the plain text's ink, so fitting needs no extra room when
- *  they're turned on. Anything else (swashes, alternates, sets…) gets a little (`featureSlack`). */
+/** The registered features Fontface has its own words for, in the order the tab lists them. */
+export const KNOWN_FEATURE_TAGS: readonly string[] = Object.keys(KNOWN);
+
+/** Features that never draw outside the plain text's ink, or that the text engine applies to
+ *  the plain text anyway (so its measurement has them already: liga, calt, rvrn…), so fitting
+ *  needs no extra room when they're turned on. Anything else (swashes, alternates, sets…) gets
+ *  a little (`featureSlack`). */
 const INK_SAFE = new Set([
-  "liga", "clig", "calt", "kern", "rlig", "ccmp", "locl", "mark", "mkmk",
+  "liga", "clig", "calt", "rvrn", "kern", "rlig", "ccmp", "locl", "mark", "mkmk",
   "smcp", "c2sc", "pcap", "c2pc", "unic", "case", "cpsp",
   "lnum", "pnum", "tnum", "zero", "frac", "afrc", "numr", "dnom", "sups", "subs", "sinf", "ordn",
   "pwid", "fwid", "hwid", "twid", "qwid", "palt", "halt", "opbd", "lfbd", "rtbd",
@@ -237,7 +245,7 @@ export function describeFeature(f: FontFeature, missing?: string): FeatureView {
 /** The face's features in their groups (empty groups left out), each group in a steady order:
  *  the order of `KNOWN`, then by tag. */
 export function groupFeatures(features: readonly FontFeature[], missing?: string): { id: FeatureGroupId; label: string; note?: string; features: FeatureView[] }[] {
-  const order = Object.keys(KNOWN);
+  const order = KNOWN_FEATURE_TAGS;
   const rank = (tag: string) => {
     const i = order.indexOf(tag);
     return i < 0 ? order.length : i;

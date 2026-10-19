@@ -8,6 +8,7 @@ import {
   featureSlack,
   groupFeatures,
   isOn,
+  KNOWN_FEATURE_TAGS,
   languageChoices,
   otLanguageName,
   pageFeatureValues,
@@ -15,7 +16,7 @@ import {
   scriptsLine,
   setToggle,
 } from "./openType.ts";
-import { featureSettings, previewFeatureValues } from "./previewStyle.ts";
+import { featureSettings, PREVIEW_CASES, previewCase, previewFeatureValues } from "./previewStyle.ts";
 
 const f = (tag: string, more: Partial<FontFeature> = {}): FontFeature => ({ tag, gsub: true, gpos: false, ...more });
 
@@ -50,6 +51,29 @@ test("samples: the font's own characters for alternates, Fontface's text where i
   const caps = "abcdefghijklmnopqrstuvwxyz";
   assert.equal(describeFeature(f("smcp", { sample: "A B" }), caps).sample, "A B");
   assert.equal(describeFeature(f("smcp"), caps).sample, undefined);
+});
+
+test("a feature's sample keeps its case, whatever case the View options set", () => {
+  // Fontface's own texts (some show a feature only in one case: "Small Caps", "CAPITALS"), and
+  // the font's own characters (a character variant's "a à á", a set's "J", a ligature's "fi").
+  const samples = [
+    ...KNOWN_FEATURE_TAGS.map((tag) => describeFeature(f(tag)).sample),
+    ...["a à á â ã ä å ā ă ą", "J", "I", "fi fl", "a g y"].map((s) => describeFeature(f("cv07", { sample: s })).sample),
+  ].filter((s): s is string => !!s);
+  assert.ok(samples.includes("Small Caps") && samples.includes("CAPITALS") && samples.includes("fi fl ff ffi"));
+  for (const c of PREVIEW_CASES) for (const s of samples) assert.equal(previewCase(s, c.id, { sample: true }), s, `${c.id}: ${s}`);
+  // Treated as words, they'd change, and their switches would show nothing: "SMALL CAPS" has no
+  // lowercase for small capitals to change, "capitals" no capitals, "A À Á" not the variant's a.
+  assert.equal(previewCase("Small Caps", "upper", {}), "SMALL CAPS");
+  assert.equal(previewCase("CAPITALS", "lower", {}), "capitals");
+  assert.equal(previewCase("a à á", "title", {}), "A À Á");
+});
+
+test("required variation alternates are on by default, like the text engine has them", () => {
+  const rvrn = describeFeature(f("rvrn"));
+  assert.deepEqual([rvrn.label, rvrn.group, rvrn.defaultOn], ["Alternates for variable styles", "alternates", true]);
+  assert.equal(isOn("rvrn", rvrn.defaultOn, {}, {}), true);
+  assert.equal(featureSlack({ rvrn: 1 }), 0, "already in the plain text's measurement");
 });
 
 test("only groups the face has, in order, each in a steady order", () => {

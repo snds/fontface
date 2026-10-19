@@ -114,6 +114,117 @@ fn a_font_without_layout_tables_has_no_features() {
 }
 
 #[test]
+fn apple_features_are_noted_beside_opentype_kerning_but_not_beside_substitutions() {
+    let morx = vec![0, 2, 0, 0, 0, 0, 0, 0];
+    // Athelas Bold Italic: `morx`, and a GPOS table with only kerning.
+    let kern_only = layout_table(&[(*b"latn", vec![])], &[FeatureSpec::new(b"kern", &[])], &[]);
+    let f = facts(&FontBuilder::new().named("Kerned").chars("ab").raw_table(b"morx", morx.clone()).raw_table(b"GPOS", kern_only).build());
+    assert_eq!(f.features.iter().map(|x| x.tag.as_str()).collect::<Vec<_>>(), ["kern"]);
+    assert!(f.apple_features, "its other features are in morx, like its sibling styles'");
+    // OpenType substitutions too: the tab lists them, with no note.
+    let mut b = FontBuilder::new().named("Both");
+    let a = b.char('a' as u32, None);
+    let a2 = b.glyph(Shape::bar(300, 500), None);
+    let gsub = layout_table(&[(*b"latn", vec![])], &[FeatureSpec::new(b"salt", &[0])], &[single_lookup(&[(a, a2)])]);
+    assert!(!facts(&b.raw_table(b"morx", morx).raw_table(b"GSUB", gsub).build()).apple_features);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn every_style_of_athelas_notes_its_apple_features() {
+    let Ok(data) = std::fs::read("/System/Library/Fonts/Supplemental/Athelas.ttc") else { return };
+    for face in 0..4 {
+        let Ok(f) = read_facts_with(&data, face, no_languages) else { continue };
+        assert!(f.apple_features, "face {face}: {:?}", f.features.iter().map(|x| &x.tag).collect::<Vec<_>>());
+    }
+}
+
+/// A raw `GSUB`: one script (`latn`, its default language using feature 0), then the lookup
+/// list and the feature list as given (each with offsets from its own start). The lookup list
+/// goes first, so a big feature list never pushes it past a 16-bit offset.
+fn gsub_with(lookup_list: &[u8], feature_list: &[u8]) -> Vec<u8> {
+    let be = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    // ScriptList: one record (the Script 8 bytes in); Script: default LangSys 4 bytes in, no
+    // languages; LangSys: no order, no required feature, feature 0.
+    let mut script_list = be(&[1]);
+    script_list.extend(b"latn");
+    script_list.extend(be(&[8, 4, 0, 0, 0xFFFF, 1, 0]));
+    let lookups_at = 10 + script_list.len();
+    let features_at = lookups_at + lookup_list.len();
+    let mut t = be(&[1, 0, 10, features_at as u16, lookups_at as u16]);
+    t.extend(script_list);
+    t.extend(lookup_list);
+    t.extend(feature_list);
+    t
+}
+
+#[test]
+fn a_feature_repeated_thousands_of_times_with_thousands_of_lookups_is_read_quickly() {
+    let be = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    // 2048 `liga` records sharing one feature table that lists 65,535 different lookups.
+    let records = 2048usize;
+    let mut feature_list = be(&[records as u16]);
+    for _ in 0..records {
+        feature_list.extend(b"liga");
+        feature_list.extend(be(&[(2 + 6 * records) as u16]));
+    }
+    feature_list.extend(be(&[0, 0xFFFF]));
+    feature_list.extend((0..0xFFFFu16).flat_map(|k| k.to_be_bytes()));
+    let gsub = gsub_with(&be(&[0]), &feature_list);
+
+    let start = std::time::Instant::now();
+    let raw = layout::read_layout(&gsub).expect("a layout table");
+    assert_eq!(raw.features.len(), records);
+    assert!(raw.features.iter().all(|f| f.lookups.len() == layout::MAX_LOOKUPS), "only the lookups that are ever followed are read");
+    let f = facts(&FontBuilder::new().named("Repeats").chars("fi").raw_table(b"GSUB", gsub).build());
+    assert_eq!(f.features.iter().map(|x| x.tag.as_str()).collect::<Vec<_>>(), ["liga"]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(2), "took {:?}", start.elapsed());
+}
+
+#[test]
+fn a_lookup_with_thousands_of_subtables_gives_a_sample_quickly() {
+    let be = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let mut b = FontBuilder::new().named("Subtables");
+    let glyphs: Vec<u16> = ('A'..='Z').chain('a'..='z').chain('0'..='9').map(|c| b.char(c as u32, None)).collect();
+    // One single substitution (each glyph to the next one) that every subtable points at.
+    let mut subtable = be(&[1, 6, 1, 1, glyphs.len() as u16]);
+    subtable.extend(be(&glyphs));
+    // A lookup of 32,000 subtables, and 16 lookups in the list that are all that one.
+    let count = 32_000usize;
+    let mut lookup = be(&[1, 0, count as u16]);
+    lookup.extend(std::iter::repeat_n(((6 + 2 * count) as u16).to_be_bytes(), count).flatten());
+    lookup.extend(subtable);
+    let mut lookup_list = be(&[16]);
+    lookup_list.extend(be(&[2 + 2 * 16; 16]));
+    lookup_list.extend(lookup);
+    // One `salt` feature using all 16.
+    let mut feature_list = be(&[1]);
+    feature_list.extend(b"salt");
+    feature_list.extend(be(&[8, 0, 16]));
+    feature_list.extend(be(&(0..16).collect::<Vec<u16>>()));
+
+    let start = std::time::Instant::now();
+    let f = facts(&b.raw_table(b"GSUB", gsub_with(&lookup_list, &feature_list)).build());
+    assert_eq!(f.features.len(), 1);
+    assert_eq!(f.features[0].sample.as_deref(), Some("A B C D E F G H I J"), "letters first, in order, each once");
+    assert!(start.elapsed() < std::time::Duration::from_secs(2), "took {:?}", start.elapsed());
+}
+
+#[test]
+fn ligatures_too_long_to_read_are_left_out_of_samples() {
+    let mut b = FontBuilder::new().named("Long");
+    let f = b.char('f' as u32, None);
+    let i = b.char('i' as u32, None);
+    let fi = b.glyph(Shape::bar(500, 700), None);
+    let long = b.glyph(Shape::bar(900, 700), None);
+    let mut word = vec![f];
+    word.extend(std::iter::repeat_n(i, 20));
+    let gsub = layout_table(&[(*b"latn", vec![])], &[FeatureSpec::new(b"dlig", &[0])], &[ligature_lookup(&[(&word, long), (&[f, i], fi)])]);
+    let facts = facts(&b.raw_table(b"GSUB", gsub).build());
+    assert_eq!(facts.features[0].sample.as_deref(), Some("fi"));
+}
+
+#[test]
 fn damaged_layout_tables_give_nothing_rather_than_fail() {
     for bytes in [vec![], vec![0, 1], vec![0, 2, 0, 0, 0, 10, 0, 12, 0, 14], vec![0, 1, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]] {
         assert_eq!(layout::read_layout(&bytes).map(|l| l.features.len()).unwrap_or(0), 0);

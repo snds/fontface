@@ -10,6 +10,7 @@ const POPUPS = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="lis
 export function focusKind(el: EventTarget | null): FocusKind {
   if (!(el instanceof HTMLElement)) return "other";
   if (el.closest(POPUPS)) return "popup";
+  if (el.matches('[aria-disabled="true"]')) return "disabled";
   if (el.isContentEditable || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return "text";
   if (el instanceof HTMLInputElement && TEXT_INPUTS.has(el.type)) return "text";
   return "other";

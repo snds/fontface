@@ -9,6 +9,7 @@ import {
   contrastText,
   DEFAULT_PREVIEW,
   featureSettings,
+  paperTone,
   isDefaultPreview,
   PREVIEW_ALIGNS,
   PREVIEW_CASES,
@@ -112,6 +113,59 @@ test("the theme's colors by default; one chosen color gets a readable partner", 
   assert.equal(resolveColors({ ink: "#000000", paper: "#f6f1e3" }, true).low, false);
   // Anything that isn't "#rrggbb" counts as the theme's.
   assert.equal(resolveColors({ ink: "red", paper: null }, false).ink, undefined);
+});
+
+/** "#rrggbb" for a gray `oklch(L 0 0)`: its linear luminance is L³. */
+function oklchGray(l: number): string {
+  const y = l ** 3;
+  const v = y <= 0.0031308 ? 12.92 * y : 1.055 * y ** (1 / 2.4) - 0.055;
+  return `#${Math.round(v * 255).toString(16).padStart(2, "0").repeat(3)}`;
+}
+
+test("the theme's colors and surfaces are index.css's", () => {
+  const css = readFileSync(new URL("./index.css", import.meta.url), "utf8");
+  const block = (selector: string) => css.slice(css.indexOf(`${selector} {`)).split("}")[0];
+  const color = (b: string, name: string) => {
+    const m = b.match(new RegExp(`--${name}: oklch\\(([\\d.]+) 0 0\\)`));
+    assert.ok(m, name);
+    return oklchGray(Number(m[1]));
+  };
+  for (const [selector, theme] of [[":root", THEME_COLORS.light], [".dark", THEME_COLORS.dark]] as const) {
+    const b = block(selector);
+    assert.equal(theme.ink, color(b, "foreground"), selector);
+    assert.equal(theme.paper, color(b, "background"), selector);
+    const surfaces = new Set(["background", "card", "accent", "muted"].map((n) => color(b, n)));
+    assert.deepEqual([...theme.surfaces].sort(), [...surfaces].sort(), `${selector}: the page, cards, selected and hovered rows`);
+  }
+});
+
+test("a lone ink must read on every surface previews sit on, not just the page", () => {
+  // Dark theme: #606060 reads on the page (3.1:1) but not on a card or a selected row.
+  assert.ok(contrastRatio("#606060", THEME_COLORS.dark.paper) >= READABLE_CONTRAST);
+  assert.ok(contrastRatio("#606060", "#262626") < READABLE_CONTRAST);
+  const gray = resolveColors({ ink: "#606060", paper: null }, true);
+  assert.deepEqual([gray.paper, gray.adapted, gray.low], [THEME_COLORS.dark.ink, true, false], "drawn on a paper it reads on");
+  assert.ok(gray.contrast >= READABLE_CONTRAST);
+  // Light theme: #949494 reads on white, not on a selected row's light gray.
+  assert.ok(contrastRatio("#949494", "#ffffff") >= READABLE_CONTRAST && contrastRatio("#949494", "#f5f5f5") < READABLE_CONTRAST);
+  assert.equal(resolveColors({ ink: "#949494", paper: null }, false).paper, THEME_COLORS.light.ink);
+  // Reads everywhere: no paper, and the contrast shown is the lowest one, on a selected row.
+  const white = resolveColors({ ink: "#ffffff", paper: null }, true);
+  assert.deepEqual([white.paper, white.adapted], [undefined, false]);
+  assert.equal(white.contrast, contrastRatio("#ffffff", "#262626"));
+});
+
+test("the paper drawn is marked dark or light, for color fonts' palettes", () => {
+  assert.equal(paperTone("#1d2a5a"), "dark");
+  assert.equal(paperTone("#000000"), "dark");
+  assert.equal(paperTone("#f4efe1"), "light");
+  assert.equal(paperTone("#ffffff"), "light");
+  assert.equal(resolveColors({ ink: null, paper: null }, true).paperTone, undefined, "no paper: the theme decides");
+  assert.equal(resolveColors({ ink: null, paper: "#ffffff" }, true).paperTone, "light", "white paper in the dark theme");
+  assert.equal(resolveColors({ ink: null, paper: "#1d2a5a" }, false).paperTone, "dark", "navy paper in the light theme");
+  assert.equal(resolveColors({ ink: "#ffffff", paper: "#000000" }, false).paperTone, "dark");
+  assert.equal(resolveColors({ ink: "#ffffff", paper: null }, false).paperTone, "dark", "the paper picked for white ink");
+  assert.equal(resolveColors({ ink: "#ffffff", paper: null }, true).paperTone, undefined, "white ink on the dark theme's own page");
 });
 
 test("outline and underline get room in the fit, and the right CSS", () => {

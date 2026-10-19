@@ -182,7 +182,8 @@ export interface Embedding {
 export interface FontFacts {
   features: FontFeature[];
   scripts: FontScript[];
-  /** Apple's own feature tables (AAT) and no OpenType ones. */
+  /** Apple's own feature table (AAT `morx`) and no OpenType substitutions; there may still be
+   *  OpenType positioning features, such as kerning. */
   appleFeatures: boolean;
   instances: NamedInstance[];
   embedding: Embedding | null;

@@ -1,7 +1,7 @@
 import { useId } from "react";
 import type { FontSummary, PreviewInfo } from "@/api";
 import { faceName, useFontFace } from "@/fontLoader";
-import { featureSettings, previewCase, styleCss, type FeatureValues } from "@/previewStyle";
+import { featureSettings, styleCss, type FeatureValues } from "@/previewStyle";
 import { fittingText, PANGRAM } from "@/sampleText";
 import { groupFeatures, isOn, languageChoices, scriptsLine, type FeatureView, type Toggles } from "@/openType";
 import { Button } from "@/components/ui/button";
@@ -106,7 +106,8 @@ export function OpenTypeTab(props: Props) {
                   </SelectContent>
                 </Select>
               )}
-              <Button variant="outline" size="sm" disabled={!changed} onClick={onReset}>
+              {/* Stays focusable once it has nothing left to undo, so focus doesn't fall out of the page. */}
+              <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={onReset}>
                 <Icon name="restart_alt" size={16} />
                 Reset
               </Button>
@@ -116,6 +117,7 @@ export function OpenTypeTab(props: Props) {
               dir="auto"
               lang={lang}
               data-face={pageFace}
+              data-paper={look.colors.paperTone}
               rows={2}
               spellCheck={false}
               value={text}
@@ -142,8 +144,9 @@ export function OpenTypeTab(props: Props) {
           {data.appleFeatures && (
             <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
               <Icon name="info" size={16} className="mt-0.5 shrink-0" />
-              This font keeps its features in Apple's own format (AAT) rather than OpenType, so they can't be switched here. macOS apps
-              that offer typography settings can use them.
+              {data.features.length === 0
+                ? "This font keeps its features in Apple's own format (AAT) rather than OpenType, so they can't be switched here. macOS apps that offer typography settings can use them."
+                : "This font keeps its other features in Apple's own format (AAT) rather than OpenType, so only the ones below can be switched here. macOS apps that offer typography settings can use the others."}
             </p>
           )}
           {data.features.length === 0 && !data.appleFeatures && <p className="text-sm text-muted-foreground">This style has no OpenType features.</p>}
@@ -164,8 +167,6 @@ export function OpenTypeTab(props: Props) {
                     face={pageFace}
                     ready={state === "ready"}
                     lang={lang}
-                    caseMode={look.options.case}
-                    missing={profile?.asciiMissing}
                     variation={variation}
                     onToggle={(on) => onToggle(f.tag, on, f.defaultOn)}
                   />
@@ -192,8 +193,6 @@ function FeatureRow({
   face,
   ready,
   lang,
-  caseMode,
-  missing,
   variation,
   onToggle,
 }: {
@@ -203,13 +202,13 @@ function FeatureRow({
   face: string;
   ready: boolean;
   lang: string | undefined;
-  caseMode: Parameters<typeof previewCase>[1];
-  missing: string | undefined;
   variation: string | undefined;
   onToggle: (on: boolean) => void;
 }) {
   const id = useId();
-  const sample = feature.sample && previewCase(feature.sample, caseMode, { missing });
+  // Drawn as it is, never in the View options' case: a sample holds the characters its feature
+  // changes ("a à á", "fi fl", "Small Caps"), and other letters would show no change at all.
+  const sample = feature.sample;
   return (
     <li className="flex min-h-11 items-center gap-3 border-b py-1.5 last:border-b-0">
       <Switch

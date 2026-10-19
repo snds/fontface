@@ -41,36 +41,47 @@ const fileDate = (seconds: number) =>
 /** How many languages show before "Show all". */
 const FIRST_LANGUAGES = 24;
 
-/** A web address from the font: a link that opens in the browser, or the text if it isn't one. */
+/**
+ * A web address from the font: the address as text (select it and copy it like any other row),
+ * with a button beside it that opens it in the browser, over https (the button's name says the
+ * address it opens). Just the text if it isn't a web address.
+ */
 function WebLink({ raw }: { raw: string }) {
   const { text, href } = webAddress(raw);
   if (!href) return <>{text}</>;
   return (
-    <button
-      type="button"
-      className="cursor-pointer text-left break-all underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground"
-      title={`Open ${href}`}
-      onClick={() => openUrl(href).catch((e) => toast.error("Couldn't open that address", { description: String(e) }))}
-    >
-      {text}
-    </button>
+    <span className="inline-flex max-w-full items-start gap-1">
+      <span className="min-w-0 break-all">{text}</span>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        className="-my-0.5 text-muted-foreground"
+        aria-label={`Open ${href} in your browser`}
+        title={`Open ${href}`}
+        onClick={() => openUrl(href).catch((e) => toast.error("Couldn't open that address", { description: String(e) }))}
+      >
+        <Icon name="open_in_new" size={14} />
+      </Button>
+    </span>
   );
 }
 
-/** The languages CoreText says the font supports, by name; the first few, then Show all. */
+/** The languages CoreText says the font supports, by name: the first few, then Show all, which
+ *  becomes Show fewer (one button that changes its words, so focus stays on it). */
 function Languages({ codes }: { codes: string[] }) {
   const [all, setAll] = useState(false);
   const names = languageList(codes);
   if (!names.length) return <>None that macOS can name</>;
-  const shown = all ? names : names.slice(0, FIRST_LANGUAGES);
+  const more = names.length > FIRST_LANGUAGES;
+  const shown = all || !more ? names : names.slice(0, FIRST_LANGUAGES);
   return (
     <span>
       <span className="font-medium">{names.length.toLocaleString()}</span>: {shown.join(", ")}
-      {names.length > shown.length && (
+      {more && (
         <>
-          {"… "}
-          <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setAll(true)}>
-            Show all {names.length.toLocaleString()}
+          {all ? ". " : "… "}
+          <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setAll(!all)}>
+            {all ? "Show fewer" : `Show all ${names.length.toLocaleString()}`}
           </Button>
         </>
       )}
@@ -96,8 +107,8 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
   const added = faceAddedAt(face);
   // The file couldn't be read (online-only, say): one row says so, in place of what it holds.
   const unread = answer?.unread ? unreadWords(answer.unread, answer.message) : null;
-  // [label, value, monospace?]
-  const rows: [string, React.ReactNode, boolean?][] = [
+  // [label, value, monospace?, full? (never in a scroll box of its own)]
+  const rows: [string, React.ReactNode, boolean?, boolean?][] = [
     ["On or off", status],
     // The font's own names, when it's listed under another family or style.
     ["Its family name", face.family !== font.family ? font.family : null],
@@ -135,7 +146,8 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
         </span>
       ),
     ],
-    ["Languages", read?.languages && <Languages codes={read.languages} />],
+    // In full: Show all shows every name on the page, not in a box that only scrolls by mouse.
+    ["Languages", read?.languages && <Languages codes={read.languages} />, false, true],
     ["Scripts", scripts],
     [
       "More details",
@@ -169,10 +181,10 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
         <dl className="flex flex-col gap-1.5 text-sm">
           {rows
             .filter(([, v]) => v)
-            .map(([k, v, mono]) => (
+            .map(([k, v, mono, full]) => (
               <div key={k} className="grid grid-cols-[120px_1fr] gap-3">
                 <dt className="text-muted-foreground">{k}</dt>
-                <dd className={cn("selectable max-h-40 overflow-y-auto break-words", mono && "font-mono text-xs leading-5")}>{v}</dd>
+                <dd className={cn("selectable break-words", !full && "max-h-40 overflow-y-auto", mono && "font-mono text-xs leading-5")}>{v}</dd>
               </div>
             ))}
         </dl>

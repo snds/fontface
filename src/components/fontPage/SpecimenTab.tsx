@@ -62,6 +62,8 @@ export function SpecimenTab({ family, face, previewText, variation, features, sl
   const look = usePreviewStyle();
   const paper = look.colors.paper;
   const sheet = paper ? { backgroundColor: paper, color: look.colors.ink } : undefined;
+  // Marks each sheet's paper as dark or light, for color fonts' palettes (colorPalette.ts).
+  const tone = look.colors.paperTone;
   const paragraphSample = paragraph === profile?.familyText && isSampleKind(profile);
   const paragraphShown = previewCase(paragraph, look.options.case, { sample: paragraphSample, missing: profile?.asciiMissing });
   return (
@@ -69,7 +71,7 @@ export function SpecimenTab({ family, face, previewText, variation, features, sl
       <FaceStateMessage state={state} />
       <section aria-label="Waterfall">
         <SectionTitle>Waterfall</SectionTitle>
-        <div className={cn(sheet && "rounded-lg px-4 py-3")} style={sheet}>
+        <div className={cn(sheet && "rounded-lg px-4 py-3")} style={sheet} data-paper={tone}>
         {WATERFALL.map((px) => (
           <div key={px} className="flex items-baseline gap-3 overflow-hidden whitespace-nowrap">
             <span className={cn("w-6 shrink-0 text-right font-mono text-[10px]", sheet ? "opacity-60" : "text-muted-foreground")}>{px}</span>
@@ -100,7 +102,7 @@ export function SpecimenTab({ family, face, previewText, variation, features, sl
 
       <section aria-label="Paragraph">
         <SectionTitle>Paragraph</SectionTitle>
-        <div className={cn(sheet && "rounded-lg px-4 py-3")} style={sheet}>
+        <div className={cn(sheet && "rounded-lg px-4 py-3")} style={sheet} data-paper={tone}>
           <p
             dir="ltr"
             lang={lang}

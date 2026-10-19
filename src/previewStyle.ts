@@ -133,10 +133,15 @@ export function variationSettings(values: Readonly<Record<string, number>>): str
 
 // ------------------------------------------------------------------------------- colors
 
-/** The theme's text and page colors (`--foreground` and `--background` in index.css). */
+/**
+ * The theme's colors (index.css): its text (`--foreground`) and page (`--background`), and every
+ * surface a preview without a paper of its own is drawn on: the page, Tiles' cards (`--card`),
+ * and selected or hovered rows and tiles (`--accent`, `--muted`). In the dark theme those are
+ * lighter than the page, in the light theme darker.
+ */
 export const THEME_COLORS = {
-  light: { ink: "#0a0a0a", paper: "#ffffff" },
-  dark: { ink: "#fafafa", paper: "#0a0a0a" },
+  light: { ink: "#0a0a0a", paper: "#ffffff", surfaces: ["#ffffff", "#f5f5f5"] },
+  dark: { ink: "#fafafa", paper: "#0a0a0a", surfaces: ["#0a0a0a", "#171717", "#262626"] },
 } as const;
 
 /** "#rrggbb" (any case), or null. */
@@ -176,6 +181,10 @@ export interface PreviewColors {
   ink?: string;
   /** The paper to draw behind previews, or undefined for none (the page shows through). */
   paper?: string;
+  /** Whether that paper is dark or light (undefined: no paper, the theme's surfaces show).
+   *  Marks the element that draws it (`data-paper`), so a color font's palette follows the
+   *  paper rather than the theme (colorPalette.ts). */
+  paperTone?: PaperTone;
   /** Contrast between the ink and the paper the previews are drawn on. */
   contrast: number;
   /** Below `READABLE_CONTRAST`: only when both colors were chosen (otherwise one adapts). */
@@ -184,11 +193,16 @@ export interface PreviewColors {
   adapted: boolean;
 }
 
+export type PaperTone = "dark" | "light";
+
+/** Dark if light text reads better on it than dark text does. */
+export const paperTone = (paper: string): PaperTone => (readableOn(paper) === THEME_COLORS.dark.ink ? "dark" : "light");
+
 /**
  * The colors previews are drawn in. Neither chosen: the theme's. Only paper: the theme's ink if
- * it reads on that paper, else near-black or near-white. Only ink: on the theme's page if it
- * reads there, else on a paper of near-black or near-white. Both: as chosen, with `low` set when
- * they're hard to read.
+ * it reads on that paper, else near-black or near-white. Only ink: straight on the theme's
+ * surfaces if it reads on every one of them (the page, a card, a selected row), else on a paper
+ * of near-black or near-white. Both: as chosen, with `low` set when they're hard to read.
  */
 export function resolveColors(o: Pick<PreviewOptions, "ink" | "paper">, dark: boolean): PreviewColors {
   const theme = dark ? THEME_COLORS.dark : THEME_COLORS.light;
@@ -196,17 +210,19 @@ export function resolveColors(o: Pick<PreviewOptions, "ink" | "paper">, dark: bo
   const paper = isColor(o.paper) ? o.paper.toLowerCase() : null;
   if (ink && paper) {
     const contrast = contrastRatio(ink, paper);
-    return { ink, paper, contrast, low: contrast < READABLE_CONTRAST, adapted: false };
+    return { ink, paper, paperTone: paperTone(paper), contrast, low: contrast < READABLE_CONTRAST, adapted: false };
   }
   if (paper) {
     const fits = contrastRatio(theme.ink, paper) >= READABLE_CONTRAST;
     const shown = fits ? theme.ink : readableOn(paper);
-    return { ink: fits ? undefined : shown, paper, contrast: contrastRatio(shown, paper), low: false, adapted: !fits };
+    return { ink: fits ? undefined : shown, paper, paperTone: paperTone(paper), contrast: contrastRatio(shown, paper), low: false, adapted: !fits };
   }
   if (ink) {
-    const fits = contrastRatio(ink, theme.paper) >= READABLE_CONTRAST;
-    const under = fits ? theme.paper : readableOn(ink);
-    return { ink, paper: fits ? undefined : under, contrast: contrastRatio(ink, under), low: false, adapted: !fits };
+    // The surface it reads worst on is the one that counts.
+    const worst = Math.min(...theme.surfaces.map((surface) => contrastRatio(ink, surface)));
+    if (worst >= READABLE_CONTRAST) return { ink, contrast: worst, low: false, adapted: false };
+    const under = readableOn(ink);
+    return { ink, paper: under, paperTone: paperTone(under), contrast: contrastRatio(ink, under), low: false, adapted: true };
   }
   return { contrast: contrastRatio(theme.ink, theme.paper), low: false, adapted: false };
 }

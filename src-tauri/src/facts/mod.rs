@@ -81,7 +81,8 @@ pub fn embedding(version: u16, fs_type: u16) -> Embedding {
 pub struct FontFacts {
     pub features: Vec<Feature>,
     pub scripts: Vec<Script>,
-    /// The font uses Apple's own feature tables (`morx`) and has no OpenType ones.
+    /// The font keeps its features in Apple's own table (`morx`) and has no OpenType
+    /// substitutions (`GSUB`). It may still have OpenType positioning, such as kerning in `GPOS`.
     pub apple_features: bool,
     pub instances: Vec<NamedInstance>,
     /// None when the font has no OS/2 table.
@@ -133,7 +134,9 @@ pub fn read_facts_with(
             eprintln!("fontface: couldn't read the OpenType features of a font");
             (Vec::new(), Vec::new())
         });
-    let apple_features = features.is_empty() && raw(b"morx").is_some();
+    // Substitutions are what the OpenType tab mostly lists. A font with `morx` and only GPOS
+    // kerning (Athelas Bold Italic) keeps its other features in `morx`, like its sibling styles.
+    let apple_features = raw(b"morx").is_some() && !features.iter().any(|f| f.gsub);
     let instances = raw(b"fvar").map(|fvar| named_styles::instances(fvar, name)).unwrap_or_default();
     let embedding = raw(b"OS/2").and_then(|os2| Some(embedding(be16(os2, 0)?, be16(os2, 8)?)));
     Ok(FontFacts {

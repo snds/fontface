@@ -6,8 +6,11 @@
 // So in the dark theme its icons draw black on a near-black page, and CSS `color` can't change
 // them. For a font whose whole first palette is dark like that, the page defines a CSS font
 // palette (`@font-palette-values`) giving each entry the dark theme's text color at the entry's
-// own opacity, and elements marked with the face (`data-face`) use it under `.dark`. Colorful
-// palettes (emoji, flags) are left alone, and so are glyphs drawn in the text color.
+// own opacity, and elements marked with the face (`data-face`) use it on dark paper: under
+// `.dark`, or inside a preview's own dark paper (`data-paper="dark"`, the View options' paper
+// in the light theme). Inside a light paper (`data-paper="light"`) the font's own palette stays,
+// in the dark theme too. Colorful palettes (emoji, flags) are left alone, and so are glyphs
+// drawn in the text color.
 
 /** A palette entry counts as dark when no channel is above this (25%). */
 const DARK_MAX = 0x40;
@@ -73,13 +76,17 @@ export function darkPaletteOverride(data: ArrayBuffer): string | null {
   }
 }
 
-/** The CSS for one face (a `faceName`) with a dark palette: the light palette, and the rule that
- *  uses it in the dark theme for elements marked `data-face="<face>"` and what's inside them. */
+/** The CSS for one face (a `faceName`) with a dark palette: the light palette, the rule that uses
+ *  it for elements marked `data-face="<face>"` on dark paper (the dark theme's page, or a dark
+ *  `data-paper` on the element or around it), and the rule that keeps the font's own palette on a
+ *  light `data-paper`. The two rules weigh the same, so the paper's, written last, wins. */
 export function darkPaletteCss(face: string, overrides: string): string {
   if (!/^[\w-]+$/.test(face)) return "";
   const name = `--ff-dark-${face}`;
+  const on = (paper: string) => `${paper}[data-face="${face}"], ${paper} [data-face="${face}"]`;
   return (
     `@font-palette-values ${name} { font-family: "${face}"; override-colors: ${overrides}; }\n` +
-    `.dark [data-face="${face}"] { font-palette: ${name}; }\n`
+    `.dark [data-face="${face}"], ${on('[data-paper="dark"]')} { font-palette: ${name}; }\n` +
+    `${on('[data-paper="light"]')} { font-palette: normal; }\n`
   );
 }

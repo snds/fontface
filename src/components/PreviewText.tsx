@@ -13,7 +13,7 @@ interface Props {
   /** The page-only face name (fontLoader's `faceName`) when the font is one the app loads. The
    *  text is measured only once that face has loaded, so a measurement of the fallback font is
    *  never taken (or cached) for it. It also marks the element (`data-face`), so a color font
-   *  with an all-dark palette draws light in the dark theme (colorPalette.ts). Leave it out for
+   *  with an all-dark palette draws light on dark paper (colorPalette.ts). Leave it out for
    *  fonts the system draws by name. */
   face?: string;
   text: string;
@@ -89,6 +89,8 @@ export function PreviewText(props: Props) {
       dir="ltr"
       lang={lang}
       data-face={face}
+      // The paper drawn here, if any: a color font's palette follows it (colorPalette.ts).
+      data-paper={paper ? look.colors.paperTone : undefined}
       aria-hidden={sample || undefined}
       className={cn("truncate transition-opacity", !ready && "preview-loading", className)}
       style={{ ...style, ...css, fontFamily, fontFeatureSettings: features ?? look.featureCss, ...sized }}
