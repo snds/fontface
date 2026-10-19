@@ -1,8 +1,8 @@
 // Run with `npm run test:ui`. The sidebar's places, and saved views from before (places.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { Folder, FontSummary, ServiceInfo, SidebarSections } from "./api.ts";
-import { groupFamilies, type LibraryView } from "./library.ts";
+import type { Folder, ServiceInfo, SidebarSections } from "./api.ts";
+import type { LibraryView } from "./library.ts";
 import {
   folderHolding,
   hiddenBySidebar,
@@ -17,6 +17,7 @@ import {
   sourceView,
   stillThere,
   type PlaceContext,
+  type SavedView,
 } from "./places.ts";
 
 const folder = (id: number, path: string, kind: Folder["kind"], label = path.split("/").pop()!): Folder => ({ id, path, kind, label, fontCount: 0, missing: false });
@@ -39,35 +40,7 @@ const SERVICES: ServiceInfo[] = [
 ];
 const ALL_ON: SidebarSections = { yours: true, recent: true, active: true, untagged: true, fontBook: true, google: true, adobe: true, purchases: true, tags: true, builtinTags: true };
 
-function font(path: string, folderId: number): FontSummary {
-  const name = path.split("/").pop()!;
-  return {
-    id: Math.random(),
-    folderId,
-    path,
-    faceIndex: 0,
-    family: name,
-    subfamily: "Regular",
-    fullName: null,
-    postscriptName: name,
-    weight: 400,
-    width: 5,
-    italic: false,
-    monospace: false,
-    variable: false,
-    format: "TrueType",
-    activated: false,
-    installed: false,
-    mtime: 1,
-    fileSize: 1,
-    osActive: false,
-    glyphCount: 1,
-    preview: null,
-  };
-}
-
-const families = groupFamilies([font("/Users/me/Type/Alpha/Sans/Sans.otf", 11), font("/Library/Fonts/Arial.ttf", 2)]);
-const ctx = (sidebar: Partial<SidebarSections> = {}): PlaceContext => ({ folders: FOLDERS, services: SERVICES, sidebar: { ...ALL_ON, ...sidebar }, families });
+const ctx = (sidebar: Partial<SidebarSections> = {}): PlaceContext => ({ folders: FOLDERS, services: SERVICES, sidebar: { ...ALL_ON, ...sidebar } });
 
 test("SOURCES lists Font Book, the services, then your folders A to Z, one row each", () => {
   assert.deepEqual(sourceRows(FOLDERS, ALL_ON), ["fontbook", "google", "adobe", "purchases", "folder:11", "folder:13", "folder:12", "folder:10"]);
@@ -90,14 +63,10 @@ test("every view knows the source row it belongs to", () => {
   const of = (v: LibraryView) => sourceOf(v, FOLDERS, SERVICES);
   assert.equal(of({ kind: "installed" }), "fontbook");
   assert.equal(of({ kind: "folder", id: 2 }), "fontbook", "an OS font folder is part of Font Book");
-  assert.equal(of({ kind: "location", path: "/System/Library/Fonts" }), "fontbook");
-  assert.equal(of({ kind: "location", path: "/System/Library/Fonts/Supplemental" }), "fontbook");
   assert.equal(of({ kind: "service", id: "google" }), "google");
-  assert.equal(of({ kind: "location", path: "/Users/me/Library/Application Support/fontface/google/Inter" }), "google");
   assert.equal(of({ kind: "folder", id: 5 }), "purchases");
   assert.equal(of({ kind: "folder", id: 10 }), "folder:10");
-  assert.equal(of({ kind: "location", path: "/Users/me/Type/Alpha/Sans" }), "folder:11");
-  assert.equal(of({ kind: "location", path: "/Elsewhere/x" }), null);
+  assert.equal(of({ kind: "folder", id: 99 }), "folder:99", "a folder that's gone");
   for (const kind of ["all", "yours", "recent", "active", "untagged"] as const) assert.equal(of({ kind }), null);
   assert.equal(of({ kind: "tag", id: 3 }), null);
 });
@@ -120,16 +89,21 @@ test("the folder holding a path is the deepest one, by whole folder names", () =
 });
 
 test("saved views from before still open, in today's terms", () => {
-  const migrate = (v: LibraryView) => migrateView(v, FOLDERS, SERVICES);
-  // A macOS font folder under Font Book: Font Book narrowed to that folder.
-  assert.deepEqual(migrate({ kind: "folder", id: 3 }), { kind: "location", path: "/System/Library/Fonts" });
+  const migrate = (v: SavedView) => migrateView(v, FOLDERS, SERVICES);
+  // A macOS font folder under Font Book: Font Book.
+  assert.deepEqual(migrate({ kind: "folder", id: 3 }), { kind: "installed" });
   // A service folder: that service's row.
   assert.deepEqual(migrate({ kind: "folder", id: 4 }), { kind: "service", id: "google" });
-  // Unchanged: your folders, subfolders, Font Book, services (Google Fonts now lists your Google fonts), tags.
+  // A folder inside a source (the toolbar's old folder picker): the whole source.
+  assert.deepEqual(migrate({ kind: "location", path: "/System/Library/Fonts" }), { kind: "installed" });
+  assert.deepEqual(migrate({ kind: "location", path: "/Library/Fonts/Supplemental" }), { kind: "installed" });
+  assert.deepEqual(migrate({ kind: "location", path: "/Users/me/Library/Application Support/fontface/google/Inter" }), { kind: "service", id: "google" });
+  assert.deepEqual(migrate({ kind: "location", path: "/Users/me/Type/Alpha/Sans" }), { kind: "folder", id: 11 });
+  assert.deepEqual(migrate({ kind: "location", path: "/Elsewhere/x" }), { kind: "all" }, "no source holds it any more");
+  // Unchanged: your folders, Font Book, services (Google Fonts now lists your Google fonts), tags.
   for (const v of [
     { kind: "folder", id: 10 },
     { kind: "folder", id: 99 },
-    { kind: "location", path: "/Users/me/Type/Alpha/Sans" },
     { kind: "installed" },
     { kind: "service", id: "google" },
     { kind: "service", id: "adobe" },
@@ -157,20 +131,18 @@ test("a view whose place Settings › Sidebar hides is hidden", () => {
     assert.ok(!hidden({ kind }, {}));
   }
   assert.ok(hidden({ kind: "installed" }, { fontBook: false }));
-  assert.ok(hidden({ kind: "location", path: "/Library/Fonts" }, { fontBook: false }), "a macOS folder goes with Font Book");
+  assert.ok(hidden({ kind: "folder", id: 2 }, { fontBook: false }), "a macOS folder goes with Font Book");
   assert.ok(hidden({ kind: "service", id: "google" }, { google: false }));
-  assert.ok(hidden({ kind: "location", path: "/Users/me/Library/Application Support/fontface/google/Inter" }, { google: false }));
   assert.ok(hidden({ kind: "tag", id: 1 }, { tags: false }));
   assert.ok(!hidden({ kind: "folder", id: 10 }, { fontBook: false, google: false, tags: false }), "your folders always show");
   assert.ok(!hidden({ kind: "all" }, { yours: false, recent: false, active: false, untagged: false }));
 });
 
 test("a saved view opens if it's still there, else All Fonts", () => {
-  assert.deepEqual(restoreView({ kind: "folder", id: 2 }, ctx()), { kind: "location", path: "/Library/Fonts" }, "migrated, and it has fonts");
-  assert.deepEqual(restoreView({ kind: "folder", id: 1 }, ctx()), { kind: "all" }, "a macOS folder with no fonts in it");
+  assert.deepEqual(restoreView({ kind: "folder", id: 2 }, ctx()), { kind: "installed" }, "a macOS folder: Font Book");
   assert.deepEqual(restoreView({ kind: "folder", id: 99 }, ctx()), { kind: "all" }, "a folder that was removed");
-  assert.deepEqual(restoreView({ kind: "location", path: "/Users/me/Type/Alpha/Sans" }, ctx()), { kind: "location", path: "/Users/me/Type/Alpha/Sans" });
-  assert.deepEqual(restoreView({ kind: "location", path: "/Users/me/Type/Alpha/Gone" }, ctx()), { kind: "all" }, "a subfolder with no fonts left");
+  assert.deepEqual(restoreView({ kind: "location", path: "/Users/me/Type/Alpha/Sans" }, ctx()), { kind: "folder", id: 11 }, "a folder inside a source: the source");
+  assert.deepEqual(restoreView({ kind: "location", path: "/Library/Fonts" }, ctx({ fontBook: false })), { kind: "all" }, "its source is hidden");
   assert.deepEqual(restoreView({ kind: "recent" }, ctx()), { kind: "recent" });
   assert.deepEqual(restoreView({ kind: "recent" }, ctx({ recent: false })), { kind: "all" }, "hidden in the sidebar");
   assert.deepEqual(restoreView({ kind: "folder", id: 2 }, ctx({ fontBook: false })), { kind: "all" });
@@ -184,8 +156,6 @@ test("Back says where it goes back to", () => {
   assert.equal(label({ kind: "installed" }), "Font Book");
   assert.equal(label({ kind: "service", id: "purchases" }), "Purchases");
   assert.equal(label({ kind: "folder", id: 11 }), "Alpha");
-  assert.equal(label({ kind: "location", path: "/Library/Fonts" }), "Computer Fonts");
-  assert.equal(label({ kind: "location", path: "/Users/me/Type/Alpha/Sans" }), "Sans");
   assert.equal(label({ kind: "tag", id: 1 }), "Serif");
   assert.equal(label({ kind: "tag", id: 2 }), "the tag");
 });

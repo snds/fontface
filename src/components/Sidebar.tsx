@@ -229,7 +229,7 @@ export function Sidebar(props: Props) {
             scan={scan}
             count={counts.installed}
             selected={selected}
-            hint={`Fonts installed in ${IS_MAC ? "macOS" : "Windows"}'s own font folders. Pick one of the folders in the toolbar.`}
+            hint={`Fonts installed in ${IS_MAC ? "macOS" : "Windows"}'s own font folders`}
             onOpen={open}
             actions={scanButton(list, !!scan, INSTALLED_LABEL)}
           />

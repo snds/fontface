@@ -3,9 +3,9 @@
 // coming to the front). An answer is shown only if it's newer than the list on screen, so a
 // slow, stale list never replaces a fresher one. Every request settles once a list at least as
 // fresh as the one it asked for is on screen: its own answer, or a newer one that came first.
-// So `await load()` always means "the list is loaded" (launch can check a saved subfolder view
-// against the real list), and a request never waits on requests made after it, which could
-// otherwise keep it waiting for as long as new ones keep coming (a long scan's live refreshes).
+// So `await load()` always means "the list is loaded", and a request never waits on requests
+// made after it, which could otherwise keep it waiting for as long as new ones keep coming (a
+// long scan's live refreshes).
 // Pure (no DOM, no Tauri), so `node --test` covers it.
 
 /**

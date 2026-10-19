@@ -94,11 +94,10 @@ export interface Family {
  * with none of your own tags ("untagged"). The sources say where fonts come from: the OS's own
  * font folders ("installed", Font Book), a folder you added ("folder"), or a service ("service":
  * Google Fonts and Purchases list your library's fonts from them; Adobe Fonts has its own page).
- * A "location" is a folder inside a source (the toolbar's subfolder picker). A "tag" lists the
- * fonts with that tag, or one nested under it.
+ * A "tag" lists the fonts with that tag, or one nested under it.
  *
- * Older saved views ("folder" for a macOS or service folder) are brought up to date by
- * `migrateView` (places.ts).
+ * Older saved views ("folder" for a macOS or service folder, "location" for a folder inside a
+ * source) are brought up to date by `migrateView` (places.ts).
  */
 export type LibraryView =
   | { kind: "all" }
@@ -109,8 +108,7 @@ export type LibraryView =
   | { kind: "installed" }
   | { kind: "folder"; id: number }
   | { kind: "service"; id: "google" | "adobe" | "purchases" }
-  | { kind: "tag"; id: number }
-  | { kind: "location"; path: string };
+  | { kind: "tag"; id: number };
 
 /** The smart entries at the top of the sidebar. */
 export type SmartKind = "all" | "yours" | "recent" | "active" | "untagged";
@@ -122,8 +120,6 @@ export function viewKey(v: LibraryView): string {
     case "service":
     case "tag":
       return `${v.kind}:${v.id}`;
-    case "location":
-      return `location:${v.path}`;
     default:
       return v.kind;
   }
@@ -594,7 +590,6 @@ export function filterFamilies(
   ctx: FilterContext = {},
 ): Family[] {
   const q = query.trim().toLowerCase();
-  const inside = view.kind === "location" ? `${view.path}/` : "";
   // A service's list is its folder's fonts; none while it has no folder (nothing downloaded
   // yet), and none for Adobe Fonts, whose fonts aren't in the library.
   const serviceFolder = view.kind === "service" && view.id !== "adobe" ? (ctx.serviceFolder?.(view.id) ?? null) : null;
@@ -617,8 +612,6 @@ export function filterFamilies(
         return face.copies.some((c) => c.folderId === view.id);
       case "service":
         return serviceFolder !== null && face.copies.some((c) => c.folderId === serviceFolder);
-      case "location":
-        return face.copies.some((c) => c.path.startsWith(inside));
       case "tag":
         return !!ctx.inTag?.(face, view.id);
     }
