@@ -60,6 +60,12 @@ pub struct ParsedFace {
     pub axes: Vec<Axis>,
     pub glyph_count: u16,
     pub format: String,
+    /// The raw names family grouping looks at (see families.rs): name ID 16 (the font's own
+    /// grouping family, if it has one), and IDs 1 and 2. `family` and `subfamily` above prefer
+    /// 16 and 17, so they alone can't say whether the font named its own family.
+    pub typo_family: Option<String>,
+    pub legacy_family: Option<String>,
+    pub legacy_style: Option<String>,
     /// What the library list draws for this face (see preview/). Worked out only for files the
     /// scanner reads into the library.
     pub preview: Option<preview::Profile>,
@@ -105,7 +111,8 @@ fn parse_faces(data: &[u8], previews: Option<&str>) -> Result<Vec<ParsedFace>, S
 
 fn parse_face(face: &Face, in_collection: bool, previews: Option<&str>) -> ParsedFace {
     let name = |id: u16| name_string(face, id);
-    let family = name(16).or_else(|| name(1)).unwrap_or_else(|| "Unknown".into());
+    let (typo_family, legacy_family) = (name(16), name(1));
+    let family = typo_family.clone().or_else(|| legacy_family.clone()).unwrap_or_else(|| "Unknown".into());
     let subfamily = name(17).or_else(|| name(2)).unwrap_or_else(|| "Regular".into());
 
     let tables = face.tables();
@@ -156,15 +163,23 @@ fn parse_face(face: &Face, in_collection: bool, previews: Option<&str>) -> Parse
         axes,
         glyph_count: face.number_of_glyphs(),
         format,
+        typo_family,
+        legacy_family,
+        legacy_style: name(2),
         preview,
     }
 }
 
 /// Picks the best `name` table entry: Windows US English, then any Unicode entry, then Mac Roman.
 pub(crate) fn name_string(face: &Face, id: u16) -> Option<String> {
+    names_string(face.names(), id)
+}
+
+/// `name_string`, from a `name` table read on its own (families::read_names).
+pub(crate) fn names_string(names: ttf_parser::name::Names, id: u16) -> Option<String> {
     let mut unicode: Option<String> = None;
     let mut mac: Option<String> = None;
-    for n in face.names().into_iter().filter(|n| n.name_id == id) {
+    for n in names.into_iter().filter(|n| n.name_id == id) {
         if n.platform_id == PlatformId::Windows && n.language_id == 0x0409 {
             if let Some(s) = n.to_string().filter(|s| !s.trim().is_empty()) {
                 return Some(s.trim().to_string());
@@ -662,9 +677,9 @@ fn upsert_faces(conn: &Connection, folder_id: i64, file: &FileStamp, faces: &[Pa
         "INSERT INTO fonts (folder_id, path, face_index, file_size, mtime, family, subfamily,
             full_name, postscript_name, version, designer, manufacturer, copyright, license,
             license_url, weight, width, italic, monospace, variable, axes, glyph_count, format,
-            added_at)
+            added_at, typo_family, legacy_family, legacy_style, names_rev)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-            ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+            ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
          ON CONFLICT (path, face_index) DO UPDATE SET
             folder_id = excluded.folder_id, file_size = excluded.file_size, mtime = excluded.mtime,
             family = excluded.family, subfamily = excluded.subfamily, full_name = excluded.full_name,
@@ -673,7 +688,9 @@ fn upsert_faces(conn: &Connection, folder_id: i64, file: &FileStamp, faces: &[Pa
             copyright = excluded.copyright, license = excluded.license,
             license_url = excluded.license_url, weight = excluded.weight, width = excluded.width,
             italic = excluded.italic, monospace = excluded.monospace, variable = excluded.variable,
-            axes = excluded.axes, glyph_count = excluded.glyph_count, format = excluded.format
+            axes = excluded.axes, glyph_count = excluded.glyph_count, format = excluded.format,
+            typo_family = excluded.typo_family, legacy_family = excluded.legacy_family,
+            legacy_style = excluded.legacy_style, names_rev = excluded.names_rev
          RETURNING id",
     )?;
     let mut written = 0;
@@ -689,7 +706,8 @@ fn upsert_faces(conn: &Connection, folder_id: i64, file: &FileStamp, faces: &[Pa
                 folder_id, path, index as u32, size, mtime, f.family, f.subfamily, f.full_name,
                 f.postscript_name, f.version, f.designer, f.manufacturer, f.copyright, f.license,
                 f.license_url, f.weight, f.width, f.italic, f.monospace, f.variable, axes,
-                f.glyph_count, f.format, added_at
+                f.glyph_count, f.format, added_at, f.typo_family, f.legacy_family, f.legacy_style,
+                crate::families::NAMES_REV
             ],
             |r| r.get(0),
         )?;

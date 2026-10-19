@@ -21,6 +21,7 @@ Code: `src-tauri/src/sync/` (Rust) and `src/sync/` (interface). The plan it come
 | Exceptions for a device group | Yes | In the data; no menu for them yet |
 | Fonts without a PostScript name | No | Their key is a file path, which means nothing on another computer |
 | Font files | No | Purchased, Adobe and system fonts never will ([INTEGRATIONS.md](INTEGRATIONS.md)) |
+| Family choices (merge, keep separate, move a style) | Not yet | Kept by face key and family-name key like tags, so they can be shared later: as a `group` field on the font change (not `family`, which already carries a display label) and a new change kind for name rules, which older versions skip |
 | Settings | No | They belong to one computer, including which sidebar sections show (Built-in tags too) |
 | Folders and their colors | No | Paths differ between computers |
 | The library database | Never | Only small change files go in the folder |
@@ -283,6 +284,7 @@ tag; every tag inside it is in the same group, on every computer.
 
 ## Not built yet
 
+- Family choices (Family groups: merge, keep separate, move a style). They're local for now; see **What syncs**.
 - Menus for device-group exceptions (the data supports them).
 - Encryption of the sync files with a passphrase (tag names can be revealing).
 - Direct connections (OpenDAL), and a way to remove another computer from the folder.

@@ -24,8 +24,8 @@ const pathLabel = (name: string) => name.split("/").join(" › ");
 
 /** What a menu is about: one style by name, else a count. */
 export function describeFaces(faces: Face[]): string {
-  if (faces.length === 1) return `${faces[0].primary.family} ${faces[0].primary.subfamily}`;
-  const families = new Set(faces.map((f) => f.primary.family));
+  if (faces.length === 1) return `${faces[0].family} ${faces[0].style}`;
+  const families = new Set(faces.map((f) => f.family));
   return families.size === 1 ? `${[...families][0]}, ${faces.length} styles` : `${faces.length.toLocaleString()} styles`;
 }
 

@@ -2,9 +2,9 @@ import type { FontPageTab } from "./api";
 
 /**
  * Pages over the library list (see docs/ARCHITECTURE.md, Front end). The sidebar picks a place
- * (App's `view` and filters), and pages are pushed on top of it: the font page, and the Google
- * Fonts and Purchases pages ("catalog" pages, opened with Browse from those sources' lists);
- * later Compare, Pair and Family groups. While a page shows, the list stays mounted underneath,
+ * (App's `view` and filters), and pages are pushed on top of it: the font page, the Google
+ * Fonts and Purchases pages ("catalog" pages, opened with Browse from those sources' lists), and
+ * Family groups; later Compare and Pair. While a page shows, the list stays mounted underneath,
  * hidden and inert, so it keeps its scroll position, selection and loaded previews.
  *
  * - Back (the header button, Cmd+[ or Alt+Left on Windows, the mouse's back button, Esc outside
@@ -40,13 +40,27 @@ export interface CatalogPageEntry {
   returnTo: string | null;
 }
 
-export type Page = FontPageEntry | CatalogPageEntry;
+/** What the Family groups page lists: every family, the suggestions, or what you changed. */
+export type GroupsFilter = "all" | "suggested" | "changed";
+
+/** The Family groups page (familyGroups.ts): from View options, a font's menus or Settings. */
+export interface GroupsPageEntry {
+  kind: "groups";
+  id: number;
+  filter: GroupsFilter;
+  /** Faces it opened on (a font's menu): checked, their families open and in view. */
+  focus: string[];
+  /** Where focus goes back on Back: a list row (by row key) or an element (by id). */
+  returnTo: { row: string } | { element: string } | null;
+}
+
+export type Page = FontPageEntry | CatalogPageEntry | GroupsPageEntry;
 
 /** What a new page needs; the stack gives it its id. */
-export type NewPage = Omit<FontPageEntry, "id"> | Omit<CatalogPageEntry, "id">;
+export type NewPage = Omit<FontPageEntry, "id"> | Omit<CatalogPageEntry, "id"> | Omit<GroupsPageEntry, "id">;
 
 /** The parts of a page that change while it's open. */
-export type PagePatch = Partial<Pick<FontPageEntry, "styleKey" | "tab">>;
+export type PagePatch = Partial<Pick<FontPageEntry, "styleKey" | "tab">> & Partial<Pick<GroupsPageEntry, "filter">>;
 
 export interface NavState {
   pages: Page[];
@@ -70,6 +84,11 @@ export function navReducer(state: NavState, action: NavAction): NavState {
       // The same page already on top (a double-click and a Return, say): nothing new to show.
       const top = topPage(state);
       if (top && samePage(top, action.page)) return state;
+      // Family groups on top already: it shows what was asked for now, with the same Back.
+      if (top?.kind === "groups" && action.page.kind === "groups") {
+        const next: GroupsPageEntry = { ...top, filter: action.page.filter, focus: action.page.focus };
+        return { ...state, pages: [...state.pages.slice(0, -1), next] };
+      }
       return { pages: [...state.pages, { ...action.page, id: state.nextId } as Page], nextId: state.nextId + 1 };
     }
     case "back":
@@ -78,10 +97,16 @@ export function navReducer(state: NavState, action: NavAction): NavState {
       return state.pages.length ? { ...state, pages: [] } : state;
     case "update": {
       let changed = false;
-      const pages = state.pages.map((p) => {
-        // Only a font page has parts that change.
-        if (p.id !== action.id || p.kind !== "font") return p;
-        const next = { ...p, ...action.patch };
+      const pages = state.pages.map((p): Page => {
+        if (p.id !== action.id) return p;
+        if (p.kind === "groups") {
+          if (!action.patch.filter || action.patch.filter === p.filter) return p;
+          changed = true;
+          return { ...p, filter: action.patch.filter };
+        }
+        // A service's page has no parts that change.
+        if (p.kind !== "font") return p;
+        const next = { ...p, styleKey: action.patch.styleKey ?? p.styleKey, tab: action.patch.tab ?? p.tab };
         if (next.styleKey === p.styleKey && next.tab === p.tab) return p;
         changed = true;
         return next;
@@ -91,10 +116,11 @@ export function navReducer(state: NavState, action: NavAction): NavState {
   }
 }
 
-/** The same font on the same style, or the same service's page. */
+/** The same font on the same style, the same service's page, or Family groups as it is. */
 function samePage(a: Page, b: NewPage): boolean {
   if (a.kind === "font" && b.kind === "font") return a.faceKey === b.faceKey && a.styleKey === b.styleKey;
   if (a.kind === "catalog" && b.kind === "catalog") return a.service === b.service;
+  if (a.kind === "groups" && b.kind === "groups") return a.filter === b.filter && a.focus.join("\n") === b.focus.join("\n");
   return false;
 }
 
@@ -152,12 +178,13 @@ export const MOUSE_BACK_BUTTON = 3;
 /**
  * What Cmd+F (Ctrl+F on Windows) does, by the page on top: "list" goes to the library's Search
  * (no page is open); "leave" closes the pages, then goes there (a font page, which has no search
- * of its own); "page" goes to the page's own search field (the Google Fonts catalog), keeping
- * what's typed and picked there; null does nothing (the Purchases page has no search field, and
- * leaving it would lose its place).
+ * of its own); "page" goes to the page's own search field (the Google Fonts catalog, Family
+ * groups), keeping what's typed and picked there; null does nothing (the Purchases page has no
+ * search field, and leaving it would lose its place).
  */
 export function findIntent(top: Page | undefined): "list" | "leave" | "page" | null {
   if (!top) return "list";
   if (top.kind === "font") return "leave";
+  if (top.kind === "groups") return "page";
   return top.service === "google" ? "page" : null;
 }

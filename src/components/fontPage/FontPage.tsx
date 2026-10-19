@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useFontCharacters } from "@/components/CharacterGrid";
 import { dragRegion, useTitleBar } from "@/components/TitleBar";
 import { FontTagMenuItems } from "@/tags/FontMenu";
+import { FamilyGroupMenuItem } from "@/families/FamilyGroupMenuItem";
 import type { Locations } from "@/tags/locations";
 import { openMenuFromKeyboard } from "@/tags/menus";
 import { useTagIndex } from "@/tags/model";
@@ -187,6 +188,7 @@ function PageMenu({ family, children }: { family: Family; children: React.ReactN
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[min(28rem,var(--available-height))] min-w-56">
         <FontTagMenuItems faces={faces.length ? faces : family.faces} index={index} />
+        <FamilyGroupMenuItem faces={faces.length ? faces : family.faces} />
       </ContextMenuContent>
     </ContextMenu>
   );

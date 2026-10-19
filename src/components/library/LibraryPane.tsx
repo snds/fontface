@@ -8,6 +8,7 @@ import { Icon } from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { fontsPayload, pressToDrag } from "@/tags/drag";
 import { FontTagMenuItems } from "@/tags/FontMenu";
+import { FamilyGroupMenuItem } from "@/families/FamilyGroupMenuItem";
 import { isMenuKey, openMenuFromKeyboard } from "@/tags/menus";
 import type { Locations } from "@/tags/locations";
 import { uniqueFaces, useTagIndex, type TagIndex } from "@/tags/model";
@@ -472,7 +473,14 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
           <FontList view={view} {...display} />
         )}
         <ContextMenuContent className="max-h-[min(28rem,var(--available-height))] min-w-56">
-          {menuFaces.length ? <FontTagMenuItems faces={menuFaces} index={index} /> : <ContextMenuItem disabled>Right-click a font to tag it</ContextMenuItem>}
+          {menuFaces.length ? (
+            <>
+              <FontTagMenuItems faces={menuFaces} index={index} />
+              <FamilyGroupMenuItem faces={menuFaces} />
+            </>
+          ) : (
+            <ContextMenuItem disabled>Right-click a font to tag it</ContextMenuItem>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     </div>

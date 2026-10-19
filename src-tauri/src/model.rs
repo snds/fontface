@@ -60,6 +60,14 @@ pub struct FontSummary {
     /// Left out until it's known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added_at: Option<i64>,
+    /// The font names its own grouping family (name ID 16, other than its name ID 1): family
+    /// grouping by name leaves it alone. None until its names have been read (see
+    /// `families::backfill_names`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_typo_family: Option<bool>,
+    /// Its name ID 1, when that differs from `family` (which prefers name ID 16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_family: Option<String>,
     /// What the preview draws (see preview/). None until the face has a current profile.
     pub preview: Option<crate::preview::PreviewInfo>,
 }

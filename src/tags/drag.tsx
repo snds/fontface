@@ -64,10 +64,10 @@ const place = () => {
 /** What a font drag is called: the style, the family, or a count. */
 export function fontsPayload(faces: Face[]): DragPayload | null {
   if (!faces.length) return null;
-  const families = new Set(faces.map((f) => f.primary.family));
+  const families = new Set(faces.map((f) => f.family));
   const label =
     faces.length === 1
-      ? `${faces[0].primary.family} ${faces[0].primary.subfamily}`
+      ? `${faces[0].family} ${faces[0].style}`
       : families.size === 1
         ? `${[...families][0]} (${faces.length} styles)`
         : `${faces.length.toLocaleString()} styles`;

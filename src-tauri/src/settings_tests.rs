@@ -67,6 +67,7 @@ fn defaults_match_the_spec() {
     assert_eq!(d.font_page_tab, FontPageTab::Specimen);
     assert_eq!(d.layout, Layout::Rows, "Rows stays the default layout");
     assert!(d.group_styles);
+    assert!(d.group_by_name, "families are grouped by name unless that's turned off");
     assert_eq!(d.sort, SortOrder { key: SortKey::Name, desc: false });
     assert!(d.table_columns.is_empty(), "no saved columns: the UI's defaults");
     assert_eq!(d.table_density, TableDensity::Regular);
@@ -98,6 +99,7 @@ fn serializes_in_the_shape_the_ui_expects() {
             "fontPageTab": "specimen",
             "layout": "rows",
             "groupStyles": true,
+            "groupByName": true,
             "sort": { "key": "name", "desc": false },
             "tableColumns": [],
             "tableDensity": "regular"
@@ -269,6 +271,8 @@ fn view_options_change_by_patch_and_refuse_bad_values() {
 
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "layout": "grid" }))), "The layout must be “tiles”, “rows” or “table”");
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "groupStyles": 1 }))), "“Group styles into families” must be on or off");
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "groupByName": "yes" }))), "“Group families by name” must be on or off");
+    assert!(!settings::apply_patch(&d, &json!({ "groupByName": false })).unwrap().group_by_name);
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "tableDensity": "airy" }))), "Table density must be “compact” or “regular”");
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "sort": "name" }))), "The sort must say what to sort by");
     assert!(error_text(settings::apply_patch(&d, &json!({ "sort": { "key": "colour" } }))).starts_with("The sort must be “name”, “added”"));
@@ -382,6 +386,7 @@ fn every_setting_can_be_changed_by_a_patch() {
         font_page_tab: FontPageTab::Characters,
         layout: Layout::Table,
         group_styles: false,
+        group_by_name: false,
         sort: SortOrder { key: SortKey::Added, desc: true },
         table_columns: vec![
             TableColumn { id: "name".into(), shown: true, width: Some(280) },

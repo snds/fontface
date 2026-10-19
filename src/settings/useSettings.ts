@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontPageTab: "specimen",
   layout: "rows",
   groupStyles: true,
+  groupByName: true,
   sort: { key: "name", desc: false },
   tableColumns: [],
   tableDensity: "regular",

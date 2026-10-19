@@ -16,12 +16,31 @@ const UNAVAILABLE: Record<string, { icon: string; text: string }> = {
   "too-large": { icon: "data_usage", text: "Too large to preview" },
 };
 
+/** Profile kinds that draw the font's own name (as is, tidied, or in one case). */
+const DRAWS_NAME = new Set(["name", "trim", "case"]);
+
 /**
  * A row's preview: the typed text, else the profile's text (the name, tidied, or a sample of
  * the font's real characters), else the name. Hidden until the font has loaded and the profile
- * is known (or 300 ms have passed), then fitted so nothing is clipped.
+ * is known (or 300 ms have passed), then fitted so nothing is clipped. `family`: the family the
+ * row lists it under, when grouping by name gave it another than its own ("Aaux Pro" for Aaux
+ * ProRegular): a family row draws that, if the font draws its own name.
  */
-export function FacePreview({ font, preview, typed, own, size }: { font: FontSummary; preview: ProfileState; typed: string; own: "family" | "full"; size: number }) {
+export function FacePreview({
+  font,
+  preview,
+  typed,
+  own,
+  size,
+  family,
+}: {
+  font: FontSummary;
+  preview: ProfileState;
+  typed: string;
+  own: "family" | "full";
+  size: number;
+  family?: string;
+}) {
   const state = useFontFace(font);
   const { profile, pending } = preview;
   const face = faceName(font);
@@ -39,7 +58,11 @@ export function FacePreview({ font, preview, typed, own, size }: { font: FontSum
     );
   }
   const name = own === "family" ? font.family : font.fullName || `${font.family} ${font.subfamily}`;
-  const profileText = own === "family" ? profile?.familyText : profile?.fullText;
+  let profileText = own === "family" ? profile?.familyText : profile?.fullText;
+  if (own === "family" && family && family !== font.family && (!profile || DRAWS_NAME.has(profile.kind))) {
+    // Drawn in the case the font draws its name in.
+    profileText = profile?.familyText && profile.familyText === profile.familyText.toUpperCase() ? family.toUpperCase() : family;
+  }
   return (
     <PreviewText
       fontFamily={`"${face}"`}

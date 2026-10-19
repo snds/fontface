@@ -231,7 +231,7 @@ function FamilyRow(props: RowProps & { family: Family }) {
         />
       </div>
       <div className="pl-8">
-        <FacePreview font={family.representative.primary} preview={preview} typed={previewText} own={single ? "full" : "family"} size={size} />
+        <FacePreview font={family.representative.primary} preview={preview} typed={previewText} own={single ? "full" : "family"} size={size} family={family.name} />
       </div>
     </div>
   );
@@ -242,10 +242,11 @@ function FaceRow(props: RowProps & { face: Face }) {
   const font = face.primary;
   const preview = usePreviewProfile(font);
   const key = rowKey(row);
-  const style = `${font.subfamily}${font.variable ? " (Variable)" : ""}`;
+  // Its style in the family it's listed under (grouping by name may have worked it out).
+  const style = `${face.style}${font.variable ? " (Variable)" : ""}`;
   const state = summarize([face]);
   const wording = useStateWording();
-  const label = `${style}, ${font.family}, ${stateWords(state, wording)}`;
+  const label = `${style}, ${face.family}, ${stateWords(state, wording)}`;
   const added = showAdded ? addedDateText(faceAddedAt(face)) : "";
   const { active, attrs } = optionProps(props, label, describedBy(props.id, ["state", "copies", "added"]));
   const tab = active ? 0 : -1;
@@ -253,7 +254,7 @@ function FaceRow(props: RowProps & { face: Face }) {
     <div {...attrs} className={cn(attrs.className, "pl-12")}>
       <div className="mb-1 flex items-center gap-2">
         <span className="truncate text-sm font-medium">
-          {font.subfamily}
+          {face.style}
           {font.variable && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(Variable)</span>}
         </span>
         <LocationDots copies={face.copies} locations={locations} srId={`${props.id}-places`} />
@@ -276,11 +277,11 @@ function FaceRow(props: RowProps & { face: Face }) {
             <TagChips faces={[face]} index={actions.index} srId={`${props.id}-tags`} />
           </span>
         </span>
-        <RowTagButton rowKey={key} actions={actions} label={`${font.family} ${font.subfamily}`} tabIndex={tab} />
+        <RowTagButton rowKey={key} actions={actions} label={`${face.family} ${face.style}`} tabIndex={tab} />
         <StateControl
           state={state}
           single
-          label={`Activate ${font.family} ${font.subfamily}`}
+          label={`Activate ${face.family} ${face.style}`}
           busy={face.copies.some((c) => busy.has(c.path))}
           tabIndex={tab}
           srId={`${props.id}-state`}

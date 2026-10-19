@@ -398,7 +398,7 @@ function TableRow(props: RowProps) {
   const wording = useStateWording();
   const words = stateWords(state, wording);
   const label = face
-    ? `${font.subfamily}${font.variable ? " (Variable)" : ""}, ${font.family}, ${words}`
+    ? `${face.style}${font.variable ? " (Variable)" : ""}, ${face.family}, ${words}`
     : `${family.name}${single ? "" : `, ${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`}${variable ? ", variable" : ""}, ${words}`;
   return (
     <div
@@ -496,7 +496,7 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
           compact
           state={state}
           single={!!face || !!family.ungroupedFrom}
-          label={`Activate ${face ? `${font.family} ${font.subfamily}` : family.name}`}
+          label={`Activate ${face ? `${face.family} ${face.style}` : family.name}`}
           busy={switchable.some((f) => f.copies.some((c) => busy.has(c.path)))}
           tabIndex={tab}
           srId={`${id}-state`}
@@ -524,14 +524,14 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
           ) : (
             !face && <span className="size-6 shrink-0" aria-hidden />
           )}
-          <span className={cn("truncate", face ? "font-medium" : "font-semibold")} title={face ? font.subfamily : family.name}>
-            {face ? font.subfamily : family.name}
+          <span className={cn("truncate", face ? "font-medium" : "font-semibold")} title={face ? face.style : family.name}>
+            {face ? face.style : family.name}
           </span>
           {font.variable && face && <span className="shrink-0 text-xs text-muted-foreground">(Variable)</span>}
         </span>
       );
     case "preview":
-      return <PreviewCell font={font} own={face || family.ungroupedFrom ? "full" : "family"} typed={previewText} size={previewSize} id={id} />;
+      return <PreviewCell font={font} own={face || family.ungroupedFrom ? "full" : "family"} family={family.name} typed={previewText} size={previewSize} id={id} />;
     case "styles":
       return face || family.ungroupedFrom ? null : <span>{family.faces.length}</span>;
     case "weights":
@@ -578,12 +578,12 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
 }
 
 /** The Preview column: the fitted preview, with the sample badge and "not in this font" hint. */
-function PreviewCell({ font, own, typed, size, id }: { font: FontSummary; own: "family" | "full"; typed: string; size: number; id: string }) {
+function PreviewCell({ font, own, family, typed, size, id }: { font: FontSummary; own: "family" | "full"; family: string; typed: string; size: number; id: string }) {
   const preview = usePreviewProfile(font);
   return (
     <span className="flex w-full min-w-0 items-center gap-1.5">
       <span className="min-w-0 flex-1">
-        <FacePreview font={font} preview={preview} typed={typed} own={own} size={size} />
+        <FacePreview font={font} preview={preview} typed={typed} own={own} size={size} family={family} />
       </span>
       <MissingHint text={typed} profile={preview.profile} srId={`${id}-missing`} />
       <SampleBadge profile={preview.profile} row={own} id={`${id}-sample`} />

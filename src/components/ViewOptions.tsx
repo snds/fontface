@@ -4,7 +4,7 @@ import { IS_MAC } from "@/components/TitleBar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverClose, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -90,6 +90,8 @@ interface Props {
   onDensity: (density: TableDensity) => void;
   columns: TableColumnSetting[];
   onColumns: (columns: TableColumnSetting[]) => void;
+  /** Opens the Family groups page. */
+  onFamilyGroups: () => void;
 }
 
 /**
@@ -98,7 +100,7 @@ interface Props {
  * toolbar drops its own layout switch, and this is where the layout is picked.
  */
 export function ViewOptions(props: Props) {
-  const { layout, onLayout, groupStyles, onGroupStyles, sort, onSort, density, onDensity, columns, onColumns } = props;
+  const { layout, onLayout, groupStyles, onGroupStyles, sort, onSort, density, onDensity, columns, onColumns, onFamilyGroups } = props;
   const id = useId();
   const info = sortInfo(sort.key);
   // The main sorts, plus the current one if it came from a Table header (Format, Source…).
@@ -147,6 +149,17 @@ export function ViewOptions(props: Props) {
             className="mt-0.5"
           />
         </label>
+        <PopoverClose
+          render={<Button variant="outline" size="sm" className="self-start" />}
+          onClick={onFamilyGroups}
+          aria-describedby={`${id}-families-desc`}
+        >
+          <Icon name="account_tree" size={16} />
+          Family groups…
+        </PopoverClose>
+        <span id={`${id}-families-desc`} className="-mt-2 text-xs text-muted-foreground">
+          How styles are grouped into families by name, with suggestions and your changes.
+        </span>
 
         <Section label="Sort by" id={`${id}-sort`}>
           <div className="flex items-center gap-2">

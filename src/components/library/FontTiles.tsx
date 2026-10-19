@@ -250,7 +250,7 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
       </div>
       <div className="flex min-h-0 flex-1 items-center overflow-hidden">
         <div className="min-w-0 flex-1">
-          <FacePreview font={family.representative.primary} preview={preview} typed={previewText} own={single ? "full" : "family"} size={size} />
+          <FacePreview font={family.representative.primary} preview={preview} typed={previewText} own={single ? "full" : "family"} size={size} family={family.name} />
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">

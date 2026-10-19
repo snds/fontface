@@ -9,6 +9,9 @@ import { characterSetLine, type CharactersState } from "@/components/CharacterGr
 import { IS_MAC } from "@/components/TitleBar";
 import { colorVar } from "@/tags/api";
 import type { Locations } from "@/tags/locations";
+import { keepSeparate, resetChoices, useOpenFamilyGroups } from "@/families/store";
+import { nameRef, runChange } from "@/families/feedback";
+import { squash } from "@/familyGroups";
 import { formatBytes, SectionTitle } from "./parts";
 
 export const REVEAL_LABEL = IS_MAC ? "Show in Finder" : "Show in Explorer";
@@ -41,6 +44,9 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
   // [label, value, monospace?]
   const rows: [string, string | null | undefined, boolean?][] = [
     ["On or off", status],
+    // The font's own names, when it's listed under another family or style.
+    ["Its family name", face.family !== font.family ? font.family : font.legacyFamily],
+    ["Its style name", face.style !== font.subfamily ? font.subfamily : null],
     ["Full name", font.fullName],
     ["PostScript", font.postscriptName, true],
     ["Version", detail?.version],
@@ -62,6 +68,7 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
   ];
   return (
     <div className="flex max-w-3xl flex-col gap-8 px-6 pt-5 pb-12">
+      <FamilyGroupNote face={face} />
       <section aria-label="Details">
         <SectionTitle>Details</SectionTitle>
         <dl className="flex flex-col gap-1.5 text-sm">
@@ -106,5 +113,51 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
         </ul>
       </section>
     </div>
+  );
+}
+
+/**
+ * How this style got its family, when it isn't simply its own name: grouped by name (with Keep
+ * separate), or by your rule or choice (with a way back). Each change has Undo.
+ */
+function FamilyGroupNote({ face }: { face: Face }) {
+  const openFamilyGroups = useOpenFamilyGroups();
+  const raw = face.primary.family;
+  const moved = face.family !== raw;
+  if (face.groupedBy === "own") return null;
+  let text: string;
+  let action: { label: string; run: () => void } | null = null;
+  if (face.groupedBy === "name") {
+    text = `Grouped by name into ${face.family}, from “${raw}”.`;
+    action = {
+      label: `Keep “${raw}” separate`,
+      run: () => void runChange(() => keepSeparate(`Kept “${raw}” separate`, [nameRef(raw)]), "Couldn't keep it separate"),
+    };
+  } else if (face.groupedBy === "rule") {
+    text = moved ? `Merged into ${face.family} by you, from “${raw}”.` : `You chose to keep “${raw}” separate.`;
+    action = {
+      label: moved ? "Undo this merge" : "Allow grouping by name",
+      run: () => void runChange(() => resetChoices(moved ? `Took “${raw}” out of ${face.family}` : `Allowed grouping “${raw}” by name`, [], [squash(raw)]), "Couldn't change it"),
+    };
+  } else {
+    text = moved ? `Moved into ${face.family} by you, from “${raw}”.` : "You chose to keep this style under its own family name.";
+    action = {
+      label: moved ? "Use its own family name" : "Allow grouping by name",
+      run: () => void runChange(() => resetChoices(moved ? `Took ${face.style} out of ${face.family}` : `Allowed grouping ${face.style} by name`, [face.key], []), "Couldn't change it"),
+    };
+  }
+  return (
+    <section aria-label="Family group" className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2.5 text-sm">
+      <Icon name="account_tree" size={16} className="text-muted-foreground" />
+      <span className="min-w-0 flex-1">{text}</span>
+      {action && (
+        <Button variant="link" size="sm" className="h-auto p-0" onClick={action.run}>
+          {action.label}
+        </Button>
+      )}
+      <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>
+        Family groups…
+      </Button>
+    </section>
   );
 }

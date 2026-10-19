@@ -164,7 +164,7 @@ function StyleLine({
 }) {
   const font = face.primary;
   const preview = usePreviewProfile(font);
-  const label = `${font.subfamily}${font.variable ? " (Variable)" : ""}`;
+  const label = `${face.style}${font.variable ? " (Variable)" : ""}`;
   const stateId = useId();
   return (
     // Right-click a line for that style's menu (see FontPage).
@@ -198,7 +198,7 @@ function StyleLine({
       <StateControl
         state={summarize([face])}
         single
-        label={`Activate ${font.family} ${font.subfamily}`}
+        label={`Activate ${face.family} ${face.style}`}
         busy={busy}
         srId={stateId}
         onSwitch={(on) => onActivate(activationIds([face], on), on)}

@@ -22,6 +22,7 @@ import {
   activationIds,
   filterFamilies,
   groupFamilies,
+  groupLibrary,
   INSTALLED_LABEL,
   placeCounts,
   recentSince,
@@ -80,7 +81,10 @@ import { applyTheme, useDarkTheme } from "@/settings/theme";
 import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/useSettings";
 import { useSyncEvents } from "@/sync/store";
 import { popupOpen, useNav } from "@/useNav";
-import { findIntent, type CatalogPageEntry } from "@/nav";
+import { findIntent, type CatalogPageEntry, type GroupsFilter } from "@/nav";
+import { suggestGroups, type GroupingOptions } from "@/familyGroups";
+import { FamilyGroupsContext, reloadFamilyChoices, useFamilyChoices, type OpenFamilyGroups } from "@/families/store";
+import { FamilyGroupsPage, GROUPS_SEARCH_ID } from "@/components/FamilyGroupsPage";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
@@ -253,8 +257,18 @@ export default function App() {
     // Settings over the page take Esc themselves; a drag takes Esc to cancel.
     blocked: () => settingsOpenRef.current || isDragging(),
     onBack: (closed, remaining) => {
-      if (remaining.length) return;
-      pendingFocus.current = closed.kind === "font" ? { row: closed.returnTo } : { element: closed.returnTo };
+      if (remaining.length) {
+        // Back to the page underneath (a font page under Family groups): focus goes to what
+        // opened this one, else that page's heading.
+        const id = closed.kind === "groups" && closed.returnTo && "element" in closed.returnTo ? closed.returnTo.element : null;
+        requestAnimationFrame(() => {
+          const el = (id && document.getElementById(id)) || document.querySelector<HTMLElement>("[data-page-top] h1");
+          el?.focus({ preventScroll: true });
+        });
+        return;
+      }
+      pendingFocus.current =
+        closed.kind === "font" ? { row: closed.returnTo } : closed.kind === "groups" ? (closed.returnTo ?? { element: null }) : { element: closed.returnTo };
       announce(`Back to ${placeNameRef.current}`);
     },
   });
@@ -320,7 +334,7 @@ export default function App() {
           break;
         case "page": {
           e.preventDefault();
-          const field = document.getElementById(GOOGLE_SEARCH_ID);
+          const field = document.getElementById(onTop?.kind === "groups" ? GROUPS_SEARCH_ID : GOOGLE_SEARCH_ID);
           if (field instanceof HTMLInputElement) {
             field.focus();
             field.select();
@@ -522,13 +536,18 @@ export default function App() {
   // "Ask me": fonts turned off while Fontface was closed are offered back once, at launch.
   useRestorePrompt(() => loadFonts().catch(() => {}));
   useSyncEvents(useCallback(() => void loadFonts().catch(() => {}), [loadFonts]));
-  // Older fonts' "Added" dates, worked out once in the background (db::backfill_added_at).
+  // Older fonts' "Added" dates, and the names family grouping reads (name IDs 16, 1, 2), worked
+  // out once in the background (db::backfill_added_at, families::backfill_names).
   useEffect(() => {
-    const unlisten = listen("added-dates", () => loadFonts().catch(() => {}));
+    const unlisten = [listen("added-dates", () => loadFonts().catch(() => {})), listen("family-names", () => loadFonts().catch(() => {}))];
     return () => {
-      unlisten.then((fn) => fn()).catch(() => {});
+      for (const u of unlisten) u.then((fn) => fn()).catch(() => {});
     };
   }, [loadFonts]);
+  // Your family choices (merge, keep separate, move), kept by Fontface.
+  useEffect(() => {
+    reloadFamilyChoices().catch((e) => toast.error("Couldn't read your family choices", { description: String(e) }));
+  }, []);
 
   // Cmd+, (Ctrl+, on Windows) opens settings, or goes to their search field if they're open.
   // On macOS the app menu's Settings… item has ⌘, too and sends "open-settings". The page sees
@@ -913,7 +932,15 @@ export default function App() {
     });
 
   // Group the whole library once; views filter faces, so each Face keeps all of its copies.
-  const allFamilies = useMemo(() => groupFamilies(fonts), [fonts]);
+  // Families group by name (unless that's off in Settings), and by your choices (familyGroups.ts).
+  const familyChoices = useFamilyChoices();
+  const groupByName = settings?.groupByName ?? DEFAULT_SETTINGS.groupByName;
+  const grouping = useMemo<GroupingOptions>(
+    () => ({ byName: groupByName, choices: familyChoices.choices, rules: familyChoices.rules }),
+    [groupByName, familyChoices.choices, familyChoices.rules],
+  );
+  const library = useMemo(() => groupLibrary(fonts, grouping), [fonts, grouping]);
+  const allFamilies = library.families;
   const fontById = useMemo(() => new Map(fonts.map((f) => [f.id, f])), [fonts]);
   // Per-folder style counts, matching what each folder's view lists.
   const folderCounts = useMemo(() => {
@@ -1014,6 +1041,11 @@ export default function App() {
   // What Back goes back to, in words.
   const placeName = placeLabel(view, { folders, fontBook: INSTALLED_LABEL, tagName: (id) => leafOf(tagIndex.byId.get(id)?.name ?? "") || undefined });
   placeNameRef.current = placeName;
+  /** What Back from the page at `i` returns to, in words: the font page under it, or the place. */
+  const pageUnder = (i: number) => {
+    const under = i > 0 ? nav.pages[i - 1] : undefined;
+    return under?.kind === "font" ? (familyOfFace.get(under.styleKey) ?? familyOfFace.get(under.faceKey))?.name ?? placeName : placeName;
+  };
   const styleCount = useMemo(() => filtered.reduce((n, f) => n + f.faces.length, 0), [filtered]);
   const { hasOwnTag } = filterContext;
   const counts = useMemo(() => placeCounts(allFamilies, { hideInstalled, recentSince: since, hasOwnTag }), [allFamilies, hideInstalled, since, hasOwnTag]);
@@ -1065,8 +1097,27 @@ export default function App() {
   };
   const revealFont = (id: number) => api.revealFont(id).catch((e) => toast.error(String(e)));
 
+  /** Family groups: from View options, a font's menus or Settings, on some fonts or on all. */
+  const openFamilyGroups = useCallback<OpenFamilyGroups>(
+    (faces, options = {}) => {
+      const focus = faces?.map((f) => f.key) ?? [];
+      const filter: GroupsFilter = options.filter ?? "all";
+      nav.open({ kind: "groups", filter, focus, returnTo: options.returnTo ? { element: options.returnTo } : null });
+      announce(filter === "suggested" ? "Opened Family groups, on the suggestions" : "Opened Family groups");
+      closeSettings({ restoreFocus: false });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nav.open, announce, closeSettings],
+  );
+  // How many suggestions Settings › Library mentions: worked out only while settings are open.
+  const familySuggestions = useMemo(
+    () => (settingsOpen ? suggestGroups(library.families, library.plan, grouping).length : 0),
+    [settingsOpen, library, grouping],
+  );
+
   return (
     <SettingsContext.Provider value={settingsStore}>
+      <FamilyGroupsContext.Provider value={openFamilyGroups}>
       <StateWordingContext.Provider value={stateWording}>
       <TooltipProvider>
         <div className="relative h-full">
@@ -1144,6 +1195,7 @@ export default function App() {
                     onDensity={(d) => updateSettings({ tableDensity: d })}
                     columns={tableColumns}
                     onColumns={(c) => updateSettings({ tableColumns: c })}
+                    onFamilyGroups={() => openFamilyGroups()}
                   />
                 }
               />
@@ -1196,8 +1248,24 @@ export default function App() {
               {nav.pages.map((page, i) => {
                 const covered = i < nav.pages.length - 1;
                 return (
-                  <div key={page.id} inert={covered} className={cn("absolute inset-0 flex flex-col bg-background", covered && "invisible")}>
-                    {page.kind === "catalog" ? (
+                  <div
+                    key={page.id}
+                    inert={covered}
+                    data-page-top={covered ? undefined : ""}
+                    className={cn("absolute inset-0 flex flex-col bg-background", covered && "invisible")}
+                  >
+                    {page.kind === "groups" ? (
+                      <FamilyGroupsPage
+                        page={page}
+                        library={library}
+                        grouping={grouping}
+                        placeName={pageUnder(i)}
+                        locations={locations}
+                        onBack={nav.back}
+                        onFilter={(filter) => nav.update(page.id, { filter })}
+                        announce={announce}
+                      />
+                    ) : page.kind === "catalog" ? (
                       <CatalogPage placeName={placeName} onBack={nav.back}>
                         {(back) =>
                           page.service === "google" ? (
@@ -1269,6 +1337,8 @@ export default function App() {
                 // The page's heading takes focus (not the Settings button).
                 closeSettings({ restoreFocus: false });
               }}
+              familySuggestions={familySuggestions}
+              onReviewFamilyGroups={() => openFamilyGroups(undefined, { filter: "suggested" })}
             />
           )}
         </div>
@@ -1309,6 +1379,7 @@ export default function App() {
         </div>
       </TooltipProvider>
       </StateWordingContext.Provider>
+      </FamilyGroupsContext.Provider>
     </SettingsContext.Provider>
   );
 }

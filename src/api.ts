@@ -49,6 +49,12 @@ export interface FontSummary {
   /** When the font came into the library, in Unix seconds. Fonts from before Fontface recorded
    *  it carry their file's date; left out until that's known. */
   addedAt?: number;
+  /** The font names its own grouping family (name ID 16, other than its name ID 1): grouping by
+   *  name leaves it as it is. Left out until Fontface has read the font's names (a launch
+   *  backfill reads older fonts). */
+  hasTypoFamily?: boolean;
+  /** The font's name ID 1, when it differs from `family` (which is name ID 16 if there is one). */
+  legacyFamily?: string;
   /** What the preview draws (src-tauri/src/preview). Null until the face has a current profile:
    *  the list then asks for one (`previewProfiles`) and draws the name meanwhile. */
   preview: PreviewInfo | null;
@@ -439,6 +445,9 @@ export interface AppSettings {
   layout: LibraryLayout;
   /** Off: every style is its own item, "Family Style". */
   groupStyles: boolean;
+  /** Settings › Library › "Group families by name". Off: families use the fonts' own names
+   *  (your own family choices still apply). */
+  groupByName: boolean;
   sort: SortOrder;
   /** Empty: the default columns. */
   tableColumns: TableColumnSetting[];
@@ -465,6 +474,35 @@ export interface TurnOffAllReport {
   turnedOff: number;
   /** [file, why] for each one that couldn't be turned off. */
   failed: [string, string][];
+}
+
+// --------------------------------------------------------------------------- family groups
+// Must match src-tauri/src/families.rs. Your choices for family grouping (src/familyGroups.ts):
+// stored by Fontface, never in the font files. Every change returns the change that undoes it.
+
+/** A font's choice to set (`family` null: under its own name), or null to clear it. */
+export interface FamilyChoiceValue {
+  family: string | null;
+  style: string | null;
+}
+/** A name's rule to set, or null to clear it. */
+export interface FamilyRuleValue {
+  name: string;
+  decision: "merge" | "separate";
+  into: string | null;
+}
+export interface FamilyChange {
+  faces: { faceKey: string; set: FamilyChoiceValue | null }[];
+  names: { nameKey: string; set: FamilyRuleValue | null }[];
+}
+export interface FamilyChoicesData {
+  choices: { faceKey: string; family: string | null; style: string | null }[];
+  rules: { nameKey: string; name: string; decision: "merge" | "separate"; into: string | null }[];
+}
+/** A family name for a rule: its squash key (familyGroups.squash) and its spelling. */
+export interface NameRef {
+  nameKey: string;
+  name: string;
 }
 
 export interface TagBackup {
@@ -528,6 +566,18 @@ export const api = {
   backupsCreate: () => invoke<TagBackup>("backups_create"),
   backupsReveal: () => invoke<void>("backups_reveal"),
   appDataReveal: () => invoke<void>("app_data_reveal"),
+  familiesGet: () => invoke<FamilyChoicesData>("families_get"),
+  /** These names go into `into` from now on, and these fonts (chosen elsewhere before) with them. */
+  familiesMerge: (names: NameRef[], into: string, faces: string[] = []) => invoke<FamilyChange>("families_merge", { names, into, faces }),
+  /** These names are never grouped by name; these fonts stay under their own names. */
+  familiesKeepSeparate: (names: NameRef[], faces: string[] = []) => invoke<FamilyChange>("families_keep_separate", { names, faces }),
+  familiesMove: (faces: string[], family: string, style: string | null = null) => invoke<FamilyChange>("families_move", { faces, family, style }),
+  /** Forgets your choices for these fonts and your rules for these names. */
+  familiesReset: (faces: string[], nameKeys: string[]) => invoke<FamilyChange>("families_reset", { faces, nameKeys }),
+  /** Applies a change another call returned: undo (and redo). */
+  familiesUndo: (change: FamilyChange) => invoke<FamilyChange>("families_undo", { change }),
+  /** Several changes as one, with one undo. */
+  familiesApply: (change: FamilyChange) => invoke<FamilyChange>("families_apply", { change }),
   /** A double-click on the title bar: zooms, minimizes or does nothing, as the macOS setting says. */
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
 };

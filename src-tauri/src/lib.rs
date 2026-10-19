@@ -4,6 +4,7 @@ mod cloud;
 mod commands;
 mod db;
 mod error;
+mod families;
 #[cfg(target_os = "macos")]
 mod login_item;
 mod model;
@@ -106,6 +107,12 @@ impl AppState {
         let _gate = db::UiWriteGate::raise();
         f(&mut conn)
     }
+
+    /// `write`, for a choice the user made that sync doesn't share yet (family groups; see
+    /// families.rs and docs/SYNC.md), so it isn't woken.
+    pub fn write_local<T>(&self, f: impl FnOnce(&mut Connection) -> AppResult<T>) -> AppResult<T> {
+        self.write_cache(f)
+    }
 }
 
 #[cfg(test)]
@@ -149,6 +156,7 @@ pub fn run() {
             settings::ensure_schema(&conn)?;
             activation::ensure_schema(&conn)?;
             sync::ensure_schema(&conn)?;
+            families::ensure_schema(&conn)?;
             // Before the window can change any tag: sync's saved state from an older build.
             if let Err(e) = sync::upgrade_saved_state(&conn) {
                 eprintln!("fontface: sync couldn't update its saved state: {e}");
@@ -195,6 +203,25 @@ pub fn run() {
                             let _ = handle.emit("added-dates", n);
                         }
                         Err(e) => eprintln!("fontface: dating older fonts failed: {e}"),
+                    }
+                });
+            }
+            // The names family grouping reads (name IDs 16, 1, 2) for fonts scanned before they
+            // were stored (once; see families::backfill_names). The list reloads when it's done.
+            {
+                let (handle, db_path) = (app.handle().clone(), db_path.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(2500));
+                    match families::backfill_names(&db_path) {
+                        Ok(r) if r.written > 0 => {
+                            eprintln!(
+                                "fontface: read the names of {} faces in {} files ({} online-only and {} other files left for later)",
+                                r.written, r.files, r.cloud, r.other
+                            );
+                            let _ = handle.emit("family-names", r.written);
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("fontface: reading older fonts' names failed: {e}"),
                     }
                 });
             }
@@ -275,6 +302,13 @@ pub fn run() {
             commands::backups_reveal,
             commands::app_data_reveal,
             window::title_bar_double_click,
+            families::families_get,
+            families::families_merge,
+            families::families_keep_separate,
+            families::families_move,
+            families::families_reset,
+            families::families_undo,
+            families::families_apply,
             tags::commands::tags_list,
             tags::commands::tags_create,
             tags::commands::tags_rename,

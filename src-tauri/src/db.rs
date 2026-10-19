@@ -151,11 +151,18 @@ pub fn open(path: &Path) -> AppResult<Connection> {
 /// - `added_at`: when the font came into the library (Unix seconds). A new row gets its scan's
 ///   start time; a scan that updates a row leaves it alone. Null for rows from before it
 ///   existed, until `backfill_added_at` dates them.
+/// - `typo_family`, `legacy_family`, `legacy_style`: the font's name IDs 16, 1 and 2, for family
+///   grouping (families.rs). `names_rev` says they've been read (`families::NAMES_REV`); null
+///   for rows from before, until `families::backfill_names` reads them.
 ///
 /// A future migration that rebuilds `fonts` must list these columns too (v3's `SELECT *` would
 /// break on them).
 fn ensure_schema(conn: &Connection) -> AppResult<()> {
     crate::tags::ensure_column(conn, "fonts", "added_at", "added_at INTEGER")?;
+    crate::tags::ensure_column(conn, "fonts", "typo_family", "typo_family TEXT")?;
+    crate::tags::ensure_column(conn, "fonts", "legacy_family", "legacy_family TEXT")?;
+    crate::tags::ensure_column(conn, "fonts", "legacy_style", "legacy_style TEXT")?;
+    crate::tags::ensure_column(conn, "fonts", "names_rev", "names_rev INTEGER")?;
     Ok(())
 }
 
@@ -408,21 +415,26 @@ pub fn other_roots(conn: &Connection, except: i64) -> AppResult<Vec<PathBuf>> {
     Ok(rows.map(|r| r.map(PathBuf::from)).collect::<Result<_, _>>()?)
 }
 
-/// The list columns: the font's own (24), then its preview profile's (`preview::COLUMNS`). A
+/// The list columns: the font's own (26), then its preview profile's (`preview::COLUMNS`). A
 /// static font's axes are always empty, so only a variable font's are read (for its weights).
+/// Whether the font names its own grouping family is null until its names were read; a name ID
+/// 16 that only repeats name ID 1 (775 of Sean's faces) doesn't count, since it groups nothing.
+/// Its name ID 1 is sent only where it differs from the family.
 fn summary_columns() -> String {
     format!(
         "fonts.id, fonts.folder_id, fonts.path, fonts.face_index, fonts.family, \
          fonts.subfamily, fonts.full_name, fonts.postscript_name, fonts.weight, fonts.width, fonts.italic, \
          fonts.monospace, fonts.variable, fonts.format, fonts.activated, folders.kind = 'system', \
          fonts.mtime, fonts.file_size, fonts.version, fonts.designer, fonts.manufacturer, \
-         fonts.glyph_count, CASE WHEN fonts.variable THEN fonts.axes END, fonts.added_at, {}",
+         fonts.glyph_count, CASE WHEN fonts.variable THEN fonts.axes END, fonts.added_at, \
+         CASE WHEN fonts.names_rev IS NOT NULL THEN fonts.typo_family IS NOT NULL AND fonts.typo_family IS NOT fonts.legacy_family END, \
+         CASE WHEN fonts.legacy_family IS NOT fonts.family THEN fonts.legacy_family END, {}",
         crate::preview::COLUMNS
     )
 }
 
 /// How many of `summary_columns` are the font's own, before the profile's.
-const FONT_COLUMNS: usize = 24;
+const FONT_COLUMNS: usize = 26;
 
 /// How many columns `summary_columns` lists.
 const SUMMARY_LEN: usize = FONT_COLUMNS + crate::preview::COLUMN_COUNT;
@@ -478,6 +490,8 @@ pub fn summary_from_row(r: &Row) -> rusqlite::Result<FontSummary> {
         glyph_count: r.get(21)?,
         weight_range: weight_range(r.get::<_, Option<String>>(22)?.as_deref()),
         added_at: r.get(23)?,
+        has_typo_family: r.get(24)?,
+        legacy_family: r.get(25)?,
         preview: crate::preview::info_from_row(r, FONT_COLUMNS)?,
     })
 }

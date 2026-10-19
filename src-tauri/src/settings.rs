@@ -209,6 +209,10 @@ pub struct AppSettings {
     pub layout: Layout,
     /// Off: every style is listed on its own, as "Family Style".
     pub group_styles: bool,
+    /// Settings › Library › "Group families by name": fonts whose family name carries a style
+    /// ("AmintaBold") join their family. Off, families use the fonts' own names; the user's own
+    /// choices still apply (src/familyGroups.ts).
+    pub group_by_name: bool,
     pub sort: SortOrder,
     /// Empty: the UI's default columns.
     pub table_columns: Vec<TableColumn>,
@@ -235,6 +239,7 @@ impl Default for AppSettings {
             font_page_tab: FontPageTab::Specimen,
             layout: Layout::Rows,
             group_styles: true,
+            group_by_name: true,
             sort: SortOrder::default(),
             table_columns: Vec::new(),
             table_density: TableDensity::Regular,
@@ -330,6 +335,7 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
             s.layout = choice(value, "The layout", &[("tiles", Layout::Tiles), ("rows", Layout::Rows), ("table", Layout::Table)])?
         }
         "groupStyles" => s.group_styles = flag(value, "Group styles into families")?,
+        "groupByName" => s.group_by_name = flag(value, "Group families by name")?,
         "sort" => s.sort = sort_order(value)?,
         "tableColumns" => s.table_columns = table_columns(value)?,
         "tableDensity" => {

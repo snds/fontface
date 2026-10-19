@@ -13,6 +13,7 @@ import {
   shortVersion,
   weightSpan,
 } from "./familyFacts.ts";
+import { planByName, placeFace, traitsOf, type GroupedBy, type GroupingOptions, type GroupPlan, type Traits } from "./familyGroups.ts";
 
 /**
  * One style of a family. Libraries often hold several copies of the same font (an .otf and a
@@ -26,6 +27,16 @@ export interface Face {
   copies: FontSummary[];
   installed: boolean;
   active: boolean;
+  /** The family it's listed under: its own name (`primary.family`), or the one grouping by
+   *  name, your rule for its name or your choice for it gave it (familyGroups.ts). */
+  family: string;
+  /** Its style there: its own (`primary.subfamily`), or worked out from its name when it was
+   *  grouped ("Black Italic" for AmintaBlackItalic in Aminta). */
+  style: string;
+  /** How it got its family. */
+  groupedBy: GroupedBy;
+  /** Weight, width and slope for sorting, from its style's words where its own numbers disagree. */
+  traits: Traits;
 }
 
 export interface Family {
@@ -151,8 +162,7 @@ export const INSTALLED_LABEL =
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
-const regularness = (f: FontSummary) =>
-  (f.italic ? 1000 : 0) + Math.abs(f.width - 5) * 100 + Math.abs(f.weight - 400);
+const regularness = ({ traits: t }: Face) => (t.italic ? 1000 : 0) + Math.abs(t.width - 5) * 100 + Math.abs(t.weight - 400);
 
 const isCollection = (f: FontSummary) => f.format.endsWith("Collection");
 
@@ -188,23 +198,31 @@ function groupFaces(fonts: FontSummary[]): Face[] {
   }
   return [...map.entries()].map(([key, copies]) => {
     copies.sort(preferred);
+    const primary = copies[0];
     return {
       key,
-      primary: copies[0],
+      primary,
       copies,
       installed: copies.some((c) => c.installed),
       active: copies.some((c) => c.osActive),
+      family: primary.family,
+      style: primary.subfamily,
+      groupedBy: "own",
+      traits: { weight: primary.weight, width: primary.width, italic: primary.italic },
     };
   });
 }
 
+/** A family's styles: upright before italic, narrow to wide, light to heavy (by what the style's
+ *  name says where the font's own numbers disagree), variable first, then by style name. */
 const sortFaces = (faces: Face[]) =>
   faces.sort(
     (a, b) =>
-      Number(a.primary.italic) - Number(b.primary.italic) ||
-      a.primary.width - b.primary.width ||
-      a.primary.weight - b.primary.weight ||
-      Number(b.primary.variable) - Number(a.primary.variable),
+      Number(a.traits.italic) - Number(b.traits.italic) ||
+      a.traits.width - b.traits.width ||
+      a.traits.weight - b.traits.weight ||
+      Number(b.primary.variable) - Number(a.primary.variable) ||
+      collator.compare(a.style, b.style),
   );
 
 /** The face's preview reads as its name: drawn as is, tidied or in one case. Unknown counts too
@@ -212,8 +230,8 @@ const sortFaces = (faces: Face[]) =>
 const drawsItsName = (f: FontSummary) => !f.preview || f.preview.kind === "name" || f.preview.kind === "trim" || f.preview.kind === "case";
 
 /** Is `a` a better family representative than `b`? One that can draw its name, then the most regular. */
-const betterRepresentative = (a: FontSummary, b: FontSummary) =>
-  drawsItsName(a) !== drawsItsName(b) ? drawsItsName(a) : regularness(a) < regularness(b);
+const betterRepresentative = (a: Face, b: Face) =>
+  drawsItsName(a.primary) !== drawsItsName(b.primary) ? drawsItsName(a.primary) : regularness(a) < regularness(b);
 
 /** The id of the family grouped under this name (see Family.id). */
 export const familyId = (name: string) => `n:${name}`;
@@ -224,28 +242,51 @@ function makeFamily(id: string, name: string, faces: Face[]): Family {
     id,
     name,
     faces,
-    representative: faces.reduce((best, face) => (betterRepresentative(face.primary, best.primary) ? face : best)),
+    representative: faces.reduce((best, face) => (betterRepresentative(face, best) ? face : best)),
     switchable,
     activeCount: switchable.filter((face) => face.active).length,
   };
 }
 
+/** Grouping by name on, and none of your choices: what tests and one-off groupings use. */
+export const BY_NAME: GroupingOptions = { byName: true };
+
+/** The library grouped into families, and what grouping by name made of its names (the Family
+ *  groups page's suggestions start from it). */
+export interface Library {
+  families: Family[];
+  plan: GroupPlan;
+}
+
 /**
  * Groups the whole library. Views filter the result, so every Face always holds all its copies.
- * Copies are matched across family names too ("Abaddon" vs "Abaddon™" in different downloads);
- * each face is listed under the family name of its preferred copy.
+ * Copies are matched across family names too ("Abaddon" vs "Abaddon™" in different downloads).
+ * Each face goes under a family by familyGroups.ts's rules: your choice for it, your rule for its
+ * name, grouping by name (while that's on), else its preferred copy's own family name. Folders
+ * play no part. Families are sorted A to Z, their styles light to heavy (sortFaces).
  */
-export function groupFamilies(fonts: FontSummary[]): Family[] {
+export function groupLibrary(fonts: FontSummary[], grouping: GroupingOptions = BY_NAME): Library {
+  const faces = groupFaces(fonts);
+  const plan = planByName(faces, grouping.rules);
   const byFamily = new Map<string, Face[]>();
-  for (const face of groupFaces(fonts)) {
-    const list = byFamily.get(face.primary.family);
+  for (const face of faces) {
+    const placed = placeFace(face, plan, grouping);
+    face.family = placed.family;
+    face.style = placed.style;
+    face.groupedBy = placed.by;
+    face.traits = traitsOf(placed.style, face.primary);
+    const list = byFamily.get(face.family);
     if (list) list.push(face);
-    else byFamily.set(face.primary.family, [face]);
+    else byFamily.set(face.family, [face]);
   }
-  return [...byFamily.entries()]
-    .map(([name, faces]) => makeFamily(familyId(name), name, sortFaces(faces)))
+  const families = [...byFamily.entries()]
+    .map(([name, list]) => makeFamily(familyId(name), name, sortFaces(list)))
     .sort((a, b) => collator.compare(a.name, b.name));
+  return { families, plan };
 }
+
+/** `groupLibrary`'s families. */
+export const groupFamilies = (fonts: FontSummary[], grouping: GroupingOptions = BY_NAME): Family[] => groupLibrary(fonts, grouping).families;
 
 /**
  * "Group styles into families" off: every style becomes its own item, named "Family Style", in
@@ -257,7 +298,7 @@ export function ungroup(families: readonly Family[]): Family[] {
   for (const family of families) {
     const base = family.ungroupedFrom ?? family.name;
     for (const face of family.faces) {
-      out.push({ ...makeFamily(`u:${face.key}`, `${base} ${face.primary.subfamily}`, [face]), ungroupedFrom: base });
+      out.push({ ...makeFamily(`u:${face.key}`, `${base} ${face.style}`, [face]), ungroupedFrom: base });
     }
   }
   return out;
@@ -401,7 +442,13 @@ export function filterFamilies(
     if (status === "inactive" && face.active) return false;
     // Copies of a face are all variable or all static (it's part of the face key).
     if (variableOnly && !face.primary.variable) return false;
-    return !q || face.copies.some((c) => matches(c, q)) || (ctx.tagNames?.(face).some((n) => n.includes(q)) ?? false);
+    return (
+      !q ||
+      face.copies.some((c) => matches(c, q)) ||
+      // The family and style it's listed under, when grouping gave it others.
+      (face.groupedBy !== "own" && `${face.family} ${face.style}`.toLowerCase().includes(q)) ||
+      (ctx.tagNames?.(face).some((n) => n.includes(q)) ?? false)
+    );
   };
   if (view.kind === "all" && status === "any" && !q && !variableOnly && !hideInstalled) return families;
   const out: Family[] = [];

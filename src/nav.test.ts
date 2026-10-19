@@ -124,3 +124,16 @@ test("Cmd+F: the list's Search, leaving a font page, or the Google catalog's own
   // A font page opened over the catalog goes back to the list's Search.
   assert.equal(findIntent(top(open(google, page("ps:Inter-Regular")))), "leave");
 });
+
+test("Family groups: one page at a time, its filter changes in place, and Cmd+F goes to its search", () => {
+  const groups: NewPage = { kind: "groups", filter: "all", focus: [], returnTo: null };
+  const one = navReducer(EMPTY_NAV, { type: "open", page: groups });
+  assert.equal(navReducer(one, { type: "open", page: groups }), one, "the same page again: nothing new");
+  const focused = navReducer(one, { type: "open", page: { kind: "groups", filter: "suggested", focus: ["ps:A|static|r"], returnTo: null } });
+  assert.equal(focused.pages.length, 1, "opened again from elsewhere, it shows that instead of stacking");
+  assert.deepEqual([top(focused)!.id, (top(focused) as { filter: string }).filter], [top(one)!.id, "suggested"]);
+  const filtered = navReducer(one, { type: "update", id: top(one)!.id, patch: { filter: "changed" } });
+  assert.equal((top(filtered) as { filter: string }).filter, "changed");
+  assert.equal(navReducer(filtered, { type: "update", id: top(one)!.id, patch: { filter: "changed" } }), filtered);
+  assert.equal(findIntent(top(one)), "page");
+});

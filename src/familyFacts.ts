@@ -20,10 +20,11 @@ export function weightSpan(faces: readonly Face[]): WeightSpan | null {
   let min = Infinity;
   let max = -Infinity;
   let variable = false;
-  for (const { primary: f } of faces) {
+  for (const { primary: f, traits } of faces) {
     variable ||= f.variable;
-    // A variable font without a weight axis counts by its default weight.
-    const [low, high] = f.variable && f.weightRange ? f.weightRange : [f.weight, f.weight];
+    // A variable font without a weight axis counts by its default weight; a static one by its
+    // style's weight word where the font's own number is wrong (familyGroups.traitsOf).
+    const [low, high] = f.variable && f.weightRange ? f.weightRange : [traits.weight, traits.weight];
     min = Math.min(min, low);
     max = Math.max(max, high);
   }
