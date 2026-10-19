@@ -127,13 +127,27 @@ interface ControlProps {
 /** A font's state wherever it shows: the lock (with why), or the switch with its mark. While a
  *  request runs, its spinner takes the mark's place, so the Table's on/off column always fits. */
 export function StateControl({ state, single, label, busy, tabIndex, compact, srId, onSwitch }: ControlProps) {
-  const details = stateDetails(state, single, useStateWording());
-  const mark = busy ? null : markOf(state, { compact });
-  const said = details.length > 0 && (
-    <span id={srId} className="sr-only">
-      {details.join(" ")}
-    </span>
+  const wording = useStateWording();
+  const details = stateDetails(state, single, wording);
+  // The item's description (srId) leaves out the "n of N on" count its name already says; the
+  // switch's own description keeps it, since the switch alone doesn't say how many.
+  const forItem = stateDetails(state, single, wording, { count: false });
+  const switchSrId = srId ? `${srId}-switch` : undefined;
+  const said = (
+    <>
+      {forItem.length > 0 && (
+        <span id={srId} className="sr-only">
+          {forItem.join(" ")}
+        </span>
+      )}
+      {details.length > 0 && switchSrId && (
+        <span id={switchSrId} className="sr-only">
+          {details.join(" ")}
+        </span>
+      )}
+    </>
   );
+  const mark = busy ? null : markOf(state, { compact });
   if (state.lock) {
     return (
       <>
@@ -151,7 +165,7 @@ export function StateControl({ state, single, label, busy, tabIndex, compact, sr
         busy={busy}
         tabIndex={tabIndex}
         compact={compact}
-        describedBy={details.length && srId ? srId : undefined}
+        describedBy={details.length && switchSrId ? switchSrId : undefined}
         onChange={onSwitch}
       />
       {said}

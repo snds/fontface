@@ -84,7 +84,8 @@ test("a family sums its styles, and the switch follows what's on or set to turn 
     `1 style is set to turn on, but it isn't on right now. ${WHY_ONE}`,
     "1 style was turned on by another app.",
     "1 style is always on (installed in macOS's font folders).",
-  ]);
+  ]);  // The item's own description leaves out the count its name ("3 of 5 on") already says.
+  assert.equal(stateDetails(s, false, {}, { count: false })[0], "1 style is on until you log out or restart.");
 });
 
 test("set to turn on but not on: the switch is on and dimmed", () => {

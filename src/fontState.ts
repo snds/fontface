@@ -169,8 +169,15 @@ const WAITING_WHY = {
 /**
  * What a mark's tooltip says, and screen readers hear in the item's description: one sentence
  * per thing worth knowing. `single`: one style (else a family, which counts its styles).
+ * `count: false` leaves out the "n of N styles are on" sentence, for an item whose name already
+ * says it (stateWords), so screen readers don't hear it twice.
  */
-export function stateDetails(s: StateSummary, single: boolean, wording: StateWording = {}): string[] {
+export function stateDetails(
+  s: StateSummary,
+  single: boolean,
+  wording: StateWording = {},
+  { count = true }: { count?: boolean } = {},
+): string[] {
   if (s.lock === "macos") return ["Part of macOS. Always on."];
   if (s.lock === "installed") {
     return [
@@ -181,7 +188,7 @@ export function stateDetails(s: StateSummary, single: boolean, wording: StateWor
   }
   const out: string[] = [];
   // Partly on: how many, which the switch alone doesn't say (and Tiles and Table don't show).
-  if (switchLook(s).partial) {
+  if (count && switchLook(s).partial) {
     out.push(s.on === 0 ? `None of its ${styles(s.total)} are on.` : `${s.on.toLocaleString()} of ${styles(s.total)} ${are(s.on)} on.`);
   }
   const until = untilWhen(wording);
