@@ -12,6 +12,7 @@ import {
   type FontSummary,
   type GoogleFamily,
   type LibraryLayout,
+  type PreviewOptions,
   type PurchaseFind,
   type PurchaseImported,
   type ScanProgress,
@@ -91,6 +92,7 @@ import { PairPage } from "@/components/PairPage";
 import { RemoveFontsDialog, type RemovalRequest } from "@/components/RemoveFontsDialog";
 import { REVEAL_LABEL } from "@/components/fontPage/InfoTab";
 import { ViewOptions } from "@/components/ViewOptions";
+import { PreviewStyleContext, usePreviewStyleValue } from "@/components/PreviewStyle";
 import { FontPage } from "@/components/fontPage/FontPage";
 import { BackButton } from "@/components/fontPage/PageHeader";
 import { SubfolderPicker } from "@/components/SubfolderPicker";
@@ -1060,6 +1062,10 @@ export default function App() {
     [filtered, groupStyles, sort.key, sort.desc, sort.key === "source" ? sortContext : null],
   );
   const { update: updateSettings } = settingsStore;
+  // The View options' preview styling, for the layouts and the font page (PreviewStyle.tsx).
+  const previewOptions = settings?.preview ?? DEFAULT_SETTINGS.preview;
+  const previewStyle = usePreviewStyleValue(previewOptions, dark);
+  const choosePreview = useCallback((patch: Partial<PreviewOptions>) => updateSettings({ preview: patch }), [updateSettings]);
   // "On until logout" says "until you quit Fontface" when quitting turns those fonts off.
   const untilQuit = settings?.clearTemporaryOnQuit ?? false;
   // Switches turn fonts on the saved way; Option-click turns them on the other way.
@@ -1624,10 +1630,14 @@ export default function App() {
                     columns={tableColumns}
                     onColumns={(c) => updateSettings({ tableColumns: c })}
                     onFamilyGroups={() => openFamilyGroups()}
+                    preview={previewOptions}
+                    onPreview={choosePreview}
+                    dark={dark}
                   />
                 }
               />
               {families.length > 0 ? (
+                <PreviewStyleContext.Provider value={previewStyle}>
                 <LibraryPane
                   ref={listRef}
                   layout={layout}
@@ -1656,6 +1666,7 @@ export default function App() {
                     density: tableDensity,
                   }}
                 />
+                </PreviewStyleContext.Provider>
               ) : viewScan ? (
                 <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
                   <Icon name="progress_activity" size={32} className="animate-spin text-muted-foreground" />
@@ -1752,6 +1763,7 @@ export default function App() {
                         announce={announce}
                       />
                     ) : (
+                    <PreviewStyleContext.Provider value={previewStyle}>
                     <FontPage
                       page={page}
                       family={familyOfFace.get(page.styleKey) ?? familyOfFace.get(page.faceKey)}
@@ -1769,6 +1781,7 @@ export default function App() {
                       // Only the page asked gets the count: a covered font page never opens its Tags.
                       tagsAsk={tagsAsk.page === page.id ? tagsAsk.n : undefined}
                     />
+                    </PreviewStyleContext.Provider>
                     )}
                   </div>
                 );

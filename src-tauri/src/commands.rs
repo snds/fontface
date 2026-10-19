@@ -335,6 +335,17 @@ pub async fn font_characters(app: AppHandle, font_id: i64) -> AppResult<preview:
     answer.unwrap_or_else(|| Err(AppError::Other("Another font's characters were asked for, so these weren't read.".into())))
 }
 
+/// What the font page shows that the list doesn't have: the face's OpenType features, named
+/// styles, embedding permissions, more of its names and its languages (read from the file, see
+/// facts/), and when Fontface last turned it on. Never reads Creative Cloud's files, never
+/// downloads an online-only one (the answer says so instead), and runs on the preview reader
+/// threads through its own latest-wins lane (`preview::FACTS_LANE`).
+#[tauri::command]
+pub async fn font_facts(app: AppHandle, font_id: i64) -> AppResult<crate::facts::FactsAnswer> {
+    let answer = preview::FACTS_LANE.run(move || crate::facts::answer(&app.state::<AppState>(), font_id)).await?;
+    answer.unwrap_or_else(|| Err(AppError::Other("Another font's details were asked for, so these weren't read.".into())))
+}
+
 #[tauri::command(async)]
 pub fn get_font(state: State<'_, AppState>, font_id: i64) -> AppResult<FontDetail> {
     let loaded = activation::available_paths();
@@ -419,6 +430,9 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
     let loaded = if active { activation::available_paths().unwrap_or_default() } else { HashSet::new() };
     let mut outcomes = Vec::with_capacity(files.len());
     let mut to_verify = Vec::new();
+    // Files this request registered with the OS: once macOS confirms they're on, Fontface has
+    // turned them on (for the Info tab's "Last turned on").
+    let mut registered = Vec::new();
     for (path, installed, ids) in files {
         // Its folder may have been removed while this request waited for the lock.
         let (still_listed, recorded_on): (bool, bool) = state.conn()?.query_row(
@@ -463,6 +477,9 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
                     }
                 })?;
                 to_verify.push(outcomes.len());
+                if active && scope.is_some() {
+                    registered.push(outcomes.len());
+                }
                 let temporary = activation::temporary_after(active, scope, is_temporary);
                 // Recorded as asked. `verify_with_os` may still find the OS disagrees: another
                 // app keeps it on, or macOS didn't load it (then it's set to turn on, but not on).
@@ -481,6 +498,13 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
     }
 
     verify_with_os(&mut outcomes, &to_verify, active);
+    let turned_on: Vec<&str> = registered.iter().filter(|&&i| outcomes[i].active).map(|&i| outcomes[i].path.as_str()).collect();
+    if !turned_on.is_empty() {
+        // Fontface's own record, not a choice sync shares; a failure here never fails the switch.
+        if let Err(e) = state.write_local(|conn| activation::record_turned_on(conn, &turned_on, db::now())) {
+            eprintln!("fontface: couldn't record when fonts were turned on: {e}");
+        }
+    }
     {
         let mut seen = state.seen_loaded();
         for o in &outcomes {

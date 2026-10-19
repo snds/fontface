@@ -5,6 +5,8 @@ import { isSampleKind, kindFor, missingCharacters, useProfileWait, type ProfileS
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { applyCase } from "@/previewStyle";
+import { usePreviewStyle } from "./PreviewStyle";
 import { PreviewText } from "./PreviewText";
 
 // A font's one-line preview and the small marks beside it, shared by the library rows and the
@@ -72,6 +74,7 @@ export function FacePreview({
       ready={state === "ready" && (!pending || waited)}
       profile={profile}
       ownText={!typed && !!profile}
+      typed={!!typed}
       sample={!typed && isSampleKind(profile, own)}
     />
   );
@@ -101,7 +104,9 @@ export function SampleBadge({ profile, row, id }: { profile: PreviewInfo | undef
 /** Shown when the typed preview text uses characters this font doesn't have. `srId` goes on the
  *  screen-reader text ("Not in this font: …"). */
 export function MissingHint({ text, profile, srId }: { text: string; profile: PreviewInfo | undefined; srId?: string }) {
-  const missing = missingCharacters(text, profile);
+  // The text as previews draw it: in the View options' case.
+  const { options } = usePreviewStyle();
+  const missing = missingCharacters(applyCase(text, options.case), profile);
   if (!missing.length) return null;
   const list = missing.join(" ");
   return (

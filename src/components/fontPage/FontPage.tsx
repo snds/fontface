@@ -14,11 +14,15 @@ import { pageTarget } from "@/fontActions";
 import type { Locations } from "@/tags/locations";
 import { openMenuFromKeyboard } from "@/tags/menus";
 import { useTagIndex } from "@/tags/model";
+import { featureSlack, pageFeatureValues, setToggle, type Toggles } from "@/openType";
+import { featureSettings, variationSettings } from "@/previewStyle";
+import { usePreviewStyle } from "@/components/PreviewStyle";
 import { AxesTab } from "./AxesTab";
 import { CharactersTab } from "./CharactersTab";
 import { InfoTab } from "./InfoTab";
+import { OpenTypeTab } from "./OpenTypeTab";
 import { BackButton, FontPageHeader } from "./PageHeader";
-import { TagChipsRow, useFontDetail } from "./parts";
+import { factsOf, TagChipsRow, useFontDetail, useFontFacts } from "./parts";
 import { SpecimenTab } from "./SpecimenTab";
 
 interface Props {
@@ -42,7 +46,8 @@ interface Props {
 /**
  * A family's page, opened over the library list (double-click or Return on a row). It always
  * shows the whole family. The chosen style and tab live in the page's stack entry (nav.ts);
- * axis values and the character search live here, and stay while the page is open.
+ * axis values, the OpenType switches, the text's language, the test text and the character
+ * search live here, and stay while the page is open.
  */
 export function FontPage(props: Props) {
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -79,28 +84,37 @@ function GonePage({ placeName, onBack, headingRef }: { placeName: string; onBack
   );
 }
 
-const TAB_LABELS: Record<FontPageTab, string> = { specimen: "Specimen", characters: "Characters", axes: "Axes", info: "Info" };
+const TAB_LABELS: Record<FontPageTab, string> = { specimen: "Specimen", characters: "Characters", opentype: "OpenType", axes: "Axes", info: "Info" };
 
 function FamilyPage({ page, family, placeName, previewText, busy, locations, onBack, onChange, onActivate, onReveal, tagsAsk, headingRef }: Props & { family: Family; headingRef: React.RefObject<HTMLHeadingElement | null> }) {
   const face: Face =
     family.faces.find((f) => f.key === page.styleKey) ?? family.faces.find((f) => f.key === page.faceKey) ?? family.representative;
   const font = face.primary;
   // Axes show only for a variable style; another style shows Specimen instead (the saved tab stays).
-  const tabs: FontPageTab[] = font.variable ? ["specimen", "characters", "axes", "info"] : ["specimen", "characters", "info"];
+  const tabs: FontPageTab[] = font.variable ? ["specimen", "characters", "opentype", "axes", "info"] : ["specimen", "characters", "opentype", "info"];
   const tab = tabs.includes(page.tab) ? page.tab : "specimen";
 
   const detail = useFontDetail(font.id);
   const characters = useFontCharacters(font.id, tab === "characters" || tab === "info");
+  // What the file says beyond the list (features, named styles, embedding, languages), read
+  // once a tab shows it; never for an online-only or Creative Cloud file.
+  // Asked again (quietly) when the style is turned on or off, for "Last turned on".
+  const facts = useFontFacts(font.id, tab === "opentype" || tab === "axes" || tab === "info", `${font.activated}:${font.osActive}`);
   const { profile } = usePreviewProfile(font);
   const [query, setQuery] = useState("");
   // Axis values belong to one style: another style starts at its defaults.
   const [axes, setAxes] = useState<{ fontId: number; values: Record<string, number> }>({ fontId: font.id, values: {} });
   const values = axes.fontId === font.id ? axes.values : {};
-  const variation =
-    Object.entries(values)
-      .map(([tag, v]) => `"${tag}" ${v}`)
-      .join(", ") || undefined;
-  const visibleAxes = detail ? detail.axes.filter((a) => !a.hidden) : null;
+  const variation = variationSettings(values);
+  // The OpenType switches are the page's, for every style (a style without a feature ignores it).
+  const look = usePreviewStyle();
+  const [toggles, setToggles] = useState<Toggles>({});
+  const [lang, setLang] = useState<string | undefined>();
+  const [testText, setTestText] = useState<string | null>(null);
+  const [testSize, setTestSize] = useState(40);
+  const featureValues = pageFeatureValues(look.features, toggles);
+  const features = featureSettings(featureValues);
+  const slack = featureSlack(featureValues);
 
   return (
     <PageMenu family={family} face={face}>
@@ -132,6 +146,9 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
             face={face}
             previewText={previewText}
             variation={variation}
+            features={features}
+            slack={slack}
+            lang={lang}
             busy={busy}
             onChoose={(styleKey) => onChange({ styleKey })}
             onActivate={onActivate}
@@ -140,17 +157,53 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
         <TabsContent value="characters" className="min-h-0 overflow-y-auto">
           <CharactersTab font={font} characters={characters} variation={variation} query={query} onQuery={setQuery} />
         </TabsContent>
+        <TabsContent value="opentype" className="min-h-0 overflow-y-auto">
+          <OpenTypeTab
+            font={font}
+            profile={profile}
+            facts={facts.state}
+            retry={facts.retry}
+            previewText={previewText}
+            testText={testText}
+            onTestText={setTestText}
+            testSize={testSize}
+            onTestSize={setTestSize}
+            toggles={toggles}
+            values={featureValues}
+            onToggle={(tag, on, defaultOn) => setToggles((t) => setToggle(t, tag, on, defaultOn, look.features))}
+            lang={lang}
+            onLang={setLang}
+            onReset={() => {
+              setToggles({});
+              setLang(undefined);
+            }}
+            variation={variation}
+          />
+        </TabsContent>
         {font.variable && (
           <TabsContent value="axes" className="min-h-0 overflow-y-auto">
             <AxesTab
-              axes={visibleAxes}
+              axes={detail ? detail.axes : null}
               values={values}
               onChange={(tag, v) => setAxes({ fontId: font.id, values: { ...values, [tag]: v } })}
+              onSet={(next) => setAxes({ fontId: font.id, values: next })}
+              instances={factsOf(facts.state)?.instances ?? null}
+              facts={facts.state}
+              retry={facts.retry}
             />
           </TabsContent>
         )}
         <TabsContent value="info" className="min-h-0 overflow-y-auto">
-          <InfoTab face={face} detail={detail} characters={characters} profile={profile} locations={locations} onReveal={onReveal} />
+          <InfoTab
+            face={face}
+            detail={detail}
+            characters={characters}
+            profile={profile}
+            locations={locations}
+            onReveal={onReveal}
+            facts={facts.state}
+            retry={facts.retry}
+          />
         </TabsContent>
       </Tabs>
     </PageMenu>

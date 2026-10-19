@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { api, type FontDetail } from "@/api";
+import { useCallback, useEffect, useState } from "react";
+import { api, type FactsAnswer, type FontDetail } from "@/api";
+import { unreadWords } from "@/fontInfo";
 import type { FaceState } from "@/fontLoader";
 import type { Face } from "@/library";
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,71 @@ export function useFontDetail(fontId: number): FontDetail | null {
     };
   }, [fontId]);
   return detail?.id === fontId ? detail.detail : null;
+}
+
+export type FactsState = { status: "loading" } | { status: "ready"; answer: FactsAnswer } | { status: "error"; message: string };
+
+/**
+ * The chosen style's facts (`font_facts`: OpenType features, named styles, embedding, more
+ * names, languages, last turned on), read once `enabled` (the OpenType, Axes or Info tab shows
+ * them). What was read stays while the style is the same. `retry` asks again (after an
+ * online-only file has downloaded, say), showing "Reading…" meanwhile. A new `refresh` (the
+ * style was turned on or off) asks again quietly, keeping what's shown until the answer comes,
+ * so "Last turned on" follows (the file isn't read again: the back end keeps what it read).
+ */
+export function useFontFacts(fontId: number, enabled: boolean, refresh = ""): { state: FactsState; retry: () => void } {
+  const [read, setRead] = useState<{ id: number; n: number; state: FactsState } | null>(null);
+  const [asked, setAsked] = useState(0);
+  const wanted = enabled || read?.id === fontId;
+  useEffect(() => {
+    if (!wanted) return;
+    let live = true;
+    setRead((r) => (r?.id === fontId && r.n === asked ? r : { id: fontId, n: asked, state: { status: "loading" } }));
+    api.fontFacts(fontId).then(
+      (answer) => live && setRead({ id: fontId, n: asked, state: { status: "ready", answer } }),
+      // A quiet refresh that fails keeps what's shown.
+      (e) =>
+        live &&
+        setRead((r) => (r?.id === fontId && r.n === asked && r.state.status === "ready" ? r : { id: fontId, n: asked, state: { status: "error", message: String(e) } })),
+    );
+    return () => {
+      live = false;
+    };
+  }, [fontId, wanted, asked, refresh]);
+  const retry = useCallback(() => setAsked((n) => n + 1), []);
+  return { state: read?.id === fontId ? read.state : { status: "loading" }, retry };
+}
+
+/** The file's facts, if they were read. */
+export const factsOf = (state: FactsState) => (state.status === "ready" ? state.answer.facts : null);
+
+/**
+ * Why the file's details aren't here: "Download to see details" for an online-only file (with
+ * Check again, for once it has downloaded), or what stopped it. Nothing while it's read or once
+ * it has been.
+ */
+export function FactsMessage({ state, retry, what = "details" }: { state: FactsState; retry: () => void; what?: string }) {
+  if (state.status === "loading") return <p className="text-xs text-muted-foreground">Reading the font's {what}…</p>;
+  const unread = state.status === "ready" ? state.answer.unread : null;
+  if (state.status === "ready" && !unread) return null;
+  const words =
+    state.status === "error" ? { title: "Details unavailable", text: state.message } : unreadWords(unread!, state.answer.message);
+  const cloud = unread === "cloud";
+  return (
+    <div className="flex flex-wrap items-start gap-x-3 gap-y-2 rounded-lg border px-3 py-2.5 text-sm" role="status">
+      <Icon name={cloud ? "cloud_download" : "info"} size={18} className="mt-px text-muted-foreground" />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="font-medium">{words.title}</span>
+        <span className="text-xs text-muted-foreground">{words.text}</span>
+      </span>
+      {(cloud || unread === "missing" || unread === "changed" || state.status === "error") && (
+        <Button variant="outline" size="sm" onClick={retry}>
+          <Icon name="refresh" size={16} />
+          Check again
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /**

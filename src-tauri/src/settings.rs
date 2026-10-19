@@ -62,6 +62,8 @@ pub enum FontPageTab {
     #[default]
     Specimen,
     Characters,
+    #[serde(rename = "opentype")]
+    OpenType,
     Axes,
     Info,
 }
@@ -141,6 +143,46 @@ pub struct TableColumn {
     pub width: Option<u32>,
 }
 
+/// How previews line up in their row, card or line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PreviewAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// How previews change the case of their text: as typed, UPPER, lower or Title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreviewCase {
+    #[default]
+    AsTyped,
+    Upper,
+    Lower,
+    Title,
+}
+
+/// The features the View options can apply to every preview, in the order they're shown. Must
+/// match `PREVIEW_FEATURES` in src/previewStyle.ts.
+pub const PREVIEW_FEATURES: &[&str] = &["noLigatures", "smallCaps", "tabularFigures", "caseForms"];
+
+/// The View options' preview styling: applied to every layout and to the font page. Must match
+/// `PreviewOptions` in src/api.ts. Colors are "#rrggbb", or None for the theme's.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PreviewOptions {
+    pub align: PreviewAlign,
+    pub case: PreviewCase,
+    pub outline: bool,
+    pub underline: bool,
+    pub ink: Option<String>,
+    pub paper: Option<String>,
+    /// Ids from `PREVIEW_FEATURES`, in that order.
+    pub features: Vec<String>,
+}
+
 /// What the sidebar shows. All Fonts and the user's folders always show. Must match
 /// `SidebarSections` in src/api.ts: a key only the UI knows is dropped by `apply_key`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +259,8 @@ pub struct AppSettings {
     /// Empty: the UI's default columns.
     pub table_columns: Vec<TableColumn>,
     pub table_density: TableDensity,
+    /// The View options' preview styling (alignment, case, outline, underline, colors, features).
+    pub preview: PreviewOptions,
 }
 
 impl Default for AppSettings {
@@ -243,6 +287,7 @@ impl Default for AppSettings {
             sort: SortOrder::default(),
             table_columns: Vec::new(),
             table_density: TableDensity::Regular,
+            preview: PreviewOptions::default(),
         }
     }
 }
@@ -326,6 +371,7 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
                 &[
                     ("specimen", FontPageTab::Specimen),
                     ("characters", FontPageTab::Characters),
+                    ("opentype", FontPageTab::OpenType),
                     ("axes", FontPageTab::Axes),
                     ("info", FontPageTab::Info),
                 ],
@@ -342,10 +388,64 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
             s.table_density =
                 choice(value, "Table density", &[("compact", TableDensity::Compact), ("regular", TableDensity::Regular)])?
         }
+        "preview" => s.preview = preview_options(&s.preview, value)?,
         // A setting from a newer Fontface, or a typo: ignored.
         _ => {}
     }
     Ok(())
+}
+
+/// The preview styling merges key by key, like the sidebar: only the keys present change, and
+/// keys this version doesn't know are ignored. All or nothing, like a whole patch.
+fn preview_options(current: &PreviewOptions, value: &Value) -> AppResult<PreviewOptions> {
+    let changes = value.as_object().ok_or_else(|| invalid("Preview options must be a list of names and values"))?;
+    let mut p = current.clone();
+    for (key, value) in changes {
+        match key.as_str() {
+            "align" => {
+                p.align = choice(
+                    value,
+                    "Preview alignment",
+                    &[("left", PreviewAlign::Left), ("center", PreviewAlign::Center), ("right", PreviewAlign::Right)],
+                )?
+            }
+            "case" => {
+                p.case = choice(
+                    value,
+                    "Preview case",
+                    &[("asTyped", PreviewCase::AsTyped), ("upper", PreviewCase::Upper), ("lower", PreviewCase::Lower), ("title", PreviewCase::Title)],
+                )?
+            }
+            "outline" => p.outline = flag(value, "Outline")?,
+            "underline" => p.underline = flag(value, "Underline")?,
+            "ink" => p.ink = color(value, "The ink color")?,
+            "paper" => p.paper = color(value, "The paper color")?,
+            "features" => p.features = preview_features(value)?,
+            _ => {}
+        }
+    }
+    Ok(p)
+}
+
+/// A color as "#rrggbb" (kept in lowercase), or null for the theme's.
+fn color(value: &Value, label: &str) -> AppResult<Option<String>> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(c) if c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|h| h.is_ascii_hexdigit()) => Ok(Some(c.to_ascii_lowercase())),
+        _ => Err(AppError::Invalid(format!("{label} must be a color such as #1a1a1a, or none for the theme's"))),
+    }
+}
+
+/// A list of feature ids. Ones this version doesn't know are dropped; the rest are kept once
+/// each, in `PREVIEW_FEATURES` order.
+fn preview_features(value: &Value) -> AppResult<Vec<String>> {
+    let bad = || invalid("Preview features must be a list of feature names");
+    let list = value.as_array().ok_or_else(bad)?;
+    let mut asked = Vec::new();
+    for item in list {
+        asked.push(item.as_str().ok_or_else(bad)?);
+    }
+    Ok(PREVIEW_FEATURES.iter().filter(|f| asked.contains(f)).map(|f| f.to_string()).collect())
 }
 
 /// `{ key, desc }`: the key is required, the direction defaults to the usual one.

@@ -1,10 +1,11 @@
 import { useId, useRef } from "react";
-import type { LibraryLayout, SortKey, SortOrder, TableColumnSetting, TableDensity } from "@/api";
+import type { LibraryLayout, PreviewOptions, SortKey, SortOrder, TableColumnSetting, TableDensity } from "@/api";
 import { IS_MAC } from "@/components/TitleBar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { Popover, PopoverClose, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -12,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { directionWords, LAYOUTS, SORTS, sortInfo } from "@/viewOptions";
 import { ChoiceGroup } from "./ChoiceGroup";
 import { resolveColumns, setShown } from "./library/columns";
+import { PreviewOptionsSection } from "./PreviewOptions";
 
 const CMD = IS_MAC ? "⌘" : "Ctrl+";
 
@@ -92,15 +94,20 @@ interface Props {
   onColumns: (columns: TableColumnSetting[]) => void;
   /** Opens the Family groups page. */
   onFamilyGroups: () => void;
+  /** The preview styling, for every layout and the font page. */
+  preview: PreviewOptions;
+  onPreview: (patch: Partial<PreviewOptions>) => void;
+  dark: boolean;
 }
 
 /**
- * The View options popover (the tune button): layout, "Group styles into families", sort, and in
- * Table its row height and columns. Every choice is saved as a setting. Under about 800px the
- * toolbar drops its own layout switch, and this is where the layout is picked.
+ * The View options popover (the tune button): layout, "Group styles into families", sort, in
+ * Table its row height and columns, and the preview styling (PreviewOptions.tsx). Every choice
+ * is saved as a setting. Under about 800px the toolbar drops its own layout switch, and this is
+ * where the layout is picked.
  */
 export function ViewOptions(props: Props) {
-  const { layout, onLayout, groupStyles, onGroupStyles, sort, onSort, density, onDensity, columns, onColumns, onFamilyGroups } = props;
+  const { layout, onLayout, groupStyles, onGroupStyles, sort, onSort, density, onDensity, columns, onColumns, onFamilyGroups, preview, onPreview, dark } = props;
   const id = useId();
   const info = sortInfo(sort.key);
   // The main sorts, plus the current one if it came from a Table header (Format, Source…).
@@ -113,7 +120,7 @@ export function ViewOptions(props: Props) {
         </TooltipTrigger>
         <TooltipContent>View options</TooltipContent>
       </Tooltip>
-      <PopoverContent align="end" className="w-80 gap-3.5 p-3.5">
+      <PopoverContent align="end" className="max-h-[min(44rem,var(--available-height))] w-[22rem] gap-3.5 overflow-y-auto p-3.5">
         <PopoverTitle className="sr-only">View options</PopoverTitle>
         <Section label="Layout" id={`${id}-layout`}>
           <ChoiceGroup
@@ -218,6 +225,9 @@ export function ViewOptions(props: Props) {
             </Section>
           </>
         )}
+
+        <Separator />
+        <PreviewOptionsSection preview={preview} onPreview={onPreview} dark={dark} />
 
         <p className="text-xs text-muted-foreground">
           Preview size: {CMD}= and {CMD}−. Layouts: {CMD}1, {CMD}2, {CMD}3.

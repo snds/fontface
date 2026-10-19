@@ -186,9 +186,11 @@ pub fn wanted_scope(conn: &Connection, path: &str) -> AppResult<Option<Scope>> {
 
 // ------------------------------------------------------------------ temporary activations
 
-/// Files Fontface turned on for this login only (session scope). Outside the numbered
-/// migrations in db.rs, like the tag tables, so it merges cleanly with other features.
-const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS temporary_activations (path TEXT PRIMARY KEY);";
+/// Files Fontface turned on for this login only (session scope), and when Fontface last turned
+/// each font on (by face key, like tags, so it survives rescans and covers every copy). Outside
+/// the numbered migrations in db.rs, like the tag tables, so it merges cleanly with other features.
+const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS temporary_activations (path TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS last_turned_on (face_key TEXT PRIMARY KEY, at INTEGER NOT NULL);";
 
 /// Creates the table if it's missing. Idempotent; called once at launch.
 pub fn ensure_schema(conn: &Connection) -> AppResult<()> {
@@ -219,6 +221,42 @@ pub fn temporary_after(active: bool, registered: Option<Scope>, was_temporary: b
         Some(scope) => scope == Scope::Session,
         None => active && was_temporary,
     }
+}
+
+/// Records that Fontface just turned these files on: every font in each file (a collection holds
+/// several), by face key. Only Fontface's own turning on counts (a switch, or fonts that just
+/// arrived), not fonts that were on already or that another app turned on. Not shared by sync.
+pub fn record_turned_on(conn: &Connection, paths: &[&str], at: i64) -> AppResult<usize> {
+    let mut faces = conn.prepare_cached("SELECT postscript_name, variable, italic, path, face_index FROM fonts WHERE path = ?1")?;
+    let mut save = conn.prepare_cached(
+        "INSERT INTO last_turned_on (face_key, at) VALUES (?1, ?2) ON CONFLICT (face_key) DO UPDATE SET at = excluded.at",
+    )?;
+    let mut written = 0;
+    for path in paths {
+        let keys: Vec<String> = faces
+            .query_map([path], |r| {
+                Ok(crate::tags::face_key(r.get::<_, Option<String>>(0)?.as_deref(), r.get(1)?, r.get(2)?, &r.get::<_, String>(3)?, r.get(4)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        for key in keys {
+            written += save.execute(rusqlite::params![key, at])?;
+        }
+    }
+    Ok(written)
+}
+
+/// When Fontface last turned this font on (any copy of it), in Unix seconds.
+pub fn last_turned_on(conn: &Connection, font_id: i64) -> AppResult<Option<i64>> {
+    use rusqlite::OptionalExtension;
+    let Some(key) = conn
+        .query_row("SELECT postscript_name, variable, italic, path, face_index FROM fonts WHERE id = ?1", [font_id], |r| {
+            Ok(crate::tags::face_key(r.get::<_, Option<String>>(0)?.as_deref(), r.get(1)?, r.get(2)?, &r.get::<_, String>(3)?, r.get(4)?))
+        })
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    Ok(conn.query_row("SELECT at FROM last_turned_on WHERE face_key = ?1", [key], |r| r.get(0)).optional()?)
 }
 
 /// A file was turned off, so it's no longer on temporarily.

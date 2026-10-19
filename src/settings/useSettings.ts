@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { api, type AppSettings, type AppSettingsPatch } from "@/api";
+import { DEFAULT_PREVIEW } from "@/previewStyle";
 
 /**
  * The app settings, loaded once in App and shared through context.
@@ -36,6 +37,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sort: { key: "name", desc: false },
   tableColumns: [],
   tableDensity: "regular",
+  preview: DEFAULT_PREVIEW,
 };
 
 export interface Settings {
@@ -57,6 +59,7 @@ const merge = (s: AppSettings, patch: AppSettingsPatch): AppSettings => ({
   ...s,
   ...patch,
   sidebar: { ...s.sidebar, ...patch.sidebar },
+  preview: { ...s.preview, ...patch.preview },
 });
 
 /** Owns the settings. Call once, in App, and hand the result to <SettingsContext.Provider>. */

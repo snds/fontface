@@ -50,6 +50,25 @@ export const padding = (sizePx: number) => Math.max(0.03, sizePx > 0 ? 1 / sizeP
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/**
+ * More room the preview styling needs, in em (previewStyle.ts): `pad` past the ink on every side
+ * (an outline's stroke), `minBottom` at least this far below the baseline (an underline), and
+ * `slack` more ink above and below (OpenType features that can reach past the plain text's ink,
+ * such as swashes, which the canvas can't measure).
+ */
+export interface FitExtra {
+  pad?: number;
+  minBottom?: number;
+  slack?: number;
+}
+
+/** The ink with room for the styling. */
+export function extendInk(ink: Ink | null, extra?: FitExtra): Ink | null {
+  if (!ink || !extra) return ink;
+  const slack = extra.slack ?? 0;
+  return { top: ink.top + slack, bottom: Math.max(ink.bottom + slack, extra.minBottom ?? 0) };
+}
+
 function place(m: LineMetrics, ink: Ink | null, height: number, target: number, scale: number, pad: number): Fit {
   let baseline = target;
   if (ink && ink.top + ink.bottom > 0) {
@@ -63,8 +82,9 @@ function place(m: LineMetrics, ink: Ink | null, height: number, target: number, 
 
 /** A list row: shrink only when the ink is taller than the box, and keep the baseline at 1 em
  *  below the top whenever the ink allows. */
-export function fitRow(m: LineMetrics, ink: Ink | null, sizePx: number): Fit {
-  const pad = padding(sizePx);
+export function fitRow(m: LineMetrics, measured: Ink | null, sizePx: number, extra?: FitExtra): Fit {
+  const pad = padding(sizePx) + (extra?.pad ?? 0);
+  const ink = extendInk(measured, extra);
   const tall = ink ? ink.top + ink.bottom : 0;
   const scale = tall > 0 ? clamp((ROW_HEIGHT - 2 * pad) / tall, MIN_SCALE, 1) : 1;
   return place(m, ink, ROW_HEIGHT, ROW_BASELINE, scale, pad);
@@ -72,8 +92,9 @@ export function fitRow(m: LineMetrics, ink: Ink | null, sizePx: number): Fit {
 
 /** A detail-panel waterfall row: never shrinks; the row grows to fit the ink instead. The
  *  baseline stays where a 1.5 line height would put it, so ordinary fonts don't move. */
-export function fitWaterfall(m: LineMetrics, ink: Ink | null, sizePx: number): Fit {
-  const pad = padding(sizePx);
+export function fitWaterfall(m: LineMetrics, measured: Ink | null, sizePx: number, extra?: FitExtra): Fit {
+  const pad = padding(sizePx) + (extra?.pad ?? 0);
+  const ink = extendInk(measured, extra);
   const tall = ink ? ink.top + ink.bottom : 0;
   const height = Math.max(WATERFALL_MIN_HEIGHT, tall + 2 * pad);
   const natural = (WATERFALL_MIN_HEIGHT + m.ascent - m.descent) / 2;

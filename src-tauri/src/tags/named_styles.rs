@@ -21,11 +21,11 @@ use std::{
 /// A real `name` or `fvar` table is a few KB. Anything far larger isn't worth reading.
 const MAX_TABLE: u32 = 2 * 1024 * 1024;
 
-fn be16(b: &[u8], at: usize) -> Option<u16> {
+pub(crate) fn be16(b: &[u8], at: usize) -> Option<u16> {
     b.get(at..at + 2).map(|s| u16::from_be_bytes([s[0], s[1]]))
 }
 
-fn be32(b: &[u8], at: usize) -> Option<u32> {
+pub(crate) fn be32(b: &[u8], at: usize) -> Option<u32> {
     b.get(at..at + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
@@ -36,7 +36,7 @@ fn valid_postscript(s: &str) -> bool {
 }
 
 /// One string from a `name` table: Windows English first, then any Unicode entry, then Mac Roman.
-fn name_string(name: &[u8], id: u16) -> Option<String> {
+pub(crate) fn name_string(name: &[u8], id: u16) -> Option<String> {
     let count = be16(name, 2)? as usize;
     let strings = be16(name, 4)? as usize;
     let (mut unicode, mut mac) = (None, None);
@@ -91,6 +91,63 @@ pub fn parse(fvar: &[u8], name: &[u8]) -> Vec<String> {
                 if !out.contains(&s) {
                     out.push(s);
                 }
+            }
+        }
+        Some(out)
+    };
+    parsed().unwrap_or_default()
+}
+
+/// A named style of a variable font (an `fvar` instance): its name, its PostScript name if the
+/// font gives one, and where it sits on each axis.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedInstance {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postscript_name: Option<String>,
+    /// (axis tag, value), in the font's axis order.
+    pub values: Vec<(String, f32)>,
+}
+
+/// At most this many named styles are read from one font.
+const MAX_INSTANCES: usize = 1024;
+
+/// Every named style in an `fvar` table, with its axis values, named from `name`. A style whose
+/// name isn't in the table is left out, and so is a second style with the same name and values.
+pub fn instances(fvar: &[u8], name: &[u8]) -> Vec<NamedInstance> {
+    let parsed = || -> Option<Vec<NamedInstance>> {
+        let axes_at = be16(fvar, 4)? as usize;
+        let (axis_count, axis_size) = (be16(fvar, 8)? as usize, be16(fvar, 10)? as usize);
+        let (count, size) = (be16(fvar, 12)? as usize, be16(fvar, 14)? as usize);
+        if axis_size < 20 || size < 4 + axis_count * 4 {
+            return Some(Vec::new());
+        }
+        let tags: Vec<String> = (0..axis_count)
+            .map(|i| fvar.get(axes_at + i * axis_size..axes_at + i * axis_size + 4).map(|t| String::from_utf8_lossy(t).into_owned()))
+            .collect::<Option<_>>()?;
+        let first = axes_at + axis_count * axis_size;
+        let ps_at = 4 + axis_count * 4;
+        let mut out: Vec<NamedInstance> = Vec::new();
+        for i in 0..count.min(MAX_INSTANCES) {
+            let at = first + i * size;
+            let Some(name_id) = be16(fvar, at) else { break };
+            let Some(style) = name_string(name, name_id).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else { continue };
+            let mut values = Vec::with_capacity(axis_count);
+            for (k, tag) in tags.iter().enumerate() {
+                let fixed = be32(fvar, at + 4 + k * 4)? as i32;
+                values.push((tag.clone(), (fixed as f64 / 65536.0) as f32));
+            }
+            let postscript_name = (size >= ps_at + 2)
+                .then(|| be16(fvar, at + ps_at))
+                .flatten()
+                .filter(|&id| id != 0 && id != 0xFFFF)
+                .and_then(|id| name_string(name, id))
+                .map(|s| s.trim().to_string())
+                .filter(|s| valid_postscript(s));
+            let instance = NamedInstance { name: style, postscript_name, values };
+            if !out.iter().any(|o| o.name == instance.name && o.values == instance.values) {
+                out.push(instance);
             }
         }
         Some(out)

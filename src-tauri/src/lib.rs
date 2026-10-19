@@ -4,6 +4,7 @@ mod cloud;
 mod commands;
 mod db;
 mod error;
+mod facts;
 mod families;
 #[cfg(target_os = "macos")]
 mod login_item;
@@ -270,6 +271,7 @@ pub fn run() {
             commands::get_font,
             commands::preview_profiles,
             commands::font_characters,
+            commands::font_facts,
             commands::set_activation,
             commands::reveal_font,
             commands::reveal_folder,

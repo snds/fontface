@@ -248,6 +248,18 @@ impl Unreadable {
         matches!(self, Unreadable::Cloud | Unreadable::Changed | Unreadable::Missing)
     }
 
+    /// A short name for why, for the UI: "adobe", "cloud", "tooLarge", "missing", "changed" or "broken".
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Unreadable::Adobe => "adobe",
+            Unreadable::Cloud => "cloud",
+            Unreadable::TooLarge => "tooLarge",
+            Unreadable::Missing => "missing",
+            Unreadable::Changed => "changed",
+            Unreadable::Broken(_) => "broken",
+        }
+    }
+
     pub fn message(&self) -> String {
         match self {
             Unreadable::Adobe => "Adobe Fonts files are only used through Creative Cloud, so Fontface doesn't read them.".into(),
@@ -511,6 +523,8 @@ impl Lane {
 pub static PROFILE_LANE: Lane = Lane::new();
 /// `font_characters` calls.
 pub static CHARACTER_LANE: Lane = Lane::new();
+/// `font_facts` calls (the font page's OpenType, Axes and Info tabs).
+pub static FACTS_LANE: Lane = Lane::new();
 
 // ---------------------------------------------------------------------------------- on demand
 

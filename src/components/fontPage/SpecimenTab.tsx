@@ -6,6 +6,8 @@ import { ROW_HEIGHT } from "@/previewFit";
 import { isSampleKind, usePreviewProfile } from "@/previewProfiles";
 import { cn } from "@/lib/utils";
 import { summarize } from "@/fontState";
+import { previewCase, styleCss } from "@/previewStyle";
+import { usePreviewStyle } from "@/components/PreviewStyle";
 import { StateControl } from "@/components/ActivationSwitch";
 import { CopiesBadge, FacePreview, SampleBadge } from "@/components/FacePreview";
 import { PreviewText } from "@/components/PreviewText";
@@ -25,13 +27,26 @@ interface Props {
   previewText: string;
   /** font-variation-settings from the Axes tab, if any are set. */
   variation: string | undefined;
+  /** font-feature-settings: the View options' features with the OpenType tab's switches on top. */
+  features: string | undefined;
+  /** Room the fit keeps for features that can draw past the plain ink (openType.featureSlack). */
+  slack: number;
+  /** The text's language, from the OpenType tab (the font's localized forms). */
+  lang: string | undefined;
   busy: Set<string>;
   onChoose: (faceKey: string) => void;
   onActivate: (ids: number[], active: boolean, scope?: ActivationMode | null) => void;
 }
 
-/** The waterfall and a paragraph in the chosen style, then every style with its own switch. */
-export function SpecimenTab({ family, face, previewText, variation, busy, onChoose, onActivate }: Props) {
+/** The paragraph's size in px (text-lg). */
+const PARAGRAPH_SIZE = 18;
+
+/**
+ * The waterfall and a paragraph in the chosen style, then every style with its own switch. The
+ * waterfall and paragraph follow the View options' preview styling and the OpenType tab's
+ * switches; with a paper color, each sits on one sheet of it.
+ */
+export function SpecimenTab({ family, face, previewText, variation, features, slack, lang, busy, onChoose, onActivate }: Props) {
   const font = face.primary;
   // The chosen style loads ahead of the "All styles" lines (which may have asked first).
   const state = useFontFace(font, true);
@@ -44,14 +59,20 @@ export function SpecimenTab({ family, face, previewText, variation, busy, onChoo
   const paragraph = paragraphText(profile, font.family);
   const ownText = sample === (profile?.familyText ?? font.family);
   const sampleOnly = !previewText && sample === profile?.familyText && isSampleKind(profile);
+  const look = usePreviewStyle();
+  const paper = look.colors.paper;
+  const sheet = paper ? { backgroundColor: paper, color: look.colors.ink } : undefined;
+  const paragraphSample = paragraph === profile?.familyText && isSampleKind(profile);
+  const paragraphShown = previewCase(paragraph, look.options.case, { sample: paragraphSample, missing: profile?.asciiMissing });
   return (
     <div className="flex flex-col gap-8 px-6 pt-5 pb-12">
       <FaceStateMessage state={state} />
       <section aria-label="Waterfall">
         <SectionTitle>Waterfall</SectionTitle>
+        <div className={cn(sheet && "rounded-lg px-4 py-3")} style={sheet}>
         {WATERFALL.map((px) => (
           <div key={px} className="flex items-baseline gap-3 overflow-hidden whitespace-nowrap">
-            <span className="w-6 shrink-0 text-right font-mono text-[10px] text-muted-foreground">{px}</span>
+            <span className={cn("w-6 shrink-0 text-right font-mono text-[10px]", sheet ? "opacity-60" : "text-muted-foreground")}>{px}</span>
             {/* Never shrunk: a row grows when the font's ink is taller than the line. Hidden only
                 while loading: a face that fails to load draws in the fallback font. */}
             <PreviewText
@@ -62,26 +83,35 @@ export function SpecimenTab({ family, face, previewText, variation, busy, onChoo
               ready={state !== "loading"}
               profile={profile}
               ownText={!previewText && ownText}
+              typed={!!previewText}
               sample={sampleOnly}
               mode="waterfall"
+              features={features}
+              slack={slack}
+              paper={false}
+              lang={lang}
               className="min-w-0 flex-1"
               style={{ fontVariationSettings: variation }}
             />
           </div>
         ))}
+        </div>
       </section>
 
       <section aria-label="Paragraph">
         <SectionTitle>Paragraph</SectionTitle>
-        <p
-          dir="ltr"
-          data-face={pageFace}
-          aria-hidden={paragraph === profile?.familyText && isSampleKind(profile) ? true : undefined}
-          className={cn("max-w-[68ch] text-lg leading-relaxed break-words transition-opacity", state === "loading" && "preview-loading")}
-          style={{ fontFamily, fontVariationSettings: variation }}
-        >
-          {paragraph}
-        </p>
+        <div className={cn(sheet && "rounded-lg px-4 py-3")} style={sheet}>
+          <p
+            dir="ltr"
+            lang={lang}
+            data-face={pageFace}
+            aria-hidden={paragraphSample ? true : undefined}
+            className={cn("max-w-[68ch] text-lg leading-relaxed break-words transition-opacity", state === "loading" && "preview-loading")}
+            style={{ ...styleCss(look.options, look.colors, PARAGRAPH_SIZE, false), fontFamily, fontVariationSettings: variation, fontFeatureSettings: features }}
+          >
+            {paragraphShown}
+          </p>
+        </div>
       </section>
 
       <section aria-label="All styles">

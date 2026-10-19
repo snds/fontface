@@ -141,6 +141,72 @@ export interface Axis {
   hidden: boolean;
 }
 
+/** One OpenType feature of a face (`fontFacts`). Must match Feature in src-tauri/src/facts/layout.rs. */
+export interface FontFeature {
+  /** "liga", "ss01"… */
+  tag: string;
+  /** The font's own name for it (stylistic sets and character variants), if it gives one. */
+  name?: string;
+  /** Characters it changes, space-separated ("a g y", "fi fl"), when that can be worked out. */
+  sample?: string;
+  /** In the substitution table, the positioning table, or both. */
+  gsub: boolean;
+  gpos: boolean;
+}
+
+/** A script the font's OpenType tables are written for, with the languages they treat
+ *  specially (OpenType tags, trimmed: "latn" with "TRK", "ROM"). */
+export interface FontScript {
+  tag: string;
+  languages: string[];
+}
+
+/** A variable font's named style (an `fvar` instance). */
+export interface NamedInstance {
+  name: string;
+  postscriptName?: string;
+  /** [axis tag, value], in the font's axis order. */
+  values: [string, number][];
+}
+
+/** What a font file says about embedding it (OS/2 `fsType`). */
+export interface Embedding {
+  kind: "installable" | "editable" | "previewPrint" | "restricted" | "unclear";
+  /** Documents must embed the whole font. */
+  noSubsetting: boolean;
+  /** Only bitmaps may be embedded, not outlines. */
+  bitmapOnly: boolean;
+}
+
+/** `fontFacts`: read from the file on demand. Must match FontFacts in src-tauri/src/facts/mod.rs. */
+export interface FontFacts {
+  features: FontFeature[];
+  scripts: FontScript[];
+  /** Apple's own feature tables (AAT) and no OpenType ones. */
+  appleFeatures: boolean;
+  instances: NamedInstance[];
+  embedding: Embedding | null;
+  /** Name IDs 7, 10, 11, 12 and 19. */
+  trademark: string | null;
+  description: string | null;
+  vendorUrl: string | null;
+  designerUrl: string | null;
+  sampleText: string | null;
+  /** BCP 47 codes CoreText says the face supports (macOS); null where the system can't say. */
+  languages: string[] | null;
+}
+
+/** Why `fontFacts` didn't read the file. "cloud": online-only, never downloaded for this. */
+export type FactsUnread = "cloud" | "adobe" | "tooLarge" | "missing" | "changed" | "broken";
+
+export interface FactsAnswer {
+  facts: FontFacts | null;
+  unread: FactsUnread | null;
+  message: string | null;
+  /** When Fontface last turned this font on, in Unix seconds. */
+  lastTurnedOn: number | null;
+}
+
 /** `getFont`: the list's fields (version, designer and foundry among them) and the rest. */
 export interface FontDetail extends FontSummary {
   copyright: string | null;
@@ -368,7 +434,24 @@ export type SwitchOrigin = "switch" | "arrival";
 /** What launch does with fonts that were on last time but aren't on now. */
 export type RestorePolicy = "always" | "ask" | "never";
 /** A font page's tabs. "axes" shows only for variable styles (the page falls back to "specimen"). */
-export type FontPageTab = "specimen" | "characters" | "axes" | "info";
+export type FontPageTab = "specimen" | "characters" | "opentype" | "axes" | "info";
+
+/** The View options' preview styling. Must match PreviewOptions in src-tauri/src/settings.rs. */
+export type PreviewAlign = "left" | "center" | "right";
+export type PreviewCase = "asTyped" | "upper" | "lower" | "title";
+/** Must match PREVIEW_FEATURES in src-tauri/src/settings.rs (previewStyle.ts has their CSS). */
+export type PreviewFeature = "noLigatures" | "smallCaps" | "tabularFigures" | "caseForms";
+export interface PreviewOptions {
+  align: PreviewAlign;
+  case: PreviewCase;
+  outline: boolean;
+  underline: boolean;
+  /** "#rrggbb", or null for the theme's. */
+  ink: string | null;
+  paper: string | null;
+  /** In PREVIEW_FEATURES order. */
+  features: PreviewFeature[];
+}
 
 /** How the library lists fonts: a grid of cards, the list of rows, or a sortable table. */
 export type LibraryLayout = "tiles" | "rows" | "table";
@@ -452,10 +535,15 @@ export interface AppSettings {
   /** Empty: the default columns. */
   tableColumns: TableColumnSetting[];
   tableDensity: TableDensity;
+  /** The View options' preview styling, for every layout and the font page. */
+  preview: PreviewOptions;
 }
 
-/** Only the keys given change; `sidebar` may be partial too. */
-export type AppSettingsPatch = Partial<Omit<AppSettings, "sidebar">> & { sidebar?: Partial<SidebarSections> };
+/** Only the keys given change; `sidebar` and `preview` may be partial too. */
+export type AppSettingsPatch = Partial<Omit<AppSettings, "sidebar" | "preview">> & {
+  sidebar?: Partial<SidebarSections>;
+  preview?: Partial<PreviewOptions>;
+};
 
 export interface PendingRestore {
   /** Font files that were on last time and aren't on now. 0: nothing to ask. */
@@ -553,6 +641,9 @@ export const api = {
   /** At most 64 ids per call. */
   previewProfiles: (ids: number[]) => invoke<PreviewAnswer[]>("preview_profiles", { ids }),
   fontCharacters: (fontId: number) => invoke<FontCharacters>("font_characters", { fontId }),
+  /** The font page's OpenType features, named styles, embedding, more names and languages, read
+   *  from the file (never an online-only or Creative Cloud one), and when it was last turned on. */
+  fontFacts: (fontId: number) => invoke<FactsAnswer>("font_facts", { fontId }),
   /**
    * `scope` turns fonts on that way instead of the saved activation mode (null: the saved mode).
    * `origin` says why: only the user's own switch is shared as their choice by sync.

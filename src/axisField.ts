@@ -50,3 +50,39 @@ export function commitAxis(draft: AxisDraft | null, axis: AxisRange): number | u
 export function discardAxis(draft: AxisDraft | null): number | undefined {
   return draft ? draft.before : undefined;
 }
+
+// ------------------------------------------------------------------------- named styles
+
+/** An axis with its tag and default, as the Axes tab lists it. */
+export interface AxisInfo extends AxisRange {
+  tag: string;
+  default: number;
+}
+
+/** A variable font's named style: its name and where it sits on each axis ([tag, value]). */
+export interface Instance {
+  name: string;
+  values: readonly (readonly [string, number])[];
+}
+
+/** The axis values a named style sets: each of the given axes, kept within its range (an axis
+ *  the style doesn't mention goes to its default). */
+export function instanceValues(instance: Instance, axes: readonly AxisInfo[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const a of axes) {
+    const v = instance.values.find(([tag]) => tag === a.tag)?.[1];
+    out[a.tag] = clampAxis(v ?? a.default, a);
+  }
+  return out;
+}
+
+/** Close enough to count as the same place on an axis. */
+const same = (a: number, b: number, axis: AxisRange) => Math.abs(a - b) <= 1e-3 + (axis.max - axis.min) * 1e-4;
+
+/** The named style the axes are at now (unset axes are at their defaults), or -1 for none. */
+export function currentInstance(instances: readonly Instance[], axes: readonly AxisInfo[], values: Readonly<Record<string, number>>): number {
+  return instances.findIndex((instance) => {
+    const wanted = instanceValues(instance, axes);
+    return axes.every((a) => same(values[a.tag] ?? a.default, wanted[a.tag], a));
+  });
+}

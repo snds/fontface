@@ -58,6 +58,9 @@ pub struct FontBuilder {
     pub os2: Option<(i16, i16, u16, u16)>,
     /// Sets OS/2 fsSelection's USE_TYPO_METRICS bit.
     pub use_typo_metrics: bool,
+    /// OS/2's version and fsType (embedding permissions).
+    pub os2_version: u16,
+    pub fs_type: u16,
     meta: Vec<([u8; 4], String)>,
     raw: Vec<([u8; 4], Vec<u8>)>,
 }
@@ -79,6 +82,8 @@ impl FontBuilder {
             hhea: (800, -200),
             os2: Some((800, -200, 1000, 250)),
             use_typo_metrics: false,
+            os2_version: 4,
+            fs_type: 0,
             meta: Vec::new(),
             raw: Vec::new(),
         }
@@ -164,7 +169,10 @@ impl FontBuilder {
             t.push((*b"name", name_table(&self.names)));
         }
         if let Some(os2) = self.os2 {
-            t.push((*b"OS/2", os2_table(os2, self.use_typo_metrics)));
+            let mut table = os2_table(os2, self.use_typo_metrics);
+            table[0..2].copy_from_slice(&self.os2_version.to_be_bytes());
+            table[8..10].copy_from_slice(&self.fs_type.to_be_bytes());
+            t.push((*b"OS/2", table));
         }
         if !self.meta.is_empty() {
             t.push((*b"meta", meta_table(&self.meta)));
@@ -614,4 +622,214 @@ fn collection_or_single(faces: &[Vec<([u8; 4], Vec<u8>)>], ttc: bool) -> Vec<u8>
     }
     out.extend(data);
     out
+}
+
+// ------------------------------------------------------------------- GSUB, GPOS and fvar
+
+/// One feature of a `GSUB` or `GPOS` table built by `layout_table`.
+pub struct FeatureSpec {
+    pub tag: [u8; 4],
+    /// Raw feature parameters (see `set_params`, `variant_params`), if any.
+    pub params: Option<Vec<u8>>,
+    /// Indexes into the table's lookups.
+    pub lookups: Vec<u16>,
+}
+
+impl FeatureSpec {
+    pub fn new(tag: &[u8; 4], lookups: &[u16]) -> Self {
+        FeatureSpec { tag: *tag, params: None, lookups: lookups.to_vec() }
+    }
+
+    pub fn with_params(mut self, params: Vec<u8>) -> Self {
+        self.params = Some(params);
+        self
+    }
+}
+
+/// A `GSUB` or `GPOS` table: `scripts` (each with its language system tags; the default and
+/// every language use every feature), `features` and raw `lookups` (from `single_lookup`,
+/// `ligature_lookup`).
+pub fn layout_table(scripts: &[([u8; 4], Vec<[u8; 4]>)], features: &[FeatureSpec], lookups: &[Vec<u8>]) -> Vec<u8> {
+    let feature_indexes: Vec<u16> = (0..features.len() as u16).collect();
+    // A LangSys: no reordering, no required feature, every feature.
+    let lang_sys = || {
+        let mut l = Vec::new();
+        l.extend(0u16.to_be_bytes());
+        l.extend(0xFFFFu16.to_be_bytes());
+        l.extend((feature_indexes.len() as u16).to_be_bytes());
+        for i in &feature_indexes {
+            l.extend(i.to_be_bytes());
+        }
+        l
+    };
+    // ScriptList
+    let mut script_tables = Vec::new();
+    for (_, languages) in scripts {
+        let mut t = Vec::new();
+        let header = 4 + 6 * languages.len();
+        let one = lang_sys();
+        t.extend((header as u16).to_be_bytes()); // default LangSys right after the records
+        t.extend((languages.len() as u16).to_be_bytes());
+        for (k, lang) in languages.iter().enumerate() {
+            t.extend(lang);
+            t.extend(((header + one.len() * (k + 1)) as u16).to_be_bytes());
+        }
+        for _ in 0..=languages.len() {
+            t.extend(&one);
+        }
+        script_tables.push(t);
+    }
+    let mut script_list = Vec::new();
+    script_list.extend((scripts.len() as u16).to_be_bytes());
+    let mut at = 2 + 6 * scripts.len();
+    for ((tag, _), t) in scripts.iter().zip(&script_tables) {
+        script_list.extend(tag);
+        script_list.extend((at as u16).to_be_bytes());
+        at += t.len();
+    }
+    for t in &script_tables {
+        script_list.extend(t);
+    }
+    // FeatureList: each feature table, its parameters right after its lookup indexes.
+    let mut feature_tables = Vec::new();
+    for f in features {
+        let mut t = Vec::new();
+        let base = 4 + 2 * f.lookups.len();
+        t.extend((if f.params.is_some() { base as u16 } else { 0 }).to_be_bytes());
+        t.extend((f.lookups.len() as u16).to_be_bytes());
+        for l in &f.lookups {
+            t.extend(l.to_be_bytes());
+        }
+        if let Some(p) = &f.params {
+            t.extend(p);
+        }
+        feature_tables.push(t);
+    }
+    let mut feature_list = Vec::new();
+    feature_list.extend((features.len() as u16).to_be_bytes());
+    let mut at = 2 + 6 * features.len();
+    for (f, t) in features.iter().zip(&feature_tables) {
+        feature_list.extend(f.tag);
+        feature_list.extend((at as u16).to_be_bytes());
+        at += t.len();
+    }
+    for t in &feature_tables {
+        feature_list.extend(t);
+    }
+    // LookupList
+    let mut lookup_list = Vec::new();
+    lookup_list.extend((lookups.len() as u16).to_be_bytes());
+    let mut at = 2 + 2 * lookups.len();
+    for l in lookups {
+        lookup_list.extend((at as u16).to_be_bytes());
+        at += l.len();
+    }
+    for l in lookups {
+        lookup_list.extend(l);
+    }
+    let mut t = Vec::new();
+    t.extend(0x0001_0000u32.to_be_bytes());
+    let script_at = 10;
+    let feature_at = script_at + script_list.len();
+    let lookup_at = feature_at + feature_list.len();
+    t.extend((script_at as u16).to_be_bytes());
+    t.extend((feature_at as u16).to_be_bytes());
+    t.extend((lookup_at as u16).to_be_bytes());
+    t.extend(script_list);
+    t.extend(feature_list);
+    t.extend(lookup_list);
+    t
+}
+
+/// A lookup of `kind` with one subtable.
+fn lookup(kind: u16, subtable: Vec<u8>) -> Vec<u8> {
+    let mut t = Vec::new();
+    t.extend(kind.to_be_bytes());
+    t.extend(0u16.to_be_bytes()); // flags
+    t.extend(1u16.to_be_bytes());
+    t.extend(8u16.to_be_bytes()); // the subtable, right after this header
+    t.extend(subtable);
+    t
+}
+
+fn coverage_format1(glyphs: &[u16]) -> Vec<u8> {
+    let mut c = Vec::new();
+    c.extend(1u16.to_be_bytes());
+    c.extend((glyphs.len() as u16).to_be_bytes());
+    for g in glyphs {
+        c.extend(g.to_be_bytes());
+    }
+    c
+}
+
+/// A single substitution lookup (format 2): each `from` glyph becomes its `to` glyph.
+pub fn single_lookup(pairs: &[(u16, u16)]) -> Vec<u8> {
+    let mut pairs = pairs.to_vec();
+    pairs.sort();
+    let from: Vec<u16> = pairs.iter().map(|p| p.0).collect();
+    let coverage = coverage_format1(&from);
+    let mut st = Vec::new();
+    st.extend(2u16.to_be_bytes());
+    st.extend(((6 + 2 * pairs.len()) as u16).to_be_bytes());
+    st.extend((pairs.len() as u16).to_be_bytes());
+    for p in &pairs {
+        st.extend(p.1.to_be_bytes());
+    }
+    st.extend(coverage);
+    lookup(1, st)
+}
+
+/// A ligature substitution lookup: each run of `components` becomes `ligature`.
+pub fn ligature_lookup(ligatures: &[(&[u16], u16)]) -> Vec<u8> {
+    // The subtable is the one `ligature_gsub` wraps: take it from there.
+    let gsub = ligature_gsub(ligatures);
+    lookup(4, gsub[26..].to_vec())
+}
+
+/// A stylistic set's parameters: version 0 and the name id of its name.
+pub fn set_params(name_id: u16) -> Vec<u8> {
+    [0u16.to_be_bytes(), name_id.to_be_bytes()].concat()
+}
+
+/// A character variant's parameters: its label's name id and the characters it changes.
+pub fn variant_params(label: u16, chars: &[char]) -> Vec<u8> {
+    let mut p = Vec::new();
+    for v in [0u16, label, 0, 0, 0, 0, chars.len() as u16] {
+        p.extend(v.to_be_bytes());
+    }
+    for c in chars {
+        p.extend(&(*c as u32).to_be_bytes()[1..]);
+    }
+    p
+}
+
+/// An `fvar` table. Axes: (tag, min, default, max, flags, name id). Instances: (style name id,
+/// coordinates in axis order, PostScript name id).
+pub fn fvar_table(axes: &[([u8; 4], f32, f32, f32, u16, u16)], instances: &[(u16, Vec<f32>, Option<u16>)]) -> Vec<u8> {
+    let fixed = |v: f32| ((v as f64 * 65536.0).round() as i32).to_be_bytes();
+    let with_ps = instances.iter().any(|i| i.2.is_some());
+    let size = 4 + 4 * axes.len() + if with_ps { 2 } else { 0 };
+    let mut t = Vec::new();
+    for v in [1u16, 0, 16, 2, axes.len() as u16, 20, instances.len() as u16, size as u16] {
+        t.extend(v.to_be_bytes());
+    }
+    for (tag, min, default, max, flags, name) in axes {
+        t.extend(tag);
+        t.extend(fixed(*min));
+        t.extend(fixed(*default));
+        t.extend(fixed(*max));
+        t.extend(flags.to_be_bytes());
+        t.extend(name.to_be_bytes());
+    }
+    for (name, coords, ps) in instances {
+        t.extend(name.to_be_bytes());
+        t.extend(0u16.to_be_bytes());
+        for c in coords {
+            t.extend(fixed(*c));
+        }
+        if with_ps {
+            t.extend(ps.unwrap_or(0xFFFF).to_be_bytes());
+        }
+    }
+    t
 }

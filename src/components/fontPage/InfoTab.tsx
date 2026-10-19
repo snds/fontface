@@ -1,4 +1,9 @@
+import { useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { toast } from "sonner";
 import type { FontDetail, PreviewInfo } from "@/api";
+import { faceAddedAt } from "@/familyFacts";
+import { EMBEDDING_NOTE, embeddingWords, languageList, lastTurnedOnText, scriptsOfBlocks, unreadWords, webAddress } from "@/fontInfo";
 import { copyWords, stateDetails, stateWords, summarize } from "@/fontState";
 import { WEIGHT_NAMES, type Face } from "@/library";
 import { Button } from "@/components/ui/button";
@@ -12,7 +17,7 @@ import type { Locations } from "@/tags/locations";
 import { keepSeparate, resetChoices, useFamilyChoices, useOpenFamilyGroups } from "@/families/store";
 import { nameRef, runChange } from "@/families/feedback";
 import { squash } from "@/familyGroups";
-import { formatBytes, SectionTitle } from "./parts";
+import { factsOf, formatBytes, SectionTitle, type FactsState } from "./parts";
 
 export const REVEAL_LABEL = IS_MAC ? "Show in Finder" : "Show in Explorer";
 
@@ -24,14 +29,57 @@ interface Props {
   profile: PreviewInfo | undefined;
   locations: Locations;
   onReveal: (fontId: number) => void;
+  /** More from the file (`fontFacts`): embedding, languages, websites, last turned on. */
+  facts: FactsState;
+  retry: () => void;
 }
 
 /** "12 October 2026", from a file time in seconds. */
 const fileDate = (seconds: number) =>
   seconds > 0 ? new Date(seconds * 1000).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : null;
 
+/** How many languages show before "Show all". */
+const FIRST_LANGUAGES = 24;
+
+/** A web address from the font: a link that opens in the browser, or the text if it isn't one. */
+function WebLink({ raw }: { raw: string }) {
+  const { text, href } = webAddress(raw);
+  if (!href) return <>{text}</>;
+  return (
+    <button
+      type="button"
+      className="cursor-pointer text-left break-all underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground"
+      title={`Open ${href}`}
+      onClick={() => openUrl(href).catch((e) => toast.error("Couldn't open that address", { description: String(e) }))}
+    >
+      {text}
+    </button>
+  );
+}
+
+/** The languages CoreText says the font supports, by name; the first few, then Show all. */
+function Languages({ codes }: { codes: string[] }) {
+  const [all, setAll] = useState(false);
+  const names = languageList(codes);
+  if (!names.length) return <>None that macOS can name</>;
+  const shown = all ? names : names.slice(0, FIRST_LANGUAGES);
+  return (
+    <span>
+      <span className="font-medium">{names.length.toLocaleString()}</span>: {shown.join(", ")}
+      {names.length > shown.length && (
+        <>
+          {"… "}
+          <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setAll(true)}>
+            Show all {names.length.toLocaleString()}
+          </Button>
+        </>
+      )}
+    </span>
+  );
+}
+
 /** The chosen style's names, numbers and files. */
-export function InfoTab({ face, detail, characters, profile, locations, onReveal }: Props) {
+export function InfoTab({ face, detail, characters, profile, locations, onReveal, facts, retry }: Props) {
   const font = face.primary;
   // The label is there only when a row of this face draws a sample of characters.
   const characterSet = characters.status === "ready" ? characterSetLine(characters.data, profile?.label) : profile?.label;
@@ -41,8 +89,15 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
   const state = summarize([face]);
   const words = stateWords(state, wording);
   const status = stateDetails(state, true, wording).join(" ") || `${words.charAt(0).toUpperCase()}${words.slice(1)}.`;
+  const read = factsOf(facts);
+  const answer = facts.status === "ready" ? facts.answer : null;
+  const embedding = read?.embedding ? embeddingWords(read.embedding) : null;
+  const scripts = characters.status === "ready" ? scriptsOfBlocks(characters.data.blocks).map((x) => x.name).join(", ") : null;
+  const added = faceAddedAt(face);
+  // The file couldn't be read (online-only, say): one row says so, in place of what it holds.
+  const unread = answer?.unread ? unreadWords(answer.unread, answer.message) : null;
   // [label, value, monospace?]
-  const rows: [string, string | null | undefined, boolean?][] = [
+  const rows: [string, React.ReactNode, boolean?][] = [
     ["On or off", status],
     // The font's own names, when it's listed under another family or style.
     ["Its family name", face.family !== font.family ? font.family : null],
@@ -61,13 +116,50 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
     ["Character set", characterSet],
     ["Monospaced", font.monospace ? "Yes" : "No"],
     ["Designer", detail?.designer],
+    ["Designer website", read?.designerUrl && <WebLink raw={read.designerUrl} />],
     ["Foundry", detail?.manufacturer],
+    ["Foundry website", read?.vendorUrl && <WebLink raw={read.vendorUrl} />],
+    ["Description", read?.description],
+    ["Its sample text", read?.sampleText],
+    [
+      "Embedding",
+      embedding && (
+        <span className="flex flex-col gap-0.5">
+          <span>
+            <span className="font-medium">{embedding.title}.</span> {embedding.text}
+          </span>
+          {embedding.extra.map((x) => (
+            <span key={x}>{x}</span>
+          ))}
+          <span className="text-xs text-muted-foreground">{EMBEDDING_NOTE}</span>
+        </span>
+      ),
+    ],
+    ["Languages", read?.languages && <Languages codes={read.languages} />],
+    ["Scripts", scripts],
+    [
+      "More details",
+      unread && (
+        <span className="flex items-start gap-1.5">
+          <Icon name={answer?.unread === "cloud" ? "cloud_download" : "info"} size={16} className="mt-0.5 text-muted-foreground" />
+          <span>
+            <span className="font-medium">{unread.title}.</span> {unread.text}{" "}
+            <Button variant="link" size="sm" className="h-auto p-0" onClick={retry}>
+              Check again
+            </Button>
+          </span>
+        </span>
+      ),
+    ],
+    ["Added to library", added ? fileDate(added) : null],
+    ["Last turned on", answer ? lastTurnedOnText(answer.lastTurnedOn, state.lock !== null) : null],
     ["File size", formatBytes(font.fileSize)],
-    // When the file was last changed. (When it joined the library isn't recorded yet.)
+    // When the file was last changed.
     ["File date", fileDate(font.mtime)],
     ["Copyright", detail?.copyright],
+    ["Trademark", read?.trademark],
     ["License", detail?.license],
-    ["License URL", detail?.licenseUrl, true],
+    ["License URL", detail?.licenseUrl && <WebLink raw={detail.licenseUrl} />, true],
   ];
   return (
     <div className="flex max-w-3xl flex-col gap-8 px-6 pt-5 pb-12">

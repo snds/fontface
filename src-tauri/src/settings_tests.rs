@@ -13,8 +13,8 @@ use crate::{
     activation::{launch_plan, temporary_after_swap, turn_on_plan, LaunchPlan, Scope, TurnOn},
     backups, db,
     settings::{
-        self, ActivationMode, AppSettings, FontPageTab, Layout, RestorePolicy, SidebarSections, SortKey, SortOrder, TableColumn,
-        TableDensity, Theme,
+        self, ActivationMode, AppSettings, FontPageTab, Layout, PreviewAlign, PreviewCase, PreviewOptions, RestorePolicy,
+        SidebarSections, SortKey, SortOrder, TableColumn, TableDensity, Theme,
     },
     tags,
     window::{self, DoubleClick},
@@ -71,6 +71,19 @@ fn defaults_match_the_spec() {
     assert_eq!(d.sort, SortOrder { key: SortKey::Name, desc: false });
     assert!(d.table_columns.is_empty(), "no saved columns: the UI's defaults");
     assert_eq!(d.table_density, TableDensity::Regular);
+    assert_eq!(
+        d.preview,
+        PreviewOptions {
+            align: PreviewAlign::Left,
+            case: PreviewCase::AsTyped,
+            outline: false,
+            underline: false,
+            ink: None,
+            paper: None,
+            features: vec![]
+        },
+        "previews as they are, in the theme's colors"
+    );
 }
 
 #[test]
@@ -102,7 +115,11 @@ fn serializes_in_the_shape_the_ui_expects() {
             "groupByName": true,
             "sort": { "key": "name", "desc": false },
             "tableColumns": [],
-            "tableDensity": "regular"
+            "tableDensity": "regular",
+            "preview": {
+                "align": "left", "case": "asTyped", "outline": false, "underline": false,
+                "ink": null, "paper": null, "features": []
+            }
         })
     );
 }
@@ -243,8 +260,8 @@ fn bad_values_are_refused_in_plain_words_and_change_nothing() {
     assert_eq!(msg, "“Open at login” must be on or off");
     let msg = error_text(settings::apply_patch(&d, &json!({ "previewSize": "big" })));
     assert_eq!(msg, "Preview size must be a number");
-    let msg = error_text(settings::apply_patch(&d, &json!({ "fontPageTab": "opentype" })));
-    assert_eq!(msg, "The font page tab must be “specimen”, “characters”, “axes” or “info”");
+    let msg = error_text(settings::apply_patch(&d, &json!({ "fontPageTab": "glyphs" })));
+    assert_eq!(msg, "The font page tab must be “specimen”, “characters”, “opentype”, “axes” or “info”");
     assert!(settings::apply_patch(&d, &json!({ "sidebar": true })).is_err());
     assert!(settings::apply_patch(&d, &json!({ "sidebar": { "tags": "no" } })).is_err());
     assert!(settings::apply_patch(&d, &json!({ "previewText": 12 })).is_err());
@@ -279,6 +296,71 @@ fn view_options_change_by_patch_and_refuse_bad_values() {
     assert!(settings::apply_patch(&d, &json!({ "sort": { "key": "name", "desc": "yes" } })).is_err());
     // A refused value changes nothing, even next to a good one.
     assert!(settings::apply_patch(&d, &json!({ "layout": "table", "sort": {} })).is_err());
+}
+
+#[test]
+fn preview_options_merge_key_by_key_and_refuse_bad_values() {
+    let d = AppSettings::default();
+    let after = settings::apply_patch(&d, &json!({ "preview": { "align": "center", "case": "upper", "ink": "#AbCdEf" } })).unwrap();
+    assert_eq!(after.preview.align, PreviewAlign::Center);
+    assert_eq!(after.preview.case, PreviewCase::Upper);
+    assert_eq!(after.preview.ink.as_deref(), Some("#abcdef"), "kept in lowercase");
+    assert_eq!(AppSettings { preview: PreviewOptions::default(), ..after.clone() }, d, "nothing else changes");
+    // Only the keys given change; the others stay as they were.
+    let more = settings::apply_patch(&after, &json!({ "preview": { "outline": true, "paper": "#000000", "fromTheFuture": 3 } })).unwrap();
+    assert_eq!((more.preview.align, more.preview.outline, more.preview.paper.as_deref()), (PreviewAlign::Center, true, Some("#000000")));
+    assert_eq!(more.preview.ink.as_deref(), Some("#abcdef"));
+    // Back to the theme's colors.
+    let theme = settings::apply_patch(&more, &json!({ "preview": { "ink": null, "paper": null } })).unwrap();
+    assert_eq!((theme.preview.ink, theme.preview.paper), (None, None));
+    // Features: known ones, once each, in their own order; ones from a newer Fontface are dropped.
+    let features = settings::apply_patch(&d, &json!({ "preview": { "features": ["caseForms", "fromTheFuture", "noLigatures", "caseForms"] } })).unwrap();
+    assert_eq!(features.preview.features, vec!["noLigatures".to_string(), "caseForms".to_string()]);
+    for key in ["case", "align"] {
+        for value in ["asTyped", "upper", "lower", "title", "left", "center", "right"] {
+            let r = settings::apply_patch(&d, &json!({ "preview": { key: value } }));
+            let ok = if key == "case" { ["asTyped", "upper", "lower", "title"].contains(&value) } else { ["left", "center", "right"].contains(&value) };
+            assert_eq!(r.is_ok(), ok, "{key}: {value}");
+        }
+    }
+
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "preview": { "align": "justify" } }))), "Preview alignment must be “left”, “center” or “right”");
+    assert_eq!(
+        error_text(settings::apply_patch(&d, &json!({ "preview": { "ink": "red" } }))),
+        "The ink color must be a color such as #1a1a1a, or none for the theme's"
+    );
+    for bad in [
+        json!({ "preview": "big" }),
+        json!({ "preview": { "paper": "#12345" } }),
+        json!({ "preview": { "paper": "#1234567" } }),
+        json!({ "preview": { "paper": "#gggggg" } }),
+        json!({ "preview": { "ink": 0 } }),
+        json!({ "preview": { "outline": "yes" } }),
+        json!({ "preview": { "features": "smallCaps" } }),
+        json!({ "preview": { "features": [1] } }),
+        json!({ "preview": { "case": "Upper" } }),
+    ] {
+        assert!(settings::apply_patch(&d, &bad).is_err(), "{bad} is refused");
+    }
+    // A refused value changes nothing, even next to a good one.
+    assert!(settings::apply_patch(&d, &json!({ "preview": { "align": "right", "ink": "blue" } })).is_err());
+
+    // The OpenType tab can be the one the next font page opens on.
+    assert_eq!(settings::apply_patch(&d, &json!({ "fontPageTab": "opentype" })).unwrap().font_page_tab, FontPageTab::OpenType);
+    assert_eq!(serde_json::to_value(FontPageTab::OpenType).unwrap(), json!("opentype"));
+
+    // Stored and read back; settings saved before preview options take their defaults.
+    let dir = temp("preview");
+    let mut conn = db::open(&dir.join("library.sqlite3")).unwrap();
+    settings::ensure_schema(&conn).unwrap();
+    settings::save(&mut conn, &more).unwrap();
+    assert_eq!(settings::load(&conn).unwrap(), more);
+    conn.execute("DELETE FROM app_settings WHERE key = 'preview'", []).unwrap();
+    assert_eq!(settings::load(&conn).unwrap().preview, PreviewOptions::default());
+    // A damaged row is skipped without touching the rest.
+    conn.execute("INSERT INTO app_settings (key, value) VALUES ('preview', '{\"ink\":\"pink\"}')", []).unwrap();
+    assert_eq!(settings::load(&conn).unwrap().preview, PreviewOptions::default());
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -393,6 +475,15 @@ fn every_setting_can_be_changed_by_a_patch() {
             TableColumn { id: "preview".into(), shown: false, width: None },
         ],
         table_density: TableDensity::Compact,
+        preview: PreviewOptions {
+            align: PreviewAlign::Right,
+            case: PreviewCase::Title,
+            outline: true,
+            underline: true,
+            ink: Some("#112233".into()),
+            paper: Some("#fafaf0".into()),
+            features: vec!["smallCaps".into(), "caseForms".into()],
+        },
     };
     let patch = serde_json::to_value(&custom).unwrap();
     assert_eq!(settings::apply_patch(&AppSettings::default(), &patch).unwrap(), custom);

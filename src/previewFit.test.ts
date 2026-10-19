@@ -133,3 +133,35 @@ test("the cache forgets the least recently used entry", () => {
   assert.equal(cache.get("a"), 1);
   assert.equal(cache.size, 2);
 });
+
+test("an outline's stroke and an underline stay inside the row, at every size", () => {
+  // The outline reaches half its stroke past the ink (previewStyle.styleExtra); the underline
+  // reaches UNDERLINE_DEPTH below the baseline.
+  for (const size of [12, 18, 32, 64, 128]) {
+    for (const ink of [{ top: 0.725, bottom: 0.24 }, { top: 1.124, bottom: 0 }, { top: 2.048, bottom: 0 }, { top: 0.7, bottom: 0.02 }]) {
+      const pad = Math.max(1, size / 40) / 2 / size;
+      const outlined = fitRow(OPEN_SANS, ink, size, { pad });
+      const [top, bottom] = inkSpan(outlined, ink);
+      assert.ok(top >= pad - 1e-9, `${size}px: the stroke above the ink stays in (${top})`);
+      assert.ok(bottom <= outlined.height - pad + 1e-9, `${size}px: the stroke below the ink stays in (${bottom})`);
+      const underlined = fitRow(OPEN_SANS, ink, size, { minBottom: 0.25 });
+      // Text that only fits at half size (LI Glyphs' icons at 12 px) already clips a little.
+      if (underlined.scale <= 0.5) continue;
+      const line = underlined.baseline + underlined.scale * 0.25;
+      assert.ok(line <= underlined.height - padding(size) + 1e-9, `${size}px: the underline (${line}) stays in`);
+      assert.ok(underlined.baseline - underlined.scale * ink.top >= padding(size) - 1e-9, `${size}px: and so does the top`);
+    }
+  }
+});
+
+test("ordinary text keeps its place with an underline, and a waterfall line grows for feature slack", () => {
+  const ink = { top: 0.725, bottom: 0.24 };
+  const plain = fitRow(OPEN_SANS, ink, SIZE);
+  const underlined = fitRow(OPEN_SANS, ink, SIZE, { minBottom: 0.25 });
+  assert.equal(underlined.scale, 1, "no shrinking for an underline");
+  near(underlined.baseline, plain.baseline, "the baseline barely moves", 0.03);
+  const waterfall = fitWaterfall(OPEN_SANS, { top: 1.2, bottom: 0.4 }, SIZE);
+  const slack = fitWaterfall(OPEN_SANS, { top: 1.2, bottom: 0.4 }, SIZE, { slack: 0.2 });
+  near(slack.height - waterfall.height, 0.4, "0.2 em more above and below");
+  assert.equal(fitRow(OPEN_SANS, null, SIZE, { minBottom: 0.25, pad: 0.1 }).scale, 1, "nothing measured: drawn as is");
+});
