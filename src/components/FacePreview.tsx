@@ -52,8 +52,9 @@ export function FacePreview({ font, preview, typed, own, size }: { font: FontSum
 }
 
 /** "Symbols", "Expert set", a script name or "Partial set", for rows previewed by a sample.
- *  `row`: a family row goes by the family name, a style row by its full name. */
-export function SampleBadge({ profile, row }: { profile: PreviewInfo | undefined; row: "family" | "full" }) {
+ *  `row`: a family row goes by the family name, a style row by its full name. `id` goes on the
+ *  badge, so a list row can point its description at it. */
+export function SampleBadge({ profile, row, id }: { profile: PreviewInfo | undefined; row: "family" | "full"; id?: string }) {
   if (!isSampleKind(profile, row) || !profile?.label) return null;
   const why =
     kindFor(profile, row) === "expert"
@@ -62,7 +63,7 @@ export function SampleBadge({ profile, row }: { profile: PreviewInfo | undefined
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="shrink-0" onClick={(e) => e.stopPropagation()} />}>
-        <Badge variant="outline" className="text-muted-foreground">
+        <Badge id={id} variant="outline" className="text-muted-foreground">
           {profile.label}
         </Badge>
       </TooltipTrigger>
@@ -71,8 +72,9 @@ export function SampleBadge({ profile, row }: { profile: PreviewInfo | undefined
   );
 }
 
-/** Shown when the typed preview text uses characters this font doesn't have. */
-export function MissingHint({ text, profile }: { text: string; profile: PreviewInfo | undefined }) {
+/** Shown when the typed preview text uses characters this font doesn't have. `srId` goes on the
+ *  screen-reader text ("Not in this font: …"). */
+export function MissingHint({ text, profile, srId }: { text: string; profile: PreviewInfo | undefined; srId?: string }) {
   const missing = missingCharacters(text, profile);
   if (!missing.length) return null;
   const list = missing.join(" ");
@@ -80,7 +82,9 @@ export function MissingHint({ text, profile }: { text: string; profile: PreviewI
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex shrink-0 items-center text-muted-foreground" onClick={(e) => e.stopPropagation()} />}>
         <Icon name="font_download_off" size={14} />
-        <span className="sr-only">Not in this font: {list}</span>
+        <span className="sr-only" id={srId}>
+          Not in this font: {list}.
+        </span>
       </TooltipTrigger>
       <TooltipContent className="max-w-xs">
         Not in this font: {list}. Those characters show in another font, or as boxes or blanks.
@@ -89,13 +93,19 @@ export function MissingHint({ text, profile }: { text: string; profile: PreviewI
   );
 }
 
-/** "×3" badge for a face that exists as several files; hover lists where. */
-export function CopiesBadge({ face }: { face: Face }) {
+/** "×3" badge for a face that exists as several files; hover lists where. Screen readers hear
+ *  "3 copies" (`srId` goes on that text). */
+export function CopiesBadge({ face, srId }: { face: Face; srId?: string }) {
   if (face.copies.length < 2) return null;
   return (
     <Tooltip>
       <TooltipTrigger render={<span onClick={(e) => e.stopPropagation()} />}>
-        <Badge variant="outline" className="font-mono">×{face.copies.length}</Badge>
+        <Badge variant="outline" className="font-mono">
+          <span aria-hidden>×{face.copies.length}</span>
+          <span className="sr-only" id={srId}>
+            {face.copies.length} copies
+          </span>
+        </Badge>
       </TooltipTrigger>
       <TooltipContent className="max-w-md">
         <div className="mb-1 font-medium">{face.copies.length} copies of this font</div>

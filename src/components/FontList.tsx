@@ -109,8 +109,11 @@ export function FontList({ ref, ...props }: Props) {
   }, [families, expanded]);
   const order = useMemo(() => rows.map(rowKey), [rows]);
   const indexByKey = useMemo(() => new Map(order.map((k, i) => [k, i])), [order]);
+  // A style row's family row: where focus goes when the family is collapsed under it.
+  const familyRowOfFace = useMemo(() => new Map(families.flatMap((f) => f.faces.map((face) => [face.key, `f:${f.id}`] as const))), [families]);
+  const parentOf = (key: string) => (key.startsWith("s:") ? familyRowOfFace.get(key.slice(2)) : undefined);
 
-  const sel = useSelection(order, props.resetKey);
+  const sel = useSelection(order, props.resetKey, parentOf);
   const { selection } = sel;
   // The fonts the right-click menu works on, fixed when it opens (a tag view can lose the row
   // while the menu is still open).
@@ -121,8 +124,14 @@ export function FontList({ ref, ...props }: Props) {
   const [keyboard, setKeyboard] = useState(false);
   /** When the list was last pressed: focus that arrives right after a press came from it. */
   const pressedAt = useRef(-Infinity);
-  /** The next focus change came from the keyboard: scroll it into view. */
-  const follow = useRef(false);
+  /** Bumped to bring the active row into view after the next render: a key command, keyboard
+   *  focus, or Back. A count rather than a flag, so a request is never left over for a later
+   *  change (a scan adding rows above, say) to act on. */
+  const [reveal, setReveal] = useState(0);
+  const revealActive = () => setReveal((n) => n + 1);
+  /** Set while Shift-F10 opens the menu from the list itself: the menu covers the active row,
+   *  even when it's scrolled away and the event lands on the list. */
+  const menuOnActive = useRef(false);
 
   const fullFamily = useMemo(() => new Map(allFamilies.map((f) => [f.id, f])), [allFamilies]);
   const facesOf = (keys: Iterable<string>): Face[] => {
@@ -145,7 +154,6 @@ export function FontList({ ref, ...props }: Props) {
     targetsFor,
     ring: focused && keyboard,
     onRowClick: (e, key) => {
-      follow.current = false;
       sel.click(key, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey });
     },
     onRowDoubleClick: (e, row) => {
@@ -177,32 +185,55 @@ export function FontList({ ref, ...props }: Props) {
   }, [props.resetKey]);
 
   const activeIndex = selection.focus === null ? -1 : (indexByKey.get(selection.focus) ?? -1);
-  // Keyboard moves bring the active row into view (clicks don't scroll the list).
+  // Key commands and keyboard focus bring the active row into view (clicks don't scroll the
+  // list). Only when asked: later changes to where the row is never scroll by themselves.
+  const revealed = useRef(0);
   useEffect(() => {
-    if (!follow.current) return;
-    follow.current = false;
-    if (activeIndex >= 0) virtualizer.scrollToIndex(activeIndex, { align: "auto" });
+    revealed.current = reveal;
+    if (reveal && activeIndex >= 0) virtualizer.scrollToIndex(activeIndex, { align: "auto" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection.focus, activeIndex]);
+  }, [reveal]);
+
+  /** The first row showing at the top of the list: where focus starts if it has nowhere to be. */
+  const firstOnScreen = (): string | undefined => {
+    const top = scrollRef.current?.scrollTop ?? 0;
+    const item = virtualizer.getVirtualItems().find((i) => i.start + i.size / 2 >= top);
+    return item ? order[item.index] : undefined;
+  };
+
+  // While the list has focus it always has an active row, also after its rows were replaced
+  // (another filter or view) or the focused row left with nothing near it.
+  useEffect(() => {
+    if (focused && selection.focus === null && order.length) sel.ensureFocus(firstOnScreen());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused, selection.focus, order.length]);
 
   useImperativeHandle(
     ref,
     () => ({
       focusRow: (key) => {
-        const at = key === null ? undefined : indexByKey.get(key);
-        if (key !== null && at !== undefined) {
-          sel.focus(key, false);
-          virtualizer.scrollToIndex(at, { align: "auto" });
-        }
+        const listed = key !== null && indexByKey.has(key);
+        // A row that has left the list already handed focus to a neighbor (its family, or the
+        // row that took its place; see selection.ts), so that's the one shown instead.
+        if (listed) sel.focus(key, false);
+        revealActive();
         scrollRef.current?.focus({ preventScroll: true });
-        return at !== undefined;
+        return listed;
       },
     }),
-    [indexByKey, sel, virtualizer],
+    [indexByKey, sel],
   );
 
   const optionId = (i: number) => `${listId}-row-${i}`;
-  const activeRendered = activeIndex >= 0 && virtualizer.getVirtualItems().some((item) => item.index === activeIndex);
+  const activeItem = activeIndex >= 0 ? virtualizer.getVirtualItems().find((item) => item.index === activeIndex) : undefined;
+  const activeRendered = activeItem !== undefined;
+  // Drawn (rows just past the edges are too) and in sight. Up to date whenever the virtualizer
+  // renders (its range changes, or a scroll starts or ends). While a reveal is on its way, the
+  // row is about to be in sight, so the list doesn't flash its own ring meanwhile.
+  const scrollTop = virtualizer.scrollOffset ?? 0;
+  const activeOnScreen =
+    activeItem !== undefined &&
+    (reveal !== revealed.current || (activeItem.end > scrollTop && activeItem.start < scrollTop + (virtualizer.scrollRect?.height ?? Infinity)));
 
   const pageSize = () => Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / (Math.round(size * 1.35) + 44)));
 
@@ -214,8 +245,12 @@ export function FontList({ ref, ...props }: Props) {
     setKeyboard(true);
     const onList = target === e.currentTarget;
     if (isMenuKey(e)) {
-      // The list has focus, not a row: open the menu for the active row.
-      openMenuFromKeyboard(e, onList && activeRendered ? document.getElementById(optionId(activeIndex)) : null);
+      // The list has focus, not a row: open the menu for the active row. If it's scrolled
+      // away, it comes back into view, and the menu (opened on the list) still covers it.
+      if (onList) revealActive();
+      menuOnActive.current = onList;
+      openMenuFromKeyboard(e, onList && activeOnScreen ? document.getElementById(optionId(activeIndex)) : null);
+      menuOnActive.current = false;
       return;
     }
     const command = listKeyCommand(e, IS_MAC);
@@ -236,10 +271,11 @@ export function FontList({ ref, ...props }: Props) {
     // The active row's own controls (a switch, the expand button) keep their keys.
     if (!onList) return;
     e.preventDefault();
+    // Whatever the key does, it's to the active row: show it (it may have been scrolled away).
+    revealActive();
     const row = activeIndex >= 0 ? rows[activeIndex] : undefined;
     switch (command.kind) {
       case "move":
-        follow.current = true;
         sel.move(command.move, { extend: command.extend, pageSize: pageSize() });
         break;
       case "toggle":
@@ -253,13 +289,11 @@ export function FontList({ ref, ...props }: Props) {
         if (!expanded.has(row.family.id)) props.onToggleExpanded(row.family.id);
         else if (row.family.faces.length) {
           // Already open: on to its first style.
-          follow.current = true;
           sel.focus(`s:${row.family.faces[0].key}`, true);
         }
         break;
       case "collapse":
         if (row?.kind === "face") {
-          follow.current = true;
           sel.focus(`f:${row.family.id}`, true);
         } else if (row && expanded.has(row.family.id)) props.onToggleExpanded(row.family.id);
         break;
@@ -283,7 +317,9 @@ export function FontList({ ref, ...props }: Props) {
           render={
             <div
               ref={scrollRef}
-              className="min-h-0 flex-1 overflow-y-auto outline-none"
+              // Keyboard focus shows on the active row; while that row is out of sight, on the
+              // list itself.
+              className={cn("min-h-0 flex-1 overflow-y-auto", actions.ring && !activeOnScreen ? "outline-2 -outline-offset-2 outline-ring/60" : "outline-none")}
               role="listbox"
               aria-label="Fonts"
               aria-multiselectable
@@ -296,9 +332,13 @@ export function FontList({ ref, ...props }: Props) {
               }}
               onFocus={(e) => {
                 if (e.target !== e.currentTarget) return;
+                const fromKeyboard = performance.now() - pressedAt.current > 300;
                 setFocused(true);
-                setKeyboard(performance.now() - pressedAt.current > 300);
-                sel.ensureFocus();
+                setKeyboard(fromKeyboard);
+                sel.ensureFocus(firstOnScreen());
+                // Tab (or Back) into the list: its active row comes into view, so the ring,
+                // the active descendant and Space all have a row you can see.
+                if (fromKeyboard) revealActive();
               }}
               onBlur={(e) => {
                 if (e.target === e.currentTarget) setFocused(false);
@@ -315,7 +355,7 @@ export function FontList({ ref, ...props }: Props) {
                   return;
                 }
                 const el = (e.target as HTMLElement).closest<HTMLElement>("[data-row-key]");
-                const key = el?.dataset.rowKey ?? null;
+                const key = el?.dataset.rowKey ?? (menuOnActive.current ? selection.focus : null);
                 setMenuFaces(key ? targetsFor(key) : []);
                 // Right-clicking outside the selection selects that row, like Finder. It never opens the font.
                 if (key) sel.selectForMenu(key);
@@ -411,8 +451,13 @@ const rowClass = (selected: boolean, inSelection: boolean, ring: boolean) =>
 
 type RowProps = Omit<Props, "ref"> & { actions: RowActions; id: string; position: number; count: number };
 
-/** The option's own attributes and handlers. */
-function optionProps({ actions, id, position, count }: RowProps, row: Row, label: string) {
+/** Ids of a row's screen-reader texts, read after its name as its description: where its copies
+ *  are, marks (Mono, duplicates, copies, a sample preview), missing characters and tags. */
+const describedBy = (id: string, marks: string[]) => [`${id}-places`, ...marks.map((m) => `${id}-${m}`), `${id}-sample`, `${id}-missing`, `${id}-tags`].join(" ");
+
+/** The option's own attributes and handlers. Its name is short (name, styles, on/off), so the
+ *  arrow keys move quickly; the rest of what the row shows is its description. */
+function optionProps({ actions, id, position, count }: RowProps, row: Row, label: string, description: string) {
   const key = rowKey(row);
   const selected = actions.selection.keys.has(key);
   const active = actions.selection.focus === key;
@@ -426,6 +471,7 @@ function optionProps({ actions, id, position, count }: RowProps, row: Row, label
       "aria-setsize": count,
       "aria-posinset": position,
       "aria-label": label,
+      "aria-describedby": description,
       className: rowClass(selected, selected && actions.selection.keys.size > 1, active && actions.ring),
       onClick: (e: React.MouseEvent) => actions.onRowClick(e, key),
       onDoubleClick: (e: React.MouseEvent) => actions.onRowDoubleClick(e, row),
@@ -442,8 +488,10 @@ function FamilyRow(props: RowProps & { family: Family; row: Row }) {
   const preview = usePreviewProfile(family.representative.primary);
   const variable = family.faces.some((f) => f.primary.variable);
   const styles = `${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`;
+  const mono = family.faces.some((f) => f.primary.monospace);
   const label = `${family.name}, ${styles}${variable ? ", variable" : ""}, ${stateWords(family.activeCount, family.switchable.length, family.faces.length)}`;
-  const { active, attrs } = optionProps(props, row, label);
+  const marks = [mono && "Monospaced", duplicates && "Has duplicate files"].filter(Boolean).join(". ");
+  const { active, attrs } = optionProps(props, row, label, describedBy(props.id, ["marks"]));
   const tab = active ? 0 : -1;
   return (
     <div {...attrs}>
@@ -462,15 +510,20 @@ function FamilyRow(props: RowProps & { family: Family; row: Row }) {
           <Icon name="chevron_right" size={18} className={cn("transition-transform", isOpen && "rotate-90")} />
         </Button>
         <span className="truncate text-sm font-semibold">{family.name}</span>
-        <LocationDots copies={copies} locations={locations} />
+        <LocationDots copies={copies} locations={locations} srId={`${props.id}-places`} />
         <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">
           <span className="shrink-0">{styles}</span>
           {variable && <Badge variant="outline">Variable</Badge>}
-          {family.faces.some((f) => f.primary.monospace) && <Badge variant="outline">Mono</Badge>}
+          {mono && <Badge variant="outline">Mono</Badge>}
           {duplicates && <Badge variant="outline">Duplicates</Badge>}
-          <SampleBadge profile={preview.profile} row="family" />
-          <MissingHint text={previewText} profile={preview.profile} />
-          <TagChips faces={family.faces} index={actions.index} />
+          {marks && (
+            <span className="sr-only" id={`${props.id}-marks`}>
+              {marks}.
+            </span>
+          )}
+          <SampleBadge profile={preview.profile} row="family" id={`${props.id}-sample`} />
+          <MissingHint text={previewText} profile={preview.profile} srId={`${props.id}-missing`} />
+          <TagChips faces={family.faces} index={actions.index} srId={`${props.id}-tags`} />
         </span>
         <RowTagButton rowKey={key} actions={actions} label={family.name} tabIndex={tab} />
         {family.switchable.length === 0 ? (
@@ -500,7 +553,7 @@ function FaceRow(props: RowProps & { face: Face; row: Row }) {
   const key = rowKey(row);
   const style = `${font.subfamily}${font.variable ? " (Variable)" : ""}`;
   const label = `${style}, ${font.family}, ${face.installed ? "always on (installed)" : face.active ? "on" : "off"}`;
-  const { active, attrs } = optionProps(props, row, label);
+  const { active, attrs } = optionProps(props, row, label, describedBy(props.id, ["copies"]));
   const tab = active ? 0 : -1;
   return (
     <div {...attrs} className={cn(attrs.className, "pl-12")}>
@@ -509,19 +562,19 @@ function FaceRow(props: RowProps & { face: Face; row: Row }) {
           {font.subfamily}
           {font.variable && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(Variable)</span>}
         </span>
-        <LocationDots copies={face.copies} locations={locations} />
+        <LocationDots copies={face.copies} locations={locations} srId={`${props.id}-places`} />
         <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden font-mono text-xs text-muted-foreground">
           <span className="shrink-0">
             {font.weight}
             {font.italic ? " · italic" : ""}
           </span>
-          <CopiesBadge face={face} />
+          <CopiesBadge face={face} srId={`${props.id}-copies`} />
           <span className="flex items-center gap-1.5 font-sans">
-            <SampleBadge profile={preview.profile} row="full" />
-            <MissingHint text={previewText} profile={preview.profile} />
+            <SampleBadge profile={preview.profile} row="full" id={`${props.id}-sample`} />
+            <MissingHint text={previewText} profile={preview.profile} srId={`${props.id}-missing`} />
           </span>
           <span className="font-sans">
-            <TagChips faces={[face]} index={actions.index} />
+            <TagChips faces={[face]} index={actions.index} srId={`${props.id}-tags`} />
           </span>
         </span>
         <RowTagButton rowKey={key} actions={actions} label={`${font.family} ${font.subfamily}`} tabIndex={tab} />

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { FontSummary } from "./api";
 import { darkPaletteCss, darkPaletteOverride } from "./colorPalette";
+import { nextLoad } from "./loadOrder";
 
 // Previews load on demand. Each face becomes a page-only FontFace, so previews never depend
 // on whether the font is turned on system-wide.
@@ -11,7 +12,8 @@ import { darkPaletteCss, darkPaletteOverride } from "./colorPalette";
 // - Installed macOS fonts are loaded by PostScript name (`local()`), without going through the
 //   queue or streaming the file through the app.
 // - Other files are fetched from the app (`ff://`), at most MAX_CONCURRENT at a time, newest
-//   request first. A queued request whose row has scrolled away is dropped.
+//   request first, except that a font page's chosen style goes before everything else
+//   (loadOrder.ts). A queued request whose row has scrolled away is dropped.
 // - The app answers 503 for an online-only cloud file (it never downloads one for a preview)
 //   and 413 for a very large file. Those show as their own states instead of an error.
 // - A color font whose palette is all dark (Material Icons Two Tone) gets a light palette for
@@ -26,6 +28,8 @@ const cache = new Map<string, Promise<Outcome>>();
 /** Faces added to the page and ready to draw. */
 const loaded = new Set<string>();
 const users = new Map<string, number>();
+/** Faces shown big on a font page right now (its chosen style), by how many want them. */
+const urgentFaces = new Map<string, number>();
 const queue: { name: string; start: () => void; drop: () => void }[] = [];
 let running = 0;
 
@@ -38,7 +42,7 @@ export const faceName = (f: FileVersion) => `ff-${f.id}-${version(f)}`;
 
 function pump() {
   while (running < MAX_CONCURRENT && queue.length) {
-    const job = queue.pop()!; // newest first: rows on screen now beat rows scrolled past
+    const [job] = queue.splice(nextLoad(queue, urgentFaces), 1);
     if ((users.get(job.name) ?? 0) === 0) job.drop();
     else job.start();
   }
@@ -118,8 +122,10 @@ export const isFaceLoaded = (name: string) => loaded.has(name);
  * showing another font (a family's representative changes as you search), it reads "loading"
  * at once, not the last font's "ready", so nothing is shown or measured in the fallback font
  * meanwhile. A face that has already loaded reads "ready" straight away.
+ *
+ * `urgent`: the face is a font page's chosen style; its file loads before others waiting.
  */
-export function useFontFace(font: FontSummary | undefined): FaceState {
+export function useFontFace(font: FontSummary | undefined, urgent = false): FaceState {
   const name = font ? faceName(font) : undefined;
   const [current, setCurrent] = useState<{ name: string | undefined; state: FaceState }>(() => ({
     name,
@@ -129,6 +135,7 @@ export function useFontFace(font: FontSummary | undefined): FaceState {
     if (!font || !name) return;
     let live = true;
     users.set(name, (users.get(name) ?? 0) + 1);
+    if (urgent) urgentFaces.set(name, (urgentFaces.get(name) ?? 0) + 1);
     const settle = (state: FaceState) => setCurrent({ name, state });
     settle(loaded.has(name) ? "ready" : "loading");
     // "dropped" means the row left the screen before its turn; if it's back, ask again.
@@ -137,10 +144,15 @@ export function useFontFace(font: FontSummary | undefined): FaceState {
     return () => {
       live = false;
       users.set(name, (users.get(name) ?? 1) - 1);
+      if (urgent) {
+        const left = (urgentFaces.get(name) ?? 1) - 1;
+        if (left > 0) urgentFaces.set(name, left);
+        else urgentFaces.delete(name);
+      }
     };
     // The face name captures everything that identifies the file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name]);
+  }, [name, urgent]);
   if (current.name === name) return current.state;
   return name && loaded.has(name) ? "ready" : "loading";
 }

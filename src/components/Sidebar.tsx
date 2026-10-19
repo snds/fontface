@@ -29,7 +29,11 @@ interface Props {
   scans: Map<number, ScanProgress>;
   /** What the sidebar shows (a setting). All Fonts and the user's folders are always there. */
   show: SidebarSections;
+  /** A click on an entry: go there (App closes any open page). */
   onView: (v: LibraryView) => void;
+  /** The view went away by itself (its tag was deleted or hidden): App falls back without
+   *  closing an open page. */
+  onFallback: (v: LibraryView) => void;
   onAddFolder: () => void;
   onRemoveFolder: (f: Folder) => void;
   onRescan: (f: Folder) => void;
@@ -174,7 +178,7 @@ function UserFolder({ folder, families, row, view, onView, locations }: {
 /** The id of the Settings button, so focus can come back to it when settings close. */
 export const SETTINGS_BUTTON_ID = "open-settings";
 
-export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, show, onView, onAddFolder, onRemoveFolder, onRescan, onCancelScan, onOpenSettings, onLocateFolder }: Props) {
+export function Sidebar({ folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, show, onView, onFallback, onAddFolder, onRemoveFolder, onRescan, onCancelScan, onOpenSettings, onLocateFolder }: Props) {
   const locations = useLocations(folders, services);
   const titleBar = useTitleBar();
   const library: { label: string; icon: string; view: LibraryView; count: number; hint: string }[] = [
@@ -344,7 +348,7 @@ export function Sidebar({ folders, counts, folderCounts, families, services, ado
             ))}
           </div>
 
-          {show.tags && <TagsSection families={families} view={view} onView={onView} showBuiltin={show.builtinTags} />}
+          {show.tags && <TagsSection families={families} view={view} onView={onView} onFallback={onFallback} showBuiltin={show.builtinTags} />}
         </nav>
       </ScrollArea>
 

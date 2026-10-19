@@ -31,9 +31,10 @@ export function TagChip({ tag, partial, className }: { tag: Tag; partial?: strin
 
 /**
  * The tags on some faces (one style, or a family's styles). A tag only some of them have is
- * drawn dashed. Shows at most `max`, then "+n".
+ * drawn dashed. Shows at most `max`, then "+n". `srId` goes on the screen-reader text ("Tags:
+ * …", every tag), so a list row can point its description at it.
  */
-export function TagChips({ faces, index, max = 3 }: { faces: Face[]; index: TagIndex; max?: number }) {
+export function TagChips({ faces, index, max = 3, srId }: { faces: Face[]; index: TagIndex; max?: number; srId?: string }) {
   const counts = new Map<number, number>();
   for (const face of faces) for (const id of index.tagsOf(face)) counts.set(id, (counts.get(id) ?? 0) + 1);
   if (!counts.size) return null;
@@ -45,13 +46,15 @@ export function TagChips({ faces, index, max = 3 }: { faces: Face[]; index: TagI
     .join(", ");
   return (
     <span className="flex min-w-0 items-center gap-1">
-      <span className="sr-only">Tags: {label}.</span>
+      <span className="sr-only" id={srId}>
+        Tags: {label}.
+      </span>
       {shown.map((t) => {
         const n = counts.get(t.id)!;
         return <TagChip key={t.id} tag={t} partial={n < faces.length ? `${n} of ${faces.length} styles` : undefined} />;
       })}
       {rest.length > 0 && (
-        <span className="shrink-0 text-[11px] text-muted-foreground" title={rest.map((t) => t.name).join(", ")}>
+        <span className="shrink-0 text-[11px] text-muted-foreground" title={rest.map((t) => t.name).join(", ")} aria-hidden>
           +{rest.length}
         </span>
       )}
@@ -61,9 +64,10 @@ export function TagChips({ faces, index, max = 3 }: { faces: Face[]; index: TagI
 
 /**
  * Small dots in the colors of the places these copies live. Several dots when copies are in
- * differently colored places. Hover lists the places.
+ * differently colored places. Hover lists the places. `srId` goes on the screen-reader text
+ * ("In …").
  */
-export function LocationDots({ copies, locations, max = 3 }: { copies: FontSummary[]; locations: Locations; max?: number }) {
+export function LocationDots({ copies, locations, max = 3, srId }: { copies: FontSummary[]; locations: Locations; max?: number; srId?: string }) {
   const byColor = new Map<string, Set<string>>();
   for (const c of copies) {
     const color = locations.colorOfCopy(c);
@@ -76,7 +80,9 @@ export function LocationDots({ copies, locations, max = 3 }: { copies: FontSumma
   return (
     <Tooltip>
       <TooltipTrigger render={<span onClick={(e) => e.stopPropagation()} />} className="flex shrink-0 items-center gap-0.5">
-        <span className="sr-only">In {places.join("; ")}.</span>
+        <span className="sr-only" id={srId}>
+          In {places.join("; ")}.
+        </span>
         {[...byColor.keys()].slice(0, max).map((color) => (
           <span key={color} className="size-2 rounded-full" style={{ background: colorVar(color) }} />
         ))}

@@ -300,11 +300,16 @@ export function TagsSection({
   families,
   view,
   onView,
+  onFallback = onView,
   showBuiltin = true,
 }: {
   families: Family[];
   view: LibraryView;
+  /** A click on a tag. */
   onView: (v: LibraryView) => void;
+  /** The tag being viewed went away (below): back to All Fonts, without the side effects of a
+   *  click (App keeps an open font page). */
+  onFallback?: (v: LibraryView) => void;
   showBuiltin?: boolean;
 }) {
   const { loaded } = useOrganize();
@@ -320,8 +325,8 @@ export function TagsSection({
   // with Built-in, goes back to All Fonts.
   useEffect(() => {
     if (!loaded || view.kind !== "tag") return;
-    if (!index.byId.has(view.id) || (!showBuiltin && index.groupOf(view.id) === "builtin")) onView({ kind: "all" });
-  }, [loaded, view, index, onView, showBuiltin]);
+    if (!index.byId.has(view.id) || (!showBuiltin && index.groupOf(view.id) === "builtin")) onFallback({ kind: "all" });
+  }, [loaded, view, index, onFallback, showBuiltin]);
 
   // The current tag view's row is in sight: its group and the tags above it open, for example
   // when it's restored at launch inside the closed Built-in group. Once each time the view

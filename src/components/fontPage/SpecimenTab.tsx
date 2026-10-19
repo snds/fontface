@@ -1,5 +1,7 @@
+import { useEffect, useRef, useState } from "react";
 import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
+import { ROW_HEIGHT } from "@/previewFit";
 import { isSampleKind, usePreviewProfile } from "@/previewProfiles";
 import { cn } from "@/lib/utils";
 import { ActivationSwitch, InstalledBadge } from "@/components/ActivationSwitch";
@@ -10,6 +12,9 @@ import { FaceStateMessage, paragraphText, SectionTitle, waterfallText } from "./
 const WATERFALL = [12, 16, 24, 36, 48, 72, 96];
 /** The "All styles" preview size. */
 const STYLE_SIZE = 28;
+/** "All styles" lines this far past the edges of the page's scroll area load their font, so
+ *  they're ready by the time they scroll in. */
+const NEAR = "400px 0px";
 
 interface Props {
   family: Family;
@@ -26,7 +31,10 @@ interface Props {
 /** The waterfall and a paragraph in the chosen style, then every style with its own switch. */
 export function SpecimenTab({ family, face, previewText, variation, busy, onChoose, onActivate }: Props) {
   const font = face.primary;
-  const state = useFontFace(font);
+  // The chosen style loads ahead of the "All styles" lines (which may have asked first).
+  const state = useFontFace(font, true);
+  const listRef = useRef<HTMLUListElement>(null);
+  const near = useNearLines(listRef, family.faces);
   const { profile } = usePreviewProfile(font);
   const pageFace = faceName(font);
   const fontFamily = `"${pageFace}"`;
@@ -76,11 +84,12 @@ export function SpecimenTab({ family, face, previewText, variation, busy, onChoo
 
       <section aria-label="All styles">
         <SectionTitle>All styles</SectionTitle>
-        <ul className="flex flex-col">
+        <ul ref={listRef} className="flex flex-col">
           {family.faces.map((f) => (
             <StyleLine
               key={f.key}
               face={f}
+              near={near.has(f.key)}
               chosen={f.key === face.key}
               previewText={previewText}
               busy={f.copies.some((c) => busy.has(c.path))}
@@ -94,9 +103,50 @@ export function SpecimenTab({ family, face, previewText, variation, busy, onChoo
   );
 }
 
-/** One style: pick it to see it above (it's then the chosen style), and its own switch. */
+/** The nearest ancestor that scrolls (the tab panel), or null for the window. */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const { overflowY } = getComputedStyle(p);
+    if (overflowY === "auto" || overflowY === "scroll") return p;
+  }
+  return null;
+}
+
+/**
+ * Which "All styles" lines (by face key) are on screen or near it. Only those load their font:
+ * a family of 60 styles doesn't fetch 60 files when its page opens, and a line that scrolls away
+ * before its turn gives up its place in the queue.
+ */
+function useNearLines(listRef: React.RefObject<HTMLUListElement | null>, faces: Face[]): ReadonlySet<string> {
+  const [near, setNear] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const observer = new IntersectionObserver(
+      (entries) =>
+        setNear((before) => {
+          const next = new Set(before);
+          for (const entry of entries) {
+            const key = (entry.target as HTMLElement).dataset.faceKey;
+            if (!key) continue;
+            if (entry.isIntersecting) next.add(key);
+            else next.delete(key);
+          }
+          return next;
+        }),
+      { root: scrollParent(list), rootMargin: NEAR },
+    );
+    for (const line of list.querySelectorAll("li[data-face-key]")) observer.observe(line);
+    return () => observer.disconnect();
+  }, [listRef, faces]);
+  return near;
+}
+
+/** One style: pick it to see it above (it's then the chosen style), and its own switch. Its
+ *  preview loads only while the line is `near` the screen. */
 function StyleLine({
   face,
+  near,
   chosen,
   previewText,
   busy,
@@ -104,6 +154,7 @@ function StyleLine({
   onActivate,
 }: {
   face: Face;
+  near: boolean;
   chosen: boolean;
   previewText: string;
   busy: boolean;
@@ -135,7 +186,12 @@ function StyleLine({
           <CopiesBadge face={face} />
           <SampleBadge profile={preview.profile} row="full" />
         </span>
-        <FacePreview font={font} preview={preview} typed={previewText} own="full" size={STYLE_SIZE} />
+        {near ? (
+          <FacePreview font={font} preview={preview} typed={previewText} own="full" size={STYLE_SIZE} />
+        ) : (
+          // Holds the line's height until its preview loads.
+          <span aria-hidden className="block" style={{ height: STYLE_SIZE * ROW_HEIGHT }} />
+        )}
       </button>
       {face.installed ? (
         <InstalledBadge />

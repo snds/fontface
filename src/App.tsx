@@ -64,7 +64,7 @@ import { SETTINGS_SEARCH_ID, SettingsScreen } from "@/settings/SettingsView";
 import { applyTheme, useDarkTheme } from "@/settings/theme";
 import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/useSettings";
 import { useSyncEvents } from "@/sync/store";
-import { useNav } from "@/useNav";
+import { popupOpen, useNav } from "@/useNav";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
@@ -174,11 +174,12 @@ export default function App() {
     focusBack.current = document.activeElement;
     setSettingsOpen(true);
   }, []);
-  /** ⌘, and the menu's Settings… item. Ignored while a dialog or menu is open, so settings
-   *  never open behind it (close it first), and during a drag, whose drop would land on a tag
-   *  that settings hide (drop or cancel it first). */
+  /** ⌘, and the menu's Settings… item. Ignored while a dialog, menu or select list (the font
+   *  page's style picker) is open, so settings never open behind it or under it (close it
+   *  first), and during a drag, whose drop would land on a tag that settings hide (drop or
+   *  cancel it first). */
   const openSettingsByShortcut = useCallback(() => {
-    if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+    if (popupOpen()) return;
     if (isDragging()) return;
     // A press that hasn't become a drag yet mustn't become one over settings.
     cancelDrag();
@@ -241,7 +242,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "f" || !(IS_MAC ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey) return;
-      if (settingsOpenRef.current || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      if (settingsOpenRef.current || popupOpen()) return;
       if (pageOpen) {
         e.preventDefault();
         pendingFocus.current = "search";
@@ -931,6 +932,9 @@ export default function App() {
               scans={scans}
               show={sidebarShows}
               onView={goToPlace}
+              // Falling back to All Fonts (the viewed tag was deleted or hidden) keeps an open
+              // page, like the other fallbacks.
+              onFallback={setView}
               onAddFolder={addFolder}
               onRemoveFolder={setPendingRemoval}
               onRescan={(f) => scan(f)}

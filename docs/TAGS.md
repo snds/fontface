@@ -66,7 +66,7 @@ Right-click a location in the sidebar (or focus it and press Shift-F10) to pick 
 Picking the color marked "(default)", or "Use default color", goes back to the default, so the
 location follows its parent folder or Font Book again. The color tints the location's icon, and
 each font row shows a small dot in the color of the places its copies live (hover for the list;
-screen readers hear the places).
+screen readers hear the places, after the row's name, with its tags).
 
 | Location | Default color | Notes |
 |---|---|---|

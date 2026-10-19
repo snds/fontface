@@ -8,7 +8,7 @@
  * - Arrow keys, Home/End and Page Up/Down move the focused row and select it; with Shift they
  *   extend the selection from the anchor instead. Space adds or removes the focused row.
  * - Rows are remembered by key, so a reload or an expanded family doesn't shift the selection.
- *   Rows that leave the list leave the selection for good.
+ *   Rows that leave the list leave the selection for good; focus moves to a neighbor.
  * - Opening (double-click or Return) isn't part of the selection: the list does that.
  */
 
@@ -70,12 +70,49 @@ export function clearSelection(sel: Selection): Selection {
   return sel.keys.size ? { ...sel, keys: new Set() } : sel;
 }
 
-/** Drops rows that are no longer listed. The same object comes back when nothing changed. */
-export function prune(sel: Selection, present: ReadonlySet<string>): Selection {
+export interface PruneOptions {
+  /** The list before it changed (row keys in order): where a focused row that left used to be. */
+  before?: readonly string[];
+  /** A row's parent row (a style row's family row), tried first when the row leaves. */
+  parentOf?: (key: string) => string | null | undefined;
+}
+
+/**
+ * Where focus goes when its row leaves the list, so the keyboard and screen readers carry on
+ * from about the same place: the row's parent if it's still listed (a style row's family, when
+ * the family is collapsed), else the next row after it that's still listed (the one that took
+ * its place), else the nearest one before it. Null when nothing is left, or the old place is
+ * unknown.
+ */
+export function focusAfterRemoval(key: string, present: ReadonlySet<string>, { before, parentOf }: PruneOptions = {}): string | null {
+  const parent = parentOf?.(key);
+  if (parent != null && present.has(parent)) return parent;
+  const at = before ? before.indexOf(key) : -1;
+  if (!before || at < 0) return null;
+  for (let i = at + 1; i < before.length; i++) if (present.has(before[i])) return before[i];
+  for (let i = at - 1; i >= 0; i--) if (present.has(before[i])) return before[i];
+  return null;
+}
+
+/**
+ * Drops rows that are no longer listed. The same object comes back when nothing changed.
+ *
+ * A focused row that leaves hands focus to a neighbor (see focusAfterRemoval). If it was the
+ * only selected row, the neighbor is selected too, so a row stays selected, as in Mail.
+ */
+export function prune(sel: Selection, present: ReadonlySet<string>, options: PruneOptions = {}): Selection {
   const keys = [...sel.keys].filter((k) => present.has(k));
-  const anchor = sel.anchor !== null && present.has(sel.anchor) ? sel.anchor : null;
-  const focus = sel.focus !== null && present.has(sel.focus) ? sel.focus : null;
-  if (keys.length === sel.keys.size && anchor === sel.anchor && focus === sel.focus) return sel;
+  let anchor = sel.anchor !== null && present.has(sel.anchor) ? sel.anchor : null;
+  let focus = sel.focus;
+  if (focus !== null && !present.has(focus)) {
+    const wasOnlySelected = sel.keys.size === 1 && sel.keys.has(focus);
+    focus = focusAfterRemoval(focus, present, options);
+    if (focus !== null && wasOnlySelected && !keys.length) {
+      keys.push(focus);
+      anchor = focus;
+    }
+  }
+  if (keys.length === sel.keys.size && anchor === sel.anchor && focus === sel.focus && keys.every((k) => sel.keys.has(k))) return sel;
   return { keys: new Set(keys), anchor, focus };
 }
 
@@ -90,13 +127,15 @@ function currentIndex(sel: Selection, order: readonly string[]): number {
 
 /**
  * Gives the list a focused row when it gets focus without one: the first selected row, else
- * the first row. The selection itself doesn't change.
+ * `preferred` (the first row on screen, so focus doesn't jump to the top of a scrolled list),
+ * else the first row. The selection itself doesn't change.
  */
-export function ensureFocus(sel: Selection, order: readonly string[]): Selection {
+export function ensureFocus(sel: Selection, order: readonly string[], preferred?: string): Selection {
   if (!order.length) return sel;
   if (sel.focus !== null && order.includes(sel.focus)) return sel;
   const at = currentIndex(sel, order);
-  return { ...sel, focus: order[Math.max(0, at)] };
+  if (at >= 0) return { ...sel, focus: order[at] };
+  return { ...sel, focus: preferred !== undefined && order.includes(preferred) ? preferred : order[0] };
 }
 
 /** Moves focus to a row. `select`: it becomes the only selected row (an arrow key without Shift). */

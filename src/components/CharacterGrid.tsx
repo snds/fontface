@@ -105,26 +105,45 @@ interface Props {
 /** Memoized: the font page re-renders on every keystroke in the preview field, and a block can
  *  hold tens of thousands of cells. */
 export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, face, fontVariationSettings, fontState, query = "" }: Props) {
-  if (state.status === "loading") return <p className="text-xs text-muted-foreground">Reading characters…</p>;
-  if (state.status === "error") return <p className="text-xs text-muted-foreground italic">{state.message}</p>;
-  if (fontState !== "loading" && fontState !== "ready") {
+  const data = state.status === "ready" ? state.data : null;
+  const wanted = useMemo(() => parseCharacterQuery(query), [query]);
+  const results = useMemo(() => (query.trim() && data ? findCharacters(data.blocks, wanted) : null), [query, data, wanted]);
+  const resultsText = results ? searchStatus(wanted, results) : "";
+  let body: React.ReactNode;
+  if (state.status === "loading") body = <p className="text-xs text-muted-foreground">Reading characters…</p>;
+  else if (state.status === "error") body = <p className="text-xs text-muted-foreground italic">{state.message}</p>;
+  else if (fontState !== "loading" && fontState !== "ready") {
     // Cells would draw in another font, or not at all.
-    return (
+    body = (
       <div className="flex flex-col gap-2">
         <p className="text-xs text-muted-foreground">{charactersSummary(state.data)}</p>
         <p className="text-xs text-muted-foreground italic">The font couldn't be loaded here, so its characters can't be drawn.</p>
       </div>
     );
+  } else {
+    body = (
+      <Grid
+        data={state.data}
+        fontFamily={fontFamily}
+        face={face}
+        fontVariationSettings={fontVariationSettings}
+        ready={fontState === "ready"}
+        query={query}
+        results={results}
+        resultsText={resultsText}
+      />
+    );
   }
   return (
-    <Grid
-      data={state.data}
-      fontFamily={fontFamily}
-      face={face}
-      fontVariationSettings={fontVariationSettings}
-      ready={fontState === "ready"}
-      query={query}
-    />
+    <>
+      {/* The search's results, read out as they change. Always present (empty until a search),
+          so the first result is read too: a live region that appears with its text is often
+          skipped. */}
+      <p role="status" className="sr-only">
+        {resultsText}
+      </p>
+      {body}
+    </>
   );
 });
 
@@ -135,6 +154,19 @@ interface GridProps {
   fontVariationSettings?: string;
   ready: boolean;
   query: string;
+  /** The search's matches, or null when not searching. */
+  results: CharacterResults | null;
+  /** What the search found, in words (also read out by CharacterGrid's status line). */
+  resultsText: string;
+}
+
+type CharacterResults = ReturnType<typeof findCharacters>;
+
+/** What a search found, in words: "2 characters found. Not in this font: € (U+20AC)." */
+function searchStatus(wanted: number[], results: CharacterResults): string {
+  if (!wanted.length) return "Type a character, or a code such as U+00DF.";
+  if (!results.found.length) return `Not in this font: ${listCodes(results.missing)}.`;
+  return `${plural(results.found.length, "character")} found.${results.missing.length ? ` Not in this font: ${listCodes(results.missing)}.` : ""}`;
 }
 
 /** "ß (U+00DF), € (U+20AC) and 3 more". */
@@ -143,7 +175,7 @@ function listCodes(cps: number[], max = 12): string {
   return cps.length > max ? `${shown.join(", ")} and ${(cps.length - max).toLocaleString()} more` : shown.join(", ");
 }
 
-function Grid({ data, fontFamily, face, fontVariationSettings, ready, query }: GridProps) {
+function Grid({ data, fontFamily, face, fontVariationSettings, ready, query, results, resultsText }: GridProps) {
   const dominant = useMemo(() => [...data.blocks].sort((a, b) => count(b) - count(a))[0]?.name ?? "", [data]);
   const [blockName, setBlockName] = useState(dominant);
   const [showAll, setShowAll] = useState(false);
@@ -154,9 +186,6 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready, query }: G
   useEffect(() => {
     setBlockName(dominant);
   }, [dominant]);
-  const searching = query.trim().length > 0;
-  const wanted = useMemo(() => parseCharacterQuery(query), [query]);
-  const results = useMemo(() => (searching ? findCharacters(data.blocks, wanted) : null), [searching, data, wanted]);
   useEffect(() => {
     setShowAll(false);
     setFocus(0);
@@ -212,13 +241,9 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready, query }: G
   return (
     <div className="flex flex-col gap-2">
       {results ? (
-        // Read out as the results change.
-        <p className="text-xs text-muted-foreground" role="status">
-          {!wanted.length
-            ? "Type a character, or a code such as U+00DF."
-            : results.found.length === 0
-              ? `Not in this font: ${listCodes(results.missing)}.`
-              : `${plural(results.found.length, "character")} found.${results.missing.length ? ` Not in this font: ${listCodes(results.missing)}.` : ""}`}
+        // Screen readers hear this from the status line above the grid (CharacterGrid).
+        <p className="text-xs text-muted-foreground" aria-hidden>
+          {resultsText}
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">{charactersSummary(data)}</p>

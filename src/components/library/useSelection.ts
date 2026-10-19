@@ -25,25 +25,34 @@ export interface SelectionApi {
   clear: () => void;
   /** Moves focus to a row; `select` makes it the only selected row. */
   focus: (key: string, select: boolean) => void;
-  /** The list got focus: give it a focused row if it has none. */
-  ensureFocus: () => void;
+  /** The list got focus: give it a focused row if it has none (`preferred`: the first row on screen). */
+  ensureFocus: (preferred?: string) => void;
   /** Right-click: a row outside the selection becomes the selection (like Finder), without opening. */
   selectForMenu: (key: string) => void;
 }
 
 /**
  * The selection of a library list (see selection.ts), kept by row key. `order` is the rows in
- * list order. Rows that leave it leave the selection; a new `resetKey` (another view or search)
- * starts with nothing selected.
+ * list order. Rows that leave it leave the selection, and focus on one moves to a neighbor
+ * (`parentOf` names a row's parent, such as a style row's family row); a new `resetKey`
+ * (another view or search) starts with nothing selected.
  */
-export function useSelection(order: readonly string[], resetKey: string): SelectionApi {
+export function useSelection(order: readonly string[], resetKey: string, parentOf?: (key: string) => string | null | undefined): SelectionApi {
   const [selection, setSelection] = useState<Selection>(NO_SELECTION);
   const orderRef = useRef(order);
   orderRef.current = order;
+  const parentRef = useRef(parentOf);
+  parentRef.current = parentOf;
   const present = useMemo(() => new Set(order), [order]);
+  /** The order the selection was last pruned against: where a row that left used to be. */
+  const before = useRef(order);
 
   useEffect(() => {
-    setSelection((s) => prune(s, present));
+    const options = { before: before.current, parentOf: parentRef.current };
+    before.current = order;
+    setSelection((s) => prune(s, present, options));
+    // `present` changes exactly when `order` does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [present]);
   useLayoutEffect(() => {
     setSelection(NO_SELECTION);
@@ -58,7 +67,7 @@ export function useSelection(order: readonly string[], resetKey: string): Select
       selectAll: () => setSelection((s) => selectAll(s, orderRef.current)),
       clear: () => setSelection(clearSelection),
       focus: (key, select) => setSelection((s) => focusRow(s, key, select)),
-      ensureFocus: () => setSelection((s) => ensureFocus(s, orderRef.current)),
+      ensureFocus: (preferred) => setSelection((s) => ensureFocus(s, orderRef.current, preferred)),
       selectForMenu: (key) => setSelection((s) => (s.keys.has(key) ? s : clickRow(s, orderRef.current, key, { toggle: false, range: false }))),
     }),
     [selection],

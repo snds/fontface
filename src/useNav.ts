@@ -15,11 +15,13 @@ export function focusKind(el: EventTarget | null): FocusKind {
   return "other";
 }
 
-/** A menu, popover or dialog is open. They're portaled out of the app's root; the library
- *  list (a listbox) stays inside it. */
-function popupOpen(): boolean {
+/** A menu, popover, dialog or select list (the font page's style picker) is open. They're
+ *  portaled out of the app's root; the library list (a listbox) stays inside it. A closed
+ *  Select keeps its list in the page, hidden, so only popups that are drawn count. Shortcuts
+ *  that would cover or close the page underneath (Back, Cmd+, and Cmd+F) wait while one is. */
+export function popupOpen(): boolean {
   const root = document.getElementById("root");
-  return [...document.querySelectorAll(POPUPS)].some((el) => !root?.contains(el));
+  return [...document.querySelectorAll(POPUPS)].some((el) => !root?.contains(el) && el.getClientRects().length > 0);
 }
 
 export interface Nav {

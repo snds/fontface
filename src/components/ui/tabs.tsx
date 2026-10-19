@@ -37,8 +37,20 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
   )
 }
 
+// The open panel is a Tab stop (Base UI gives it tabIndex 0), so a panel that scrolls can be
+// scrolled from the keyboard. Keyboard focus shows as an outline just inside its edge, like the
+// library list's: a scrolling panel doesn't clip it, and its content doesn't cover it.
 function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
-  return <TabsPrimitive.Panel data-slot="tabs-content" className={cn("flex-1 text-sm outline-none", className)} {...props} />
+  return (
+    <TabsPrimitive.Panel
+      data-slot="tabs-content"
+      className={cn(
+        "flex-1 text-sm outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring/60",
+        className
+      )}
+      {...props}
+    />
+  )
 }
 
 export { Tabs, TabsList, TabsTrigger, TabsContent }

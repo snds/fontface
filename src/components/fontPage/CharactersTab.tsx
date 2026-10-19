@@ -14,7 +14,8 @@ interface Props {
 
 /** Every real character of the chosen style, by Unicode block, with a search. */
 export function CharactersTab({ font, characters, variation, query, onQuery }: Props) {
-  const state = useFontFace(font);
+  // The chosen style: its file loads ahead of others waiting.
+  const state = useFontFace(font, true);
   const pageFace = faceName(font);
   return (
     <div className="flex flex-col gap-3 px-6 pt-5 pb-12">

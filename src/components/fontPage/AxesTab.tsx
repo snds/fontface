@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from "react";
 import type { Axis } from "@/api";
+import { commitAxis, discardAxis, typeAxis, type AxisDraft } from "@/axisField";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 
@@ -11,7 +12,6 @@ interface Props {
 }
 
 const tidy = (v: number) => String(Math.round(v * 100) / 100);
-const clamp = (v: number, a: Axis) => Math.min(a.max, Math.max(a.min, v));
 
 /** A slider and a number field per variable axis. The values apply to Specimen and Characters too. */
 export function AxesTab({ axes, values, onChange }: Props) {
@@ -30,12 +30,13 @@ export function AxesTab({ axes, values, onChange }: Props) {
 function AxisRow({ axis, value, onChange }: { axis: Axis; value: number; onChange: (v: number) => void }) {
   const id = useId();
   const name = axis.name ?? axis.tag;
-  // What's typed in the number field, until it's finished (Return or leaving the field).
-  const [draft, setDraft] = useState<string | null>(null);
+  // What's typed in the number field, until it's finished (Return or leaving the field), and
+  // the value from before typing, for Esc (see axisField.ts).
+  const [draft, setDraft] = useState<AxisDraft | null>(null);
   const discard = useRef(false);
-  const commit = (text: string) => {
-    const n = Number(text);
-    if (text.trim() !== "" && Number.isFinite(n)) onChange(clamp(n, axis));
+  const commit = () => {
+    const v = commitAxis(draft, axis);
+    if (v !== undefined) onChange(v);
   };
   return (
     <div className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2">
@@ -49,26 +50,28 @@ function AxisRow({ axis, value, onChange }: { axis: Axis; value: number; onChang
         min={axis.min}
         max={axis.max}
         step="any"
-        value={draft ?? tidy(value)}
+        value={draft?.text ?? tidy(value)}
         onChange={(e) => {
-          const text = e.target.value;
-          setDraft(text);
           // Values in range show as they're typed; anything else waits until the field is left.
-          const n = Number(text);
-          if (text.trim() !== "" && Number.isFinite(n) && n >= axis.min && n <= axis.max) onChange(n);
+          const next = typeAxis(draft, e.target.value, value, axis);
+          setDraft(next.draft);
+          if (next.apply !== undefined) onChange(next.apply);
         }}
         onBlur={() => {
-          if (draft !== null && !discard.current) commit(draft);
+          if (!discard.current) commit();
           discard.current = false;
           setDraft(null);
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
-            if (draft !== null) commit(draft);
+            commit();
             setDraft(null);
           } else if (e.key === "Escape") {
-            // Back to the value before typing, out of the field; the next Esc goes back.
+            // Back to the value before typing (values applied while typing are undone too), out
+            // of the field; the next Esc goes back.
             e.preventDefault();
+            const before = discardAxis(draft);
+            if (before !== undefined) onChange(before);
             discard.current = true;
             e.currentTarget.blur();
           }

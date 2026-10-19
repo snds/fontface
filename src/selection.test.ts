@@ -5,6 +5,7 @@ import {
   clearSelection,
   clickRow,
   ensureFocus,
+  focusAfterRemoval,
   focusRow,
   listKeyCommand,
   moveFocus,
@@ -111,23 +112,65 @@ test("Space adds or removes the focused row; Cmd-A selects all; Esc clears but k
   assert.equal(clearSelection(cleared), cleared);
 });
 
-test("rows that leave the list leave the selection, the anchor and focus", () => {
+test("rows that leave the list leave the selection and the anchor", () => {
   const s: Selection = { keys: new Set(["a", "c"]), anchor: "c", focus: "c" };
   const left = prune(s, new Set(["a", "b"]));
   assert.deepEqual(keys(left), ["a"]);
   assert.equal(left.anchor, null);
-  assert.equal(left.focus, null);
+  assert.equal(left.focus, null, "without the old list there's no telling where focus was");
   assert.equal(prune(s, new Set(ORDER)), s, "nothing gone: the same object");
 });
 
-test("focus arrives on the first selected row, else the first row", () => {
+test("when the focused row leaves, focus goes to the row that took its place", () => {
+  // The family at "c" left the list (a filter, or a tag removed on its page).
+  const s = clickRow(NO_SELECTION, ORDER, "c", plain);
+  const after = prune(s, new Set(["a", "b", "d", "e", "f"]), { before: ORDER });
+  assert.equal(after.focus, "d");
+  assert.deepEqual(keys(after), ["d"], "it was the only selected row, so its neighbor is selected");
+  assert.equal(after.anchor, "d");
+
+  // Several rows went, the last ones included: the nearest one before.
+  const last = prune(clickRow(NO_SELECTION, ORDER, "e", plain), new Set(["a", "b", "c"]), { before: ORDER });
+  assert.equal(last.focus, "c");
+
+  // Others stay selected: focus moves, and nothing else is selected for it.
+  let several = clickRow(NO_SELECTION, ORDER, "a", plain);
+  several = clickRow(several, ORDER, "c", { toggle: true, range: false });
+  const kept = prune(several, new Set(["a", "b", "d", "e", "f"]), { before: ORDER });
+  assert.equal(kept.focus, "d");
+  assert.deepEqual(keys(kept), ["a"]);
+
+  // Focus on a row that isn't selected stays unselected where it lands.
+  const unselected = focusRow(clickRow(NO_SELECTION, ORDER, "a", plain), "c", false);
+  const moved = prune(unselected, new Set(["a", "b", "d", "e", "f"]), { before: ORDER });
+  assert.equal(moved.focus, "d");
+  assert.deepEqual(keys(moved), ["a"]);
+
+  assert.equal(prune(s, new Set(), { before: ORDER }).focus, null, "an empty list has nothing to focus");
+});
+
+test("when a family is collapsed, focus on one of its styles goes to the family row", () => {
+  const before = ["f:A", "s:A1", "s:A2", "f:B"];
+  const parentOf = (k: string) => (k.startsWith("s:A") ? "f:A" : null);
+  const s = clickRow(NO_SELECTION, before, "s:A2", plain);
+  const after = prune(s, new Set(["f:A", "f:B"]), { before, parentOf });
+  assert.equal(after.focus, "f:A");
+  assert.deepEqual(keys(after), ["f:A"]);
+  // The family itself left too: on to the row that took its place.
+  assert.equal(focusAfterRemoval("s:A2", new Set(["f:B"]), { before, parentOf }), "f:B");
+  assert.equal(focusAfterRemoval("s:A2", new Set(["f:B"]), {}), null);
+});
+
+test("focus arrives on the first selected row, else the first row on screen, else the first row", () => {
   assert.equal(ensureFocus(NO_SELECTION, ORDER).focus, "a");
+  assert.equal(ensureFocus(NO_SELECTION, ORDER, "d").focus, "d", "a list scrolled down starts where it shows");
+  assert.equal(ensureFocus(NO_SELECTION, ORDER, "zz").focus, "a", "a row that isn't listed is ignored");
   const s: Selection = { keys: new Set(["e", "c"]), anchor: null, focus: null };
-  const focused = ensureFocus(s, ORDER);
+  const focused = ensureFocus(s, ORDER, "a");
   assert.equal(focused.focus, "c");
   assert.equal(focused.keys, s.keys, "the selection doesn't change");
   const already = focusRow(s, "b", false);
-  assert.equal(ensureFocus(already, ORDER), already);
+  assert.equal(ensureFocus(already, ORDER, "d"), already);
   assert.equal(ensureFocus(NO_SELECTION, []), NO_SELECTION);
 });
 
