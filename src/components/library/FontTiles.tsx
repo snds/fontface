@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
+import { flushSync } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { addedAt, addedDateText } from "@/familyFacts";
 import { stateWords, summarize } from "@/fontState";
@@ -15,7 +16,7 @@ import {
   firstVisibleIndex,
   GRID_PADDING,
   gridHeight,
-  offsetFor,
+  keptOffset,
   pageItems,
   reloadShift,
   rowCount,
@@ -30,8 +31,9 @@ import {
 /**
  * The Tiles layout: a grid of cards, one per family (or per style, with grouping off). Rows of
  * cards are virtualized with a fixed height for the preview size (tileGrid.ts), so nothing is
- * measured; two extra rows are drawn above and below. The column count follows the width, and
- * when it changes (or the size does) the first family showing stays at the top. When a reload
+ * measured; two extra rows are drawn above and below. The column count follows the width at
+ * every width (as many as fit, at least two, the cards stretching to fill the row), and when it
+ * changes (or the size does) the first family showing stays at the top. When a reload
  * adds or removes cards above it (a scan filling the library in), the grid scrolls by whole rows
  * so it stays where it was, as Rows and Table do.
  *
@@ -43,19 +45,33 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
   const { rows, actions, activeIndex, reveal, focused, optionId, adapter } = view;
   const { size } = display;
   const scrollRef = useRef<HTMLDivElement>(null);
-  // The grid's width inside its padding; null until measured.
-  const [width, setWidth] = useState<number | null>(null);
+  // The grid's width inside its padding; null until measured. The window, the sidebar or
+  // anything else resizing it draws the grid again only when the column count changes (in
+  // between, the cards stretch by themselves), and before the next paint, so cards are never
+  // shown squeezed into the old count.
+  const width = useRef<number | null>(null);
+  const drawn = useRef<{ columns: number | null; size: number }>({ columns: null, size });
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const measure = () => setWidth(Math.max(0, el.clientWidth - 2 * GRID_PADDING));
-    measure();
-    const observer = new ResizeObserver(measure);
+    const measure = (sync: boolean) => {
+      width.current = Math.max(0, el.clientWidth - 2 * GRID_PADDING);
+      if (tileColumns(width.current, drawn.current.size) === drawn.current.columns) return;
+      if (sync) flushSync(() => redraw());
+      else redraw();
+    };
+    measure(false);
+    const observer = new ResizeObserver(() => measure(true));
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
 
-  const columns = tileColumns(width ?? 0, size);
+  const measured = width.current !== null;
+  const columns = tileColumns(width.current ?? 0, size);
+  useLayoutEffect(() => {
+    drawn.current = { columns: measured ? columns : null, size };
+  });
   const stride = rowStride(size);
   const height = tileHeight(size);
   const virtualizer = useVirtualizer({
@@ -91,8 +107,10 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
       const index = at >= 0 ? at : Math.min(was, Math.max(0, rows.length - 1));
       anchor.current = { index, key: keyAt(index) };
     }
-    if (resized) virtualizer.scrollToOffset(offsetFor(anchor.current.index, columns, stride));
-    else if (before.rows !== rows) {
+    if (resized) {
+      const top = scrollRef.current?.scrollTop ?? 0;
+      virtualizer.scrollToOffset(keptOffset(top, { index: was, columns: before.columns, stride: before.stride }, { index: anchor.current.index, columns, stride }));
+    } else if (before.rows !== rows) {
       const shift = reloadShift(was, anchor.current.index, columns, stride);
       if (shift) virtualizer.scrollToOffset((scrollRef.current?.scrollTop ?? 0) + shift);
     }
@@ -109,7 +127,6 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
   // Key commands, keyboard focus and layout switches bring the active card into view, once the
   // grid knows how many cards fit across.
   const revealed = useRef(0);
-  const measured = width !== null;
   useEffect(() => {
     if (!measured) return;
     revealed.current = reveal;
@@ -257,8 +274,9 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
         <LocationDots copies={copies} locations={locations} srId={`${id}-places`} />
         <TagDots faces={family.faces} index={actions.index} srId={`${id}-tags`} />
         <span className="flex-1" />
+        {/* On a narrow card the date is cut short first, before the badges. */}
         {added && (
-          <span className="shrink-0 truncate" aria-hidden>
+          <span className="min-w-0 truncate" aria-hidden>
             Added {added}
           </span>
         )}
