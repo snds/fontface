@@ -12,16 +12,20 @@ import type { FontSummary } from "./api.ts";
  * 1. Your choice for this font (by face key): a family and maybe a style, or "keep separate"
  *    (the font's own name).
  * 2. Your rule for its family name (by squash key): merge into a family, or keep separate.
- * 3. Grouping by name (only while Settings › Library › "Group families by name" is on), when
- *    all of these hold:
+ * 3. Grouping by name (only while View options › "Group families by name" is on), when all of
+ *    these hold:
  *    a. The name ends in whole style words that can merge (weight, slope, variant; `WORDS`), or
  *       differs only in spelling ("BigCaslon" / "Big Caslon").
  *    b. What's left is a family in the library, or two different names reduce to it.
  *    c. Something else agrees: the PostScript name's family part, the same foundry or designer,
  *       or the weight number matching the weight word within 100.
- *    Guards keep a name out (it may still be suggested): G1 the font names its own grouping
- *    family (name ID 16); G2 a width, size or number word; G3 fewer than 3 letters left; G4 both
- *    sides name a foundry and they differ; G5 you chose "Keep separate" for the name.
+ *    Guards keep a name out of this step: G1 the font names its own grouping family (name ID
+ *    16); G2 a width, size or number word; G3 fewer than 3 letters left; G4 both sides name a
+ *    foundry and they differ; G5 you chose "Keep separate" for the name.
+ *    Then automatic groups (`autoGroups`, applied by library.ts): whole families that G1, G2, G4
+ *    or a missing signal held back, and families whose names differ by a width or size word
+ *    ("Arial Narrow" into Arial), join their family too. Never a family you kept separate or
+ *    arranged by hand. The Family groups page lists each one with its reason, and Keep separate.
  * 4. Otherwise the font's own name (ID 16, else 1). When its copies carry different names of one
  *    family, the one that keeps the family together (`namedCopy`, `planByName`'s step 3), with
  *    grouping by name off too: turning it off only ever splits families, never joins others.
@@ -32,7 +36,7 @@ import type { FontSummary } from "./api.ts";
 // ---------------------------------------------------------------------------------- words
 
 /** What a style word says. Weight, slope and variant words can merge on their own; width and
- *  size (optical) words only make a suggestion. */
+ *  size (optical) words join whole families (`autoGroups`). */
 export type WordKind = "weight" | "slope" | "variant" | "width" | "optical";
 
 export interface Word {
@@ -863,7 +867,7 @@ export interface NameRule {
 }
 
 export interface GroupingOptions {
-  /** Settings › Library › "Group families by name". Off: no automatic merging. */
+  /** View options › "Group families by name". Off: no grouping by name, and no automatic groups. */
   byName: boolean;
   choices?: ReadonlyMap<string, FaceChoice>;
   rules?: ReadonlyMap<string, NameRule>;
@@ -996,8 +1000,9 @@ const relates = (raw: string, family: string, besides: boolean) =>
  * ("UltraBronzo-Lite" is "Light", where the "UltraBronzo" copy says "Lite"), then A to Z. A copy
  * whose label would name another family never wins over one inside it, however well its names
  * agree. Never by which copy is shown or what placed it, so turning one on doesn't change it.
+ * library.ts asks it again for a face an automatic group moves.
  */
-function labelFor(face: FaceInput, family: string): string {
+export function labelFor(face: FaceInput, family: string): string {
   const copies = face.copies;
   let best = face.primary;
   const alike = !copies || copies.length < 2 || face.varied === false || (face.varied === undefined && copies.every((c) => c.family === best.family && c.subfamily === best.subfamily));
@@ -1017,7 +1022,8 @@ function labelFor(face: FaceInput, family: string): string {
   return styleLabel(best.family, best.subfamily, family, face.primary.weight, besides);
 }
 
-/** Why a name that could join a family isn't grouped with it automatically. */
+/** Why grouping by name holds a name back from a family (step 3). Automatic groups join it
+ *  then (`autoGroups`), and the Family groups page says why. */
 export type HoldReason =
   /** G1: the font names its own grouping family (name ID 16). */
   | "ownName"
@@ -1033,7 +1039,8 @@ export type HoldReason =
 export interface GroupPlan {
   /** Family name → the family grouping by name lists it under (only names that move). */
   merges: Map<string, string>;
-  /** Names that could join a family but aren't grouped automatically, and why. */
+  /** Names that could join a family but grouping by name holds back, and why (`autoGroups`
+   *  joins their families). */
   held: Map<string, Held>;
 }
 
@@ -1043,7 +1050,7 @@ export interface Held {
   /** A numbered style's number ("45"). */
   word?: string;
   /** A numbered style's names left without the number, longest first (`WideName.steps`):
-   *  `suggestGroups` suggests it for the longest that's a family as they stand, else `into`. */
+   *  `autoGroups` joins it to the longest that's a family as they stand, else `into`. */
   steps?: readonly WideStep[];
 }
 
@@ -1250,7 +1257,7 @@ export class NameIndex {
 
 /**
  * What grouping by name does with each family name in the library (rule 3): which names merge
- * into which family, and which could but are held back (for suggestions). Rules you made take
+ * into which family, and which could but are held back (for `autoGroups`). Rules you made take
  * their names out (G5, or the rule decides). Works on names, so it runs once per name, not per
  * face; a name's faces all go the same way.
  *
@@ -1258,9 +1265,9 @@ export class NameIndex {
  * reduce to the same base once style words are off; names left on their own that differ only in
  * spelling ("Times New Roman" / "TimesNewRoman"); then families whose every style has a copy
  * carrying a name more of the library has go by that name (step 3 sets those faces' `named`).
- * `grouping`: Settings › Library › "Group families by name". Off, the merges are still worked
- * out (they're suggested then), and step 3 also rejoins the styles they'd have brought back to
- * a family through another of their copies (`rejoin`).
+ * `grouping`: View options › "Group families by name". Off, the merges are still worked out
+ * (nothing uses them), and step 3 also rejoins the styles they'd have brought back to a family
+ * through another of their copies (`rejoin`).
  */
 export function planByName(
   faces: readonly FaceInput[],
@@ -1745,47 +1752,70 @@ function placed(out: Placement | undefined, family: string, style: string, group
   return out;
 }
 
-// ----------------------------------------------------------------------------- suggestions
+// ------------------------------------------------------------------------ automatic groups
 
-/** A family grouping as it stands, for suggestions (library.ts's Family). */
+type GroupFont = Pick<FontSummary, "family" | "weight" | "variable" | "postscriptName">;
+
+/** A family grouping as it stands, for automatic groups (library.ts's Family). */
 export interface FamilyLike {
   id: string;
   name: string;
-  faces: readonly { key: string; style: string; groupedBy: GroupedBy; primary: Pick<FontSummary, "family" | "weight" | "variable" | "postscriptName"> }[];
+  faces: readonly {
+    key: string;
+    style: string;
+    groupedBy: GroupedBy;
+    primary: GroupFont;
+    /** The copy it's grouped by (`FaceInput.named`): its weight is read, as grouping by name does. */
+    named?: GroupFont;
+  }[];
 }
 
-/** Why a family is only suggested: a held name's reason, a width, size or number word, or
- *  (with "Group families by name" off) one grouping by name would merge. */
-export type SuggestReason = HoldReason | "width" | "optical" | "strong";
+/** Why a family joined another automatically: why grouping by name held its name back, or a
+ *  width or size word. */
+export type AutoReason = HoldReason | "width" | "optical";
 
-export interface SuggestionSource<F extends FamilyLike = FamilyLike> {
+/** One family an automatic group brought in. */
+export interface AutoSource<F extends FamilyLike = FamilyLike> {
+  /** The family as grouping by name left it. */
   family: F;
-  reason: SuggestReason;
+  reason: AutoReason;
   /** The width, size or number word ("Narrow", "Display", "45"). */
   word?: string;
 }
 
-export interface Suggestion<F extends FamilyLike = FamilyLike> {
-  /** The squash key of the family they'd join: stable while the library is the same. */
+/** Families that join one family automatically. */
+export interface AutoGroup<F extends FamilyLike = FamilyLike> {
+  /** The squash key of the family they join: stable while the library is the same. */
   id: string;
-  /** The family they'd join. */
+  /** The family they join. */
   into: string;
-  /** It's in the library now (else merging makes it). */
+  /** It was in the library already (else the group makes it, from two families at least). */
   existing?: F;
-  sources: SuggestionSource<F>[];
-  /** Styles in the family after merging. */
+  sources: AutoSource<F>[];
+  /** Styles in the family. */
   styles: number;
 }
 
+/** How a face came into its family through an automatic group (library.ts's Face.auto). */
+export interface AutoJoin {
+  /** The family it was in before: what Keep separate keeps apart. */
+  from: string;
+  reason: AutoReason;
+  word?: string;
+}
+
 /**
- * Families that could join another family, for the Family groups page: names grouping by name
- * holds back (G1, G2's numbers, G4, no signal), names with width or size words ("Arial Narrow"
- * into Arial, "FarnhamDisplay" and "FarnhamText" into Farnham), and with "Group families by
- * name" off, the ones it would merge. One suggestion per family to join; a family is in one at
- * most. A name you chose to keep separate isn't suggested (G5), and nor is a family made only of
- * your own choices.
+ * Families that join another family automatically while "Group families by name" is on (off:
+ * none): names grouping by name holds back (G1, G2's numbers, G4, no signal), and names with
+ * width or size words ("Arial Narrow" into Arial, "FarnhamDisplay" and "FarnhamText" into
+ * Farnham). Whole families only, so with grouping off every family still lies inside one with it
+ * on. One group per family to join; a family is in one at most. Left out: a name you chose to
+ * keep separate (G5), a family with a style you placed yourself (your rule or choice: it stays
+ * as you set it), and a lone family that would only get another name (nothing joins it).
+ * `families` come A to Z (`groupLibrary`), so the same library always groups the same way.
  */
-export function suggestGroups<F extends FamilyLike>(families: readonly F[], plan: GroupPlan, options: GroupingOptions): Suggestion<F>[] {
+export function autoGroups<F extends FamilyLike>(families: readonly F[], plan: GroupPlan, options: GroupingOptions): AutoGroup<F>[] {
+  if (!options.byName) return [];
   const byName = new Map(families.map((f) => [f.name, f]));
   const byKey = new Map<string, F>();
   for (const f of families) {
@@ -1794,10 +1824,10 @@ export function suggestGroups<F extends FamilyLike>(families: readonly F[], plan
     if (!there || f.faces.length > there.faces.length) byKey.set(k, f);
   }
   const kept = (name: string) => options.rules?.get(squash(name))?.decision === "separate";
-  const yours = (f: F) => f.faces.every((face) => face.groupedBy === "choice");
-  const out = new Map<string, { into: string; sources: SuggestionSource<F>[] }>();
+  const yours = (f: F) => f.faces.some((face) => face.groupedBy === "rule" || face.groupedBy === "choice");
+  const out = new Map<string, { into: string; sources: AutoSource<F>[] }>();
   const used = new Set<string>();
-  const add = (into: string, family: F, reason: SuggestReason, word?: string) => {
+  const add = (into: string, family: F, reason: AutoReason, word?: string) => {
     const id = squash(into);
     if (used.has(family.id) || squash(family.name) === id || yours(family)) return;
     used.add(family.id);
@@ -1813,18 +1843,13 @@ export function suggestGroups<F extends FamilyLike>(families: readonly F[], plan
     const step = h.steps?.find((s) => byKey.has(s.key) && letters(s.base) >= 3);
     add(step?.base ?? h.into, family, h.reason, h.word);
   }
-  if (!options.byName)
-    for (const [raw, into] of plan.merges) {
-      const family = byName.get(raw);
-      if (family) add(into, family, "strong");
-    }
   // Width, size and number words: into the longest name left that's a family, or one others
-  // are suggested into ("Times New Roman Condensed" into Times New Roman, not "Times New").
-  // Otherwise names that reduce to the same name make it, with the style words they all share
-  // that are part of its name (`partOfName`).
+  // join ("Times New Roman Condensed" into Times New Roman, not "Times New"). Otherwise names
+  // that reduce to the same name make it, with the style words they all share that are part of
+  // its name (`partOfName`).
   const wider = new Map<string, { list: { family: F; a: WideName }[] }>();
   for (const family of families) {
-    if (used.has(family.id) || kept(family.name)) continue;
+    if (used.has(family.id) || kept(family.name) || yours(family)) continue;
     const a = widen(analyzeName(family.name).base);
     if (!a.kind) continue;
     const own = squash(family.name);
@@ -1852,15 +1877,15 @@ export function suggestGroups<F extends FamilyLike>(families: readonly F[], plan
       // while they're part of the name.
       const up = keptWords(
         w.list.map((x) => x.a),
-        w.list.map((x) => x.family.faces.map((f) => f.primary)),
+        w.list.map((x) => x.family.faces.map((f) => f.named ?? f.primary)),
       );
       into = bestSpelling(w.list.map((x) => [x.a.steps[x.a.steps.length - 1 - up].base, x.family.faces.length]));
     }
     for (const { family, a } of w.list) add(into, family, a.kind!, a.word);
   }
   // A family that others would join, and that would join another family itself, takes them
-  // along: "Neutra Text TF" into Neutra Text, and Neutra Text into Neutra, is one suggestion,
-  // all into Neutra (so "Merge all" leaves no Neutra Text behind). Never round in a circle.
+  // along: "Neutra Text TF" into Neutra Text, and Neutra Text into Neutra, is one group, all
+  // into Neutra (so no Neutra Text is left behind). Never round in a circle.
   const sourceOf = new Map<string, string>();
   for (const [id, s] of out) for (const src of s.sources) sourceOf.set(src.family.id, id);
   const finalOf = (id: string): string => {
@@ -1880,42 +1905,42 @@ export function suggestGroups<F extends FamilyLike>(families: readonly F[], plan
     out.get(to)!.sources.push(...out.get(id)!.sources);
     out.delete(id);
   }
-  const suggestions: Suggestion<F>[] = [];
+  const groups: AutoGroup<F>[] = [];
   for (const [id, s] of out) {
     const existing = byKey.get(id);
     const sources = s.sources.filter((src) => src.family !== existing);
-    if (!sources.length) continue;
+    // Nothing joins a lone family that would only get another name ("Six Caps" isn't "Six").
+    if (!sources.length || (!existing && sources.length < 2)) continue;
     sources.sort((a, b) => compareNames(a.family.name, b.family.name));
     const styles = (existing?.faces.length ?? 0) + sources.reduce((n, src) => n + src.family.faces.length, 0);
-    suggestions.push({ id, into: existing?.name ?? s.into, existing, sources, styles });
+    groups.push({ id, into: existing?.name ?? s.into, existing, sources, styles });
   }
-  return suggestions.sort((a, b) => compareNames(a.into, b.into));
+  return groups.sort((a, b) => compareNames(a.into, b.into));
 }
 
-/** A suggestion's sentence: "Merge 3 families into Abhaya Libre (5 styles)". */
-export function suggestionText(s: Pick<Suggestion, "into" | "sources" | "styles">, count = s.sources.length): string {
-  const what = count === 1 ? `“${s.sources[0]?.family.name ?? ""}”` : `${count.toLocaleString()} families`;
-  return `Merge ${what} into ${s.into} (${s.styles.toLocaleString()} ${s.styles === 1 ? "style" : "styles"})`;
+/** An automatic group in words: "Grouped 2 families into Farnham (3 styles)". */
+export function autoGroupText(g: Pick<AutoGroup, "into" | "sources" | "styles">): string {
+  const n = g.sources.length;
+  const what = n === 1 ? `“${g.sources[0]?.family.name ?? ""}”` : `${n.toLocaleString()} families`;
+  return `Grouped ${what} into ${g.into} (${g.styles.toLocaleString()} ${g.styles === 1 ? "style" : "styles"})`;
 }
 
-/** Why a family is only suggested, in words. */
-export function reasonText(source: Pick<SuggestionSource, "reason" | "word">): string {
+/** Why a family joined another automatically, in words: what to check. */
+export function reasonText(source: Pick<AutoSource, "reason" | "word">): string {
   switch (source.reason) {
     case "ownName":
-      return "The font names its own family";
+      return "The font calls this its own family";
     case "number":
-      return "Numbered style";
+      return source.word ? `Numbered style “${source.word}”` : "Numbered style";
     case "foundry":
-      return "Different foundry";
+      return "From a different foundry";
     case "noSignal":
       return "Only the names match";
     case "alone":
-      return "No other name joins it";
+      return "Its name ends in a style word";
     case "width":
       return source.word ? `Width word “${source.word}”` : "Width word";
     case "optical":
       return source.word ? `Size word “${source.word}”` : "Size word";
-    case "strong":
-      return "Grouped when “Group families by name” is on";
   }
 }

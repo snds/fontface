@@ -2,6 +2,7 @@ import { createContext, useContext, useSyncExternalStore } from "react";
 import { api, type FamilyChange, type NameRef } from "@/api";
 import type { Face } from "@/library";
 import type { FaceChoice, NameRule } from "@/familyGroups";
+import type { GroupsFilter } from "@/nav";
 
 /**
  * Your family choices (src-tauri/src/families.rs), shared by everything that groups the library:
@@ -75,15 +76,11 @@ async function change(label: string, op: () => Promise<FamilyChange>): Promise<U
   }
 }
 
-export const mergeNames = (label: string, names: NameRef[], into: string, faces: string[] = []) =>
-  change(label, () => api.familiesMerge(names, into, faces));
 export const keepSeparate = (label: string, names: NameRef[], faces: string[] = []) =>
   change(label, () => api.familiesKeepSeparate(names, faces));
 export const moveFaces = (label: string, faces: string[], family: string, style: string | null = null) =>
   change(label, () => api.familiesMove(faces, family, style));
 export const resetChoices = (label: string, faces: string[], nameKeys: string[]) => change(label, () => api.familiesReset(faces, nameKeys));
-/** Several changes as one, with one undo ("Merge all suggestions"). */
-export const applyChange = (label: string, edits: FamilyChange) => change(label, () => api.familiesApply(edits));
 
 /**
  * Undoes one change (the newest, unless one is named). What it puts back is saved like any
@@ -112,7 +109,7 @@ export async function undoChange(id?: number): Promise<UndoEntry | null> {
 }
 
 /** Opens the Family groups page, on these faces' families (checked) or on everything. */
-export type OpenFamilyGroups = (faces?: readonly Face[], options?: { filter?: "all" | "suggested" | "changed"; returnTo?: string | null }) => void;
+export type OpenFamilyGroups = (faces?: readonly Face[], options?: { filter?: GroupsFilter; returnTo?: string | null }) => void;
 
 export const FamilyGroupsContext = createContext<OpenFamilyGroups>(() => {});
 

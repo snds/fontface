@@ -1,36 +1,25 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Face, Family, Library } from "@/library";
-import { reasonText, squash, suggestGroups, suggestionText, type GroupingOptions, type Suggestion } from "@/familyGroups";
+import { autoGroupText, reasonText, squash, type AutoGroup, type AutoSource, type GroupingOptions } from "@/familyGroups";
 import type { GroupsFilter, GroupsPageEntry } from "@/nav";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Autocomplete, AutocompleteContent, AutocompleteInput, AutocompleteItem, AutocompleteList } from "@/components/ui/autocomplete";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
 import { BackButton } from "@/components/fontPage/PageHeader";
 import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
-import { applyChange, keepSeparate, mergeNames, moveFaces, resetChoices, useFamilyChoices, type UndoEntry } from "@/families/store";
-import { familiesText, familyRuleKeys, mergeChange, mergeEdits, nameRef, runChange, stylesText, undo, yourEdits } from "@/families/feedback";
+import { keepSeparate, moveFaces, resetChoices, useFamilyChoices } from "@/families/store";
+import { familiesText, familyRuleKeys, nameRef, runChange, stylesText, undo, yourEdits } from "@/families/feedback";
 import type { Locations } from "@/tags/locations";
 
 export const GROUPS_SEARCH_ID = "family-groups-search";
 
-/** Suggestions shown at first; "Show more" adds this many again. */
-const SUGGESTIONS_PAGE = 40;
+/** Automatic groups shown at first; "Show more" adds this many again. */
+const GROUPS_PAGE = 40;
 const FAMILY_ROW = 44;
 const STYLE_ROW = 34;
 
@@ -43,24 +32,26 @@ interface Props {
   locations: Locations;
   onBack: () => void;
   onFilter: (filter: GroupsFilter) => void;
+  /** Turns View options › "Group families by name" on or off. */
+  onGroupByName: (on: boolean) => void;
   announce: (text: string) => void;
 }
 
 /** Changed by you: a rule for its name or a choice for it decided its family. */
 const yours = (face: Face) => face.groupedBy === "rule" || face.groupedBy === "choice";
-/** Kept out of suggestions by your rule on the family's own name (familyEdits.familyRuleKey). */
+/** Kept out of automatic groups by your rule on the family's own name (familyEdits.familyRuleKey). */
 const keptFamily = (family: Family, familyRules: ReadonlySet<string>) => familyRules.has(squash(family.name));
 /** The family names its styles carry (more than one: grouped from several). */
 const namesIn = (family: Family) => new Set(family.faces.map((f) => f.name)).size;
 
 /**
  * Family groups (opened from View options, a font's More or right-click menu, or Settings ›
- * Library): how families are grouped by name, the suggestions, and your changes. Check styles
- * to group them into a family or keep them under their own names; merge or keep apart what's
- * suggested. Every change has Undo. Everything here is Fontface's own record: font files never
- * change.
+ * Library): how families are grouped by name, what was grouped automatically and why, and your
+ * changes. Check styles to group them into a family or keep them under their own names; keep
+ * any automatic group apart. Nothing asks first: every change has Undo. Everything here is
+ * Fontface's own record: font files never change.
  */
-export function FamilyGroupsPage({ page, library, grouping, placeName, locations, onBack, onFilter, announce }: Props) {
+export function FamilyGroupsPage({ page, library, grouping, placeName, locations, onBack, onFilter, onGroupByName, announce }: Props) {
   const titleBar = useTitleBar();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -68,8 +59,6 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
   const last = undoStack[undoStack.length - 1];
   const [query, setQuery] = useState("");
   const [checked, setChecked] = useState<Set<string>>(() => new Set(page.focus));
-  // Worked out when the page opens and when the library changes; never for the list itself.
-  const suggestions = useMemo(() => suggestGroups(library.families, library.plan, grouping), [library, grouping]);
   const familyRules = useMemo(() => familyRuleKeys(library.families, grouping.rules), [library, grouping.rules]);
   const filter = page.filter;
 
@@ -114,7 +103,7 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
     requestAnimationFrame(() => (treeRef.current ?? headingRef.current)?.focus({ preventScroll: true }));
   };
 
-  const count = suggestions.length;
+  const count = library.auto.length;
   return (
     <>
       <header className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
@@ -128,7 +117,7 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
           onChange={onFilter}
           options={[
             { value: "all", label: "All" },
-            { value: "suggested", label: `Suggested (${count.toLocaleString()})` },
+            { value: "automatic", label: grouping.byName ? `Automatic (${count.toLocaleString()})` : "Automatic" },
             { value: "changed", label: "Your changes" },
           ]}
         />
@@ -148,11 +137,11 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
       </header>
       <p className="shrink-0 border-b px-6 py-2 text-xs text-muted-foreground">
         {grouping.byName
-          ? "Fonts whose family name ends in a weight or slope word (“AmintaBold”) join their family on their own, wherever their files are. Width, size and numbered styles are only suggested. Your choices are Fontface's own; font files never change."
-          : "“Group families by name” is off in Settings › Library, so families use the fonts' own names. Your own choices still apply, and what grouping would merge is listed under Suggested."}
+          ? "Fonts whose names differ only by a style word join one family, wherever their files are. That includes width and size words, like “Arial Narrow” in Arial. Your own choices always win. Font files never change."
+          : "Grouping by name is off in View options, so families use the fonts' own names. Your own changes still apply."}
       </p>
-      {filter === "suggested" ? (
-        <SuggestionList suggestions={suggestions} query={q} announce={announce} />
+      {filter === "automatic" ? (
+        <AutoList groups={library.auto} on={grouping.byName} query={q} onGroupByName={onGroupByName} announce={announce} />
       ) : (
         <>
           <FamilyTree
@@ -458,7 +447,7 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
             }
             const face = row.face;
             const from = face.name !== row.family.name ? face.name : null;
-            const how = face.groupedBy === "choice" ? "moved by you" : face.groupedBy === "rule" ? "by your rule" : from ? "grouped by name" : "";
+            const how = face.groupedBy === "choice" ? "moved by you" : face.groupedBy === "rule" ? "by your rule" : face.auto ? "grouped automatically" : from ? "grouped by name" : "";
             const kept = yours(face) && face.kept;
             return (
               <div
@@ -593,93 +582,82 @@ function SelectionBar({
   );
 }
 
-// ---------------------------------------------------------------------------- suggestions
+// ----------------------------------------------------------------------- automatic groups
 
-function SuggestionList({ suggestions, query, announce }: { suggestions: Suggestion<Family>[]; query: string; announce: (text: string) => void }) {
-  const [limit, setLimit] = useState(SUGGESTIONS_PAGE);
-  const [confirm, setConfirm] = useState(false);
+interface AutoListProps {
+  groups: AutoGroup<Family>[];
+  /** Grouping by name is on (off: nothing is grouped automatically). */
+  on: boolean;
+  query: string;
+  onGroupByName: (on: boolean) => void;
+  announce: (text: string) => void;
+}
+
+/** What was grouped automatically, and why. Keep separate puts a family back on its own. */
+function AutoList({ groups, on, query, onGroupByName, announce }: AutoListProps) {
+  const [limit, setLimit] = useState(GROUPS_PAGE);
   const headRef = useRef<HTMLParagraphElement>(null);
   const shown = useMemo(
-    () => (query ? suggestions.filter((s) => s.into.toLowerCase().includes(query) || s.sources.some((src) => src.family.name.toLowerCase().includes(query))) : suggestions),
-    [suggestions, query],
+    () => (query ? groups.filter((g) => g.into.toLowerCase().includes(query) || g.sources.some((src) => src.family.name.toLowerCase().includes(query))) : groups),
+    [groups, query],
   );
-  const sources = suggestions.reduce((n, s) => n + s.sources.length, 0);
+  const sources = groups.reduce((n, g) => n + g.sources.length, 0);
   const after = () => requestAnimationFrame(() => headRef.current?.focus({ preventScroll: true }));
-  const mergeAll = async () => {
-    const label = `Merged ${familiesText(sources)} in ${suggestions.length.toLocaleString()} suggestions`;
-    const change = mergeChange(suggestions.map((s) => ({ families: s.sources.map((src) => src.family), into: s.into })));
-    if (await runChange(() => applyChange(label, change), "Couldn't merge them")) {
-      announce(label);
-      after();
-    }
-  };
-  if (!suggestions.length) {
+  if (!on) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground">
+        <p>Grouping by name is off, so nothing is grouped automatically.</p>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            onGroupByName(true);
+            after();
+          }}
+        >
+          Turn on grouping by name
+        </Button>
+      </div>
+    );
+  }
+  if (!groups.length) {
     return (
       <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
-        No suggestions. Families whose names differ by a width, size or numbered style word, or that only nearly match, show up here.
+        Nothing was grouped automatically. Families whose names differ only by a width, size or numbered style word show up here.
       </div>
     );
   }
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-3 px-6 py-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <p ref={headRef} tabIndex={-1} className="flex-1 text-sm text-muted-foreground outline-none">
-            {suggestions.length.toLocaleString()} {suggestions.length === 1 ? "suggestion" : "suggestions"}: {familiesText(sources)} that could join another family. Nothing changes until you choose.
-          </p>
-          <Button variant="outline" size="sm" onClick={() => setConfirm(true)}>
-            Merge all suggestions ({suggestions.length.toLocaleString()})
-          </Button>
-        </div>
-        {shown.slice(0, limit).map((s) => (
-          <SuggestionCard key={s.id} suggestion={s} announce={announce} onDone={after} />
+        <p ref={headRef} tabIndex={-1} className="text-sm text-muted-foreground outline-none">
+          {familiesText(sources)} {sources === 1 ? "was" : "were"} grouped into {groups.length.toLocaleString()} {groups.length === 1 ? "family" : "families"}, because
+          their names nearly match. Each line says why. If one doesn't belong, choose Keep separate.
+        </p>
+        {shown.slice(0, limit).map((g) => (
+          <AutoCard key={g.id} group={g} announce={announce} onDone={after} />
         ))}
         {shown.length > limit && (
-          <Button variant="ghost" className="self-start" onClick={() => setLimit((n) => n + SUGGESTIONS_PAGE)}>
+          <Button variant="ghost" className="self-start" onClick={() => setLimit((n) => n + GROUPS_PAGE)}>
             Show more ({(shown.length - limit).toLocaleString()})
           </Button>
         )}
-        {!shown.length && <p className="text-sm text-muted-foreground">No suggestions match “{query}”.</p>}
+        {!shown.length && <p className="text-sm text-muted-foreground">No automatic groups match “{query}”.</p>}
       </div>
-      <AlertDialog open={confirm} onOpenChange={setConfirm}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Merge all {suggestions.length.toLocaleString()} suggestions?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {familiesText(sources)} join the families suggested for them. This is kept as your choice by Fontface and never changes a font
-              file. You can undo it.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setConfirm(false);
-                void mergeAll();
-              }}
-            >
-              Merge all
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
 
-/** One suggestion: the families that could join `into`, each with why it isn't automatic. With
- *  several, each has a check box, so you can merge or keep apart only some of them. */
-function SuggestionCard({ suggestion: s, announce, onDone }: { suggestion: Suggestion<Family>; announce: (text: string) => void; onDone: () => void }) {
+/** One automatic group: the families that joined `into`, each with its reason and Keep separate. */
+function AutoCard({ group: g, announce, onDone }: { group: AutoGroup<Family>; announce: (text: string) => void; onDone: () => void }) {
   const id = useId();
-  const [left, setLeft] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const chosen = s.sources.filter((src) => !left.has(src.family.id));
-  const styles = (s.existing?.faces.length ?? 0) + chosen.reduce((n, src) => n + src.family.faces.length, 0);
-  const several = s.sources.length > 1;
-  const run = async (label: string, op: () => Promise<UndoEntry>, failure: string) => {
+  const keep = async (list: AutoSource<Family>[]) => {
+    if (busy) return;
+    const label = list.length === 1 ? `Kept “${list[0].family.name}” separate from ${g.into}` : `Kept ${familiesText(list.length)} separate from ${g.into}`;
     setBusy(true);
     try {
-      if (await runChange(op, failure)) {
+      if (await runChange(() => keepSeparate(label, list.map((src) => nameRef(src.family.name))), "Couldn't keep them separate")) {
         announce(label);
         onDone();
       }
@@ -687,63 +665,39 @@ function SuggestionCard({ suggestion: s, announce, onDone }: { suggestion: Sugge
       setBusy(false);
     }
   };
-  const merge = () => {
-    const { names, faces } = mergeEdits(chosen.map((src) => src.family));
-    const label = chosen.length === 1 ? `Merged “${chosen[0].family.name}” into ${s.into}` : `Merged ${familiesText(chosen.length)} into ${s.into}`;
-    void run(label, () => mergeNames(label, names, s.into, faces), "Couldn't merge them");
-  };
-  const keep = () => {
-    const label = chosen.length === 1 ? `Kept “${chosen[0].family.name}” separate from ${s.into}` : `Kept ${familiesText(chosen.length)} separate from ${s.into}`;
-    void run(label, () => keepSeparate(label, chosen.map((src) => nameRef(src.family.name))), "Couldn't keep them separate");
-  };
   return (
     <section aria-labelledby={`${id}-title`} className="flex flex-col gap-3 rounded-lg border p-4">
       <div className="flex flex-col gap-0.5">
         <h2 id={`${id}-title`} className="text-sm font-semibold">
-          {suggestionText({ into: s.into, sources: chosen, styles }, chosen.length)}
+          {autoGroupText(g)}
         </h2>
-        {!s.existing && <p className="text-xs text-muted-foreground">There's no {s.into} family yet: merging makes one.</p>}
+        {!g.existing && <p className="text-xs text-muted-foreground">No font is named {g.into} alone, so this family is new.</p>}
       </div>
       <ul className="flex flex-col gap-1.5">
-        {s.sources.map((src) => {
-          const words = (
-            <>
-              <span className="font-medium">{src.family.name}</span>
-              <span className="text-muted-foreground">
-                {stylesText(src.family.faces.length)} · {reasonText(src)}
-              </span>
-            </>
-          );
-          return (
-            <li key={src.family.id} className="text-sm">
-              {several ? (
-                <label className="flex items-center gap-2">
-                  <Checkbox
-                    checked={!left.has(src.family.id)}
-                    onCheckedChange={(on) => {
-                      const next = new Set(left);
-                      if (on) next.delete(src.family.id);
-                      else next.add(src.family.id);
-                      setLeft(next);
-                    }}
-                  />
-                  {words}
-                </label>
-              ) : (
-                <span className="flex items-center gap-2">{words}</span>
-              )}
-            </li>
-          );
-        })}
+        {g.sources.map((src) => (
+          <li key={src.family.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+            <span className="font-medium">{src.family.name}</span>
+            <span className="text-muted-foreground">
+              {stylesText(src.family.faces.length)} · {reasonText(src)}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto h-7"
+              disabled={busy}
+              onClick={() => void keep([src])}
+              aria-label={`Keep “${src.family.name}” separate from ${g.into}`}
+            >
+              Keep separate
+            </Button>
+          </li>
+        ))}
       </ul>
-      <div className="flex gap-2">
-        <Button size="sm" disabled={!chosen.length || busy} onClick={merge}>
-          Merge
+      {g.sources.length > 1 && (
+        <Button size="sm" variant="outline" className="self-start" disabled={busy} onClick={() => void keep(g.sources)}>
+          Keep all {g.sources.length.toLocaleString()} separate
         </Button>
-        <Button size="sm" variant="outline" disabled={!chosen.length || busy} onClick={keep}>
-          Keep separate
-        </Button>
-      </div>
+      )}
     </section>
   );
 }

@@ -251,9 +251,10 @@ pub struct AppSettings {
     pub layout: Layout,
     /// Off: every style is listed on its own, as "Family Style".
     pub group_styles: bool,
-    /// Settings › Library › "Group families by name": fonts whose family name carries a style
-    /// ("AmintaBold") join their family. Off, families use the fonts' own names; the user's own
-    /// choices still apply (src/familyGroups.ts).
+    /// View options › "Group families by name": fonts whose family name carries a style
+    /// ("AmintaBold", "Arial Narrow") join their family, automatic groups included. Off,
+    /// families use the fonts' own names; the user's own choices still apply
+    /// (src/familyGroups.ts).
     pub group_by_name: bool,
     pub sort: SortOrder,
     /// Empty: the UI's default columns.

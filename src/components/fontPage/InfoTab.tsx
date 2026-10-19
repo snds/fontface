@@ -16,7 +16,7 @@ import { colorVar } from "@/tags/api";
 import type { Locations } from "@/tags/locations";
 import { keepSeparate, resetChoices, useFamilyChoices, useOpenFamilyGroups } from "@/families/store";
 import { nameRef, runChange } from "@/families/feedback";
-import { squash } from "@/familyGroups";
+import { reasonText, squash } from "@/familyGroups";
 import { factsOf, formatBytes, SectionTitle, type FactsState } from "./parts";
 
 export const REVEAL_LABEL = IS_MAC ? "Show in Finder" : "Show in Explorer";
@@ -224,9 +224,10 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
 }
 
 /**
- * How this style got its family, when it isn't simply its own name: grouped by name (with Keep
- * separate), or by your rule or choice (with a way back). Also your rule for the family's own
- * name, when it keeps the family out of suggestions. Each change has Undo.
+ * How this style got its family, when it isn't simply its own name: grouped by name or by an
+ * automatic group (with Keep separate), or by your rule or choice (with a way back). Also your
+ * rule for the family's own name, when it keeps the family out of automatic groups. Each change
+ * has Undo.
  */
 function FamilyGroupNote({ face }: { face: Face }) {
   const openFamilyGroups = useOpenFamilyGroups();
@@ -239,7 +240,16 @@ function FamilyGroupNote({ face }: { face: Face }) {
   if (face.groupedBy === "own" && !familyKept) return null;
   let text: string | null = null;
   let action: { label: string; run: () => void } | null = null;
-  if (face.groupedBy === "name") {
+  if (face.groupedBy === "name" && face.auto) {
+    // A whole family joined this one: Keep separate is for that family.
+    const { from } = face.auto;
+    const why = reasonText(face.auto);
+    text = `Grouped into ${face.family} automatically, from “${from}” (${why.charAt(0).toLowerCase()}${why.slice(1)}).`;
+    action = {
+      label: `Keep “${from}” separate`,
+      run: () => void runChange(() => keepSeparate(`Kept “${from}” separate from ${face.family}`, [nameRef(from)]), "Couldn't keep it separate"),
+    };
+  } else if (face.groupedBy === "name") {
     text = `Grouped by name into ${face.family}, from “${raw}”.`;
     action = {
       label: `Keep “${raw}” separate`,
@@ -284,14 +294,14 @@ function FamilyGroupNote({ face }: { face: Face }) {
       {familyKept && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Icon name="account_tree" size={16} className="text-muted-foreground" />
-          <span className="min-w-0 flex-1">You chose to keep {face.family} separate: it isn't suggested for another family.</span>
+          <span className="min-w-0 flex-1">You chose to keep {face.family} separate: it isn't grouped into another family automatically.</span>
           <Button
             variant="link"
             size="sm"
             className="h-auto p-0"
-            onClick={() => void runChange(() => resetChoices(`Allowed suggestions for ${face.family}`, [], [familyKey]), "Couldn't change it")}
+            onClick={() => void runChange(() => resetChoices(`Allowed grouping ${face.family} automatically`, [], [familyKey]), "Couldn't change it")}
           >
-            Allow suggestions
+            Allow grouping
           </Button>
           {!text && (
             <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>

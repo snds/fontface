@@ -46,8 +46,7 @@ export interface SectionProps {
   /** Watching for purchases changed here; the Purchases page (mounted underneath) reads it again. */
   onPurchasesChanged: () => void;
   onOpenPurchases: () => void;
-  /** Families the Family groups page suggests merging (only counted while settings are open). */
-  familySuggestions: number;
+  /** Opens the Family groups page. */
   onReviewFamilyGroups: () => void;
   /** Put Back: removed files are listed again (App scans their folders). */
   onPutBack: (paths: string[]) => Promise<void>;
@@ -454,26 +453,14 @@ export function useSections(props: SectionProps): SectionDef[] | null {
         title: "Families",
         rows: [
           {
-            id: "groupByName",
-            label: "Group families by name",
-            description:
-              "Fonts whose family name carries a style, like “AmintaBold” or “Aaux ProBlack Italic”, are listed as styles of their family, wherever their files are. Width, size and numbered styles are only suggested. Off, families use the fonts' own names; changes you made yourself still apply. Font files are never changed.",
-            keywords: "family families group merge style names weight bold italic combine split typeface",
-            labelsControl: true,
-            control: (ids) => flag("groupByName", ids),
-          },
-          {
             id: "familyGroups",
             label: "Family groups",
-            description:
-              props.familySuggestions > 0
-                ? `${n(props.familySuggestions)} ${props.familySuggestions === 1 ? "suggestion" : "suggestions"} to review: families that could join another one.`
-                : "Review how styles are grouped into families, and change it.",
-            keywords: "family groups suggestions merge keep separate move styles",
+            description: "See how styles are grouped into families, and change it. To turn grouping by name on or off, use View options in the library.",
+            keywords: "family families group groups by name merge keep separate move styles automatic weight bold italic combine split typeface",
             control: (ids) => (
               <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={props.onReviewFamilyGroups}>
                 <Icon name="account_tree" size={16} />
-                {props.familySuggestions > 0 ? `Review ${n(props.familySuggestions)} ${props.familySuggestions === 1 ? "suggestion" : "suggestions"}` : "Family groups…"}
+                Family groups…
               </Button>
             ),
           },

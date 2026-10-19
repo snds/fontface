@@ -14,13 +14,17 @@ import {
   weightSpan,
 } from "./familyFacts.ts";
 import {
+  autoGroups,
   compareNames,
   familyTraits,
+  labelFor,
   NameIndex,
   namedCopy,
   namesAgree,
   planByName,
   placeFace,
+  type AutoGroup,
+  type AutoJoin,
   type GroupedBy,
   type GroupingOptions,
   type GroupPlan,
@@ -50,7 +54,8 @@ export interface Face {
   installed: boolean;
   active: boolean;
   /** The family it's listed under: its own name (`primary.family`), or the one grouping by
-   *  name, your rule for its name or your choice for it gave it (familyGroups.ts). */
+   *  name, an automatic group, your rule for its name or your choice for it gave it
+   *  (familyGroups.ts). */
   family: string;
   /** Its style there: its own (`primary.subfamily`), or worked out from its name when it was
    *  grouped ("Black Italic" for AmintaBlackItalic in Aminta). */
@@ -62,6 +67,9 @@ export interface Face {
   /** The name key of your rule that placed it (`groupedBy` "rule"): its own family name's, or
    *  one of its copies'. */
   ruleKey?: string;
+  /** Set when an automatic group brought its family into this one (`groupedBy` "name"): the
+   *  family it was in, and why (familyGroups.autoGroups). */
+  auto?: AutoJoin;
   /** Weight, width and slope for sorting, from its style's words where its own numbers disagree. */
   traits: Traits;
 }
@@ -294,6 +302,7 @@ function groupFaces(fonts: FontSummary[], index: NameIndex): Face[] {
       groupedBy: "own",
       kept: false,
       ruleKey: undefined,
+      auto: undefined,
       traits: NO_TRAITS,
     };
     faces.push(face);
@@ -344,11 +353,13 @@ function makeFamily(id: string, name: string, faces: Face[]): Family {
 /** Grouping by name on, and none of your choices: what tests and one-off groupings use. */
 export const BY_NAME: GroupingOptions = { byName: true };
 
-/** The library grouped into families, and what grouping by name made of its names (the Family
- *  groups page's suggestions start from it). */
+/** The library grouped into families, what grouping by name made of its names, and the
+ *  automatic groups it joined (the Family groups page lists them). */
 export interface Library {
   families: Family[];
   plan: GroupPlan;
+  /** Each family as grouping by name left it, under the family it joined. */
+  auto: AutoGroup<Family>[];
 }
 
 /**
@@ -357,8 +368,10 @@ export interface Library {
  * Each face goes under a family by familyGroups.ts's rules: your choice for it, your rule for its
  * name, grouping by name (while that's on), else its own family name (when its copies carry
  * different names of one family, the better one, or the one more of the library's fonts carry
- * when that keeps a family whole: familyGroups.namedCopy and planByName). Folders play no
- * part. Families are sorted A to Z, their styles light to heavy (sortFaces).
+ * when that keeps a family whole: familyGroups.namedCopy and planByName). Then, while grouping
+ * by name is on, whole families join others automatically (familyGroups.autoGroups: width and
+ * size words, and names grouping by name held back). Folders play no part. Families are sorted
+ * A to Z, their styles light to heavy (sortFaces).
  */
 export function groupLibrary(fonts: FontSummary[], grouping: GroupingOptions = BY_NAME): Library {
   const index = new NameIndex(grouping.choices);
@@ -380,15 +393,61 @@ export function groupLibrary(fonts: FontSummary[], grouping: GroupingOptions = B
     lastList.push(face);
   }
   const families: Family[] = [];
-  for (const [name, list] of byFamily) {
-    // A family whose own weight numbers tell its styles apart keeps them (BB Strata Pro's 250
-    // Semi Regular); one whose numbers are shown wrong (all 400) goes by its styles' names.
-    const traits = familyTraits(list);
-    for (let i = 0; i < list.length; i++) list[i].traits = traits[i];
-    families.push(makeFamily(familyId(name), name, list.length > 1 ? sortFaces(list) : list));
+  for (const [name, list] of byFamily) families.push(styledFamily(name, list));
+  families.sort(nameOrder);
+  // Sorted first: the same library always makes the same automatic groups.
+  const auto = autoGroups(families, plan, grouping);
+  return { families: auto.length ? joinAuto(families, auto) : families, plan, auto };
+}
+
+const nameOrder = (a: Family, b: Family) => compareNames(a.name, b.name);
+
+/** A family of these faces, their traits worked out together and their styles sorted. */
+function styledFamily(name: string, faces: Face[]): Family {
+  // A family whose own weight numbers tell its styles apart keeps them (BB Strata Pro's 250
+  // Semi Regular); one whose numbers are shown wrong (all 400) goes by its styles' names.
+  const traits = familyTraits(faces);
+  for (let i = 0; i < faces.length; i++) faces[i].traits = traits[i];
+  return makeFamily(familyId(name), name, faces.length > 1 ? sortFaces(faces) : faces);
+}
+
+/**
+ * The families with the automatic groups joined (`families` A to Z, and still so after). A
+ * joining face is listed in the group's family, with its style there and where it came from
+ * (`Face.auto`). The groups keep the families as they were, for the Family groups page.
+ */
+function joinAuto(families: readonly Family[], groups: readonly AutoGroup<Family>[]): Family[] {
+  const gone = new Set<Family>();
+  const made: Family[] = [];
+  for (const g of groups) {
+    const parts = g.existing ? [g.existing, ...g.sources.map((s) => s.family)] : g.sources.map((s) => s.family);
+    // A family is in one group at most (autoGroups); never placed twice anyway.
+    if (parts.some((f) => gone.has(f))) continue;
+    const faces: Face[] = g.existing ? [...g.existing.faces] : [];
+    for (const { family, reason, word } of g.sources) {
+      const auto: AutoJoin = { from: family.name, reason, word };
+      for (const face of family.faces) {
+        face.family = g.into;
+        face.style = labelFor(face, g.into);
+        face.groupedBy = "name";
+        face.auto = auto;
+        faces.push(face);
+      }
+    }
+    for (const f of parts) gone.add(f);
+    made.push(styledFamily(g.into, faces));
   }
-  families.sort((a, b) => compareNames(a.name, b.name));
-  return { families, plan };
+  // The families left are still A to Z: the new ones go in among them.
+  made.sort(nameOrder);
+  const out: Family[] = [];
+  let j = 0;
+  for (const f of families) {
+    if (gone.has(f)) continue;
+    while (j < made.length && nameOrder(made[j], f) < 0) out.push(made[j++]);
+    out.push(f);
+  }
+  while (j < made.length) out.push(made[j++]);
+  return out;
 }
 
 let warmed = false;

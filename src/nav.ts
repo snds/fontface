@@ -44,8 +44,9 @@ export interface CatalogPageEntry {
 /** Where focus goes back on Back: a list row (by row key) or an element (by id). Null: the list. */
 export type PageReturn = { row: string } | { element: string } | null;
 
-/** What the Family groups page lists: every family, the suggestions, or what you changed. */
-export type GroupsFilter = "all" | "suggested" | "changed";
+/** What the Family groups page lists: every family, what was grouped automatically, or what
+ *  you changed. */
+export type GroupsFilter = "all" | "automatic" | "changed";
 
 /** The Family groups page (familyGroups.ts): from View options, a font's menus or Settings. */
 export interface GroupsPageEntry {

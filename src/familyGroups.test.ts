@@ -15,8 +15,8 @@ import {
   sameFoundry,
   squash,
   styleLabel,
-  suggestGroups,
-  suggestionText,
+  autoGroups,
+  autoGroupText,
   traitsOf,
   widen,
   type FaceChoice,
@@ -64,10 +64,8 @@ const family = (families: Family[], name: string) => {
   return f;
 };
 const styles = (f: Family) => f.faces.map((x) => x.style);
-const suggestionsOf = (fonts: FontSummary[], options: GroupingOptions = ON) => {
-  const { families, plan } = groupLibrary(fonts, options);
-  return suggestGroups(families, plan, options);
-};
+/** The automatic groups grouping made: each family as grouping by name left it, and why. */
+const autoOf = (fonts: FontSummary[], options: GroupingOptions = ON) => groupLibrary(fonts, options).auto;
 
 // ------------------------------------------------------------------------- 5.5 examples
 
@@ -146,7 +144,7 @@ test("Big Caslon / BigCaslon and Hoefler Text / HoeflerText differ only in spell
   assert.equal(family(families, "Hoefler Text").faces.length, 3);
 });
 
-test("Arial Narrow, MetaCond and FarnhamDisplay are only suggested (width and size words)", () => {
+test("Arial Narrow, MetaCond and FarnhamDisplay join their families automatically (width and size words)", () => {
   const fonts = [
     font("Arial", "Regular", { postscriptName: "ArialMT", manufacturer: "Monotype" }),
     font("Arial Narrow", "Regular", { postscriptName: "ArialNarrow", manufacturer: "Monotype" }),
@@ -157,10 +155,17 @@ test("Arial Narrow, MetaCond and FarnhamDisplay are only suggested (width and si
     font("FarnhamDisplay-Bold", "Normal", { postscriptName: "FarnhamDisplay-Bold" }),
     font("FarnhamText", "Regular", { postscriptName: "FarnhamText-Regular" }),
   ];
-  const families = groupFamilies(fonts, ON);
-  assert.deepEqual(names(families), ["Arial", "Arial Narrow", "FarnhamDisplay", "FarnhamText", "Meta", "MetaCond"], "FarnhamDisplay-Bold still joins FarnhamDisplay");
-  const suggestions = suggestionsOf(fonts);
-  const into = (name: string) => suggestions.find((s) => s.into === name);
+  const library = groupLibrary(fonts, ON);
+  assert.equal(library.plan.merges.get("FarnhamDisplay-Bold"), "FarnhamDisplay", "grouping by name joins FarnhamDisplay-Bold first");
+  assert.equal(library.plan.merges.size, 1, "a width or size word isn't grouping by name");
+  assert.deepEqual(shape(library.families), ["Arial: Narrow, Narrow Bold, Regular", "Farnham: Display, Text, Display Bold", "Meta: Condensed, Normal"]);
+  const narrowBold = family(library.families, "Arial").faces.find((f) => f.key === "ps:ArialNarrow-Bold|static|r")!;
+  assert.deepEqual([narrowBold.groupedBy, narrowBold.name, narrowBold.auto], ["name", "Arial Narrow", { from: "Arial Narrow", reason: "width", word: "Narrow" }]);
+  // Off, each keeps its own name, and nothing is grouped automatically.
+  assert.deepEqual(names(groupFamilies(fonts, OFF)), ["Arial", "Arial Narrow", "FarnhamDisplay", "FarnhamDisplay-Bold", "FarnhamText", "Meta", "MetaCond"]);
+  assert.deepEqual(autoOf(fonts, OFF), []);
+  // The Family groups page lists each group, with why.
+  const into = (name: string) => library.auto.find((s) => s.into === name);
   assert.deepEqual(
     into("Arial")?.sources.map((s) => [s.family.name, s.reason, s.word]),
     [["Arial Narrow", "width", "Narrow"]],
@@ -172,22 +177,24 @@ test("Arial Narrow, MetaCond and FarnhamDisplay are only suggested (width and si
     ["FarnhamText", "optical", "Text"],
   ]);
   assert.equal(into("Farnham")?.existing, undefined);
-  assert.equal(suggestionText(into("Farnham")!), "Merge 2 families into Farnham (3 styles)");
-  assert.equal(suggestionText(into("Arial")!), "Merge “Arial Narrow” into Arial (3 styles)");
+  assert.equal(autoGroupText(into("Farnham")!), "Grouped 2 families into Farnham (3 styles)");
+  assert.equal(autoGroupText(into("Arial")!), "Grouped “Arial Narrow” into Arial (3 styles)");
   assert.equal(reasonText(into("Arial")!.sources[0]), "Width word “Narrow”");
+  assert.deepEqual(autoGroups(library.families, library.plan, ON), [], "grouping again finds nothing more");
 });
 
-test("Univers 45 Light is a numbered style: only suggested", () => {
+test("Univers 45 Light is a numbered style: grouped automatically, the number as the reason", () => {
   const fonts = [
     font("Univers 45 Light", "Regular", { postscriptName: "Univers-Light", weight: 300 }),
     font("Univers 55 Roman", "Regular", { postscriptName: "Univers-Roman" }),
     font("Univers 65 Bold", "Regular", { postscriptName: "Univers-Bold", weight: 700 }),
   ];
-  const families = groupFamilies(fonts, ON);
-  assert.equal(families.length, 3, "nothing merges automatically");
-  const suggestions = suggestionsOf(fonts);
+  const library = groupLibrary(fonts, ON);
+  assert.equal(library.plan.merges.size, 0, "a numbered style isn't grouping by name");
+  assert.deepEqual(shape(library.families), ["Univers: 45 Light, 55 Roman, 65 Bold"], "the family without the number");
+  const suggestions = library.auto;
   assert.equal(suggestions.length, 1);
-  assert.equal(suggestions[0].into, "Univers", "suggested for the family without the number");
+  assert.equal(suggestions[0].into, "Univers");
   assert.deepEqual(
     suggestions[0].sources.map((src) => [src.family.name, src.reason, src.word]),
     [
@@ -196,40 +203,44 @@ test("Univers 45 Light is a numbered style: only suggested", () => {
       ["Univers 65 Bold", "number", "65"],
     ],
   );
-  assert.equal(reasonText(suggestions[0].sources[0]), "Numbered style");
+  assert.equal(reasonText(suggestions[0].sources[0]), "Numbered style “45”");
   // Its Oblique is a slope word on Univers 45 Light's own name: the number is part of that
-  // family's name (as in Bodoni 72), so it joins it, and the family is still only suggested.
+  // family's name (as in Bodoni 72), so grouping by name joins it there, and the whole family
+  // then joins Univers.
   const oblique = [...fonts, font("Univers 45 Light Oblique", "Regular", { postscriptName: "Univers-LightOblique", weight: 300 })];
-  const withOblique = groupFamilies(oblique, ON);
-  assert.deepEqual(styles(family(withOblique, "Univers 45 Light")), ["Regular", "Oblique"]);
-  assert.deepEqual(suggestionsOf(oblique)[0].sources.map((src) => [src.family.name, src.word]), [
+  assert.equal(groupLibrary(oblique, ON).plan.merges.get("Univers 45 Light Oblique"), "Univers 45 Light");
+  assert.deepEqual(shape(groupFamilies(oblique, ON)), ["Univers: 45 Light, 55 Roman, 65 Bold, 45 Light Oblique"]);
+  assert.deepEqual(autoOf(oblique)[0].sources.map((src) => [src.family.name, src.word]), [
     ["Univers 45 Light", "45"],
     ["Univers 55 Roman", "55"],
     ["Univers 65 Bold", "65"],
   ]);
 });
 
-test("Barlow Condensed and Avenir Next Condensed name their own families (G1): they stay", () => {
+test("Barlow Condensed and Avenir Next Condensed join their families automatically, though they name their own (G1)", () => {
   const fonts = [
     font("Barlow", "Regular", { postscriptName: "Barlow-Regular", hasTypoFamily: false }),
     font("Barlow Condensed", "Medium", { postscriptName: "BarlowCondensed-Medium", hasTypoFamily: true }),
     font("Avenir Next", "Regular", { postscriptName: "AvenirNext-Regular", hasTypoFamily: true }),
     font("Avenir Next Condensed", "Bold", { postscriptName: "AvenirNextCondensed-Bold", hasTypoFamily: true, weight: 700 }),
   ];
-  assert.deepEqual(names(groupFamilies(fonts, ON)), ["Avenir Next", "Avenir Next Condensed", "Barlow", "Barlow Condensed"]);
+  assert.deepEqual(shape(groupFamilies(fonts, ON)), ["Avenir Next: Condensed Bold, Regular", "Barlow: Condensed Medium, Regular"]);
+  assert.deepEqual(names(groupFamilies(fonts, OFF)), ["Avenir Next", "Avenir Next Condensed", "Barlow", "Barlow Condensed"]);
 });
 
-test("G1 holds back even a weight word when the font names its own family, as a suggestion", () => {
+test("G1 holds back even a weight word when the font names its own family: it joins automatically, and says why", () => {
   const fonts = [
     font("Gotham", "Regular", { postscriptName: "Gotham-Regular" }),
     font("Gotham Black", "Regular", { postscriptName: "Gotham-Black", weight: 900, hasTypoFamily: true }),
   ];
-  assert.deepEqual(names(groupFamilies(fonts, ON)), ["Gotham", "Gotham Black"]);
-  const [s] = suggestionsOf(fonts);
+  const library = groupLibrary(fonts, ON);
+  assert.deepEqual([...library.plan.held].map(([raw, h]) => [raw, h.reason]), [["Gotham Black", "ownName"]]);
+  assert.deepEqual(shape(library.families), ["Gotham: Regular, Black"]);
+  const [s] = library.auto;
   assert.deepEqual([s.into, s.sources[0].family.name, s.sources[0].reason], ["Gotham", "Gotham Black", "ownName"]);
-  // Not read yet (an online-only file): it isn't held back.
-  const unread = fonts.map((f) => ({ ...f, hasTypoFamily: undefined }));
-  assert.deepEqual(names(groupFamilies(unread, ON)), ["Gotham"]);
+  // Not read yet (an online-only file): it isn't held back, so grouping by name joins it.
+  const unread = groupLibrary(fonts.map((f) => ({ ...f, hasTypoFamily: undefined })), ON);
+  assert.deepEqual([names(unread.families), unread.auto], [["Gotham"], []]);
 });
 
 test("Noto Sans Arabic, Roboto Mono and Gill Sans Nova aren't style words: separate, not suggested", () => {
@@ -242,13 +253,13 @@ test("Noto Sans Arabic, Roboto Mono and Gill Sans Nova aren't style words: separ
     font("Gill Sans Nova"),
   ];
   assert.equal(groupFamilies(fonts, ON).length, 6);
-  assert.deepEqual(suggestionsOf(fonts), []);
+  assert.deepEqual(autoOf(fonts), []);
 });
 
 test("Book Antiqua and Moonlight stay: only words at the end, and only where a word starts", () => {
   const fonts = [font("Book"), font("Book Antiqua"), font("Moon"), font("Moonlight", "Regular", { weight: 300 })];
   assert.deepEqual(names(groupFamilies(fonts, ON)), ["Book", "Book Antiqua", "Moon", "Moonlight"]);
-  assert.deepEqual(suggestionsOf(fonts), []);
+  assert.deepEqual(autoOf(fonts), []);
 });
 
 test("Flyerfonts-*: a PostScript prefix alone never merges", () => {
@@ -258,26 +269,28 @@ test("Flyerfonts-*: a PostScript prefix alone never merges", () => {
     font("Flyerfonts", "Regular", { postscriptName: "Flyerfonts-Regular" }),
   ];
   assert.equal(groupFamilies(fonts, ON).length, 3);
-  assert.deepEqual(suggestionsOf(fonts), []);
+  assert.deepEqual(autoOf(fonts), []);
 });
 
 test("Agu Display stays separate: a size word, and no Agu family", () => {
   const fonts = [font("Agu Display"), font("ADLaM Display")];
   assert.deepEqual(names(groupFamilies(fonts, ON)), ["ADLaM Display", "Agu Display"]);
-  assert.deepEqual(suggestionsOf(fonts), []);
+  assert.deepEqual(autoOf(fonts), []);
 });
 
 // --------------------------------------------------------------------------- 5.3 guards
 
-test("G2: a width or size word never merges on its own, even with every signal", () => {
+test("G2: a width or size word is never grouping by name, even with every signal; the whole family joins automatically", () => {
   const fonts = [
     font("Kappa", "Regular", { postscriptName: "Kappa-Regular", manufacturer: "Kappa Type" }),
     font("Kappa Condensed", "Regular", { postscriptName: "Kappa-Condensed", manufacturer: "Kappa Type" }),
     font("Kappa Text", "Regular", { postscriptName: "Kappa-Text", manufacturer: "Kappa Type" }),
   ];
-  assert.equal(groupFamilies(fonts, ON).length, 3);
+  const library = groupLibrary(fonts, ON);
+  assert.equal(library.plan.merges.size, 0);
+  assert.deepEqual(shape(library.families), ["Kappa: Condensed, Regular, Text"]);
   assert.deepEqual(
-    suggestionsOf(fonts)[0].sources.map((s) => s.reason),
+    library.auto[0].sources.map((s) => s.reason),
     ["width", "optical"],
   );
 });
@@ -294,16 +307,17 @@ test("G2: a weight word after a width word joins the width's own family", () => 
 test("G3: fewer than 3 letters left is no family", () => {
   const fonts = [font("Ox", "Regular", { postscriptName: "Ox-Regular" }), font("Ox Bold", "Regular", { postscriptName: "Ox-Bold", weight: 700 }), font("104"), font("104 Bold")];
   assert.equal(groupFamilies(fonts, ON).length, 4);
-  assert.deepEqual(suggestionsOf(fonts), []);
+  assert.deepEqual(autoOf(fonts), []);
 });
 
-test("G4: different foundries hold a merge back, as a suggestion; the same foundry counts as a signal", () => {
+test("G4: different foundries hold grouping by name back (it joins automatically); the same foundry counts as a signal", () => {
   const fonts = [
     font("Lumen", "Regular", { postscriptName: "Lumen-Regular", manufacturer: "North Foundry" }),
     font("Lumen Bold", "Regular", { postscriptName: "Lumen-Bold", manufacturer: "South Type Co." }),
   ];
-  assert.equal(groupFamilies(fonts, ON).length, 2);
-  assert.equal(suggestionsOf(fonts)[0].sources[0].reason, "foundry");
+  assert.equal(groupLibrary(fonts, ON).plan.held.get("Lumen Bold")?.reason, "foundry");
+  assert.deepEqual(names(groupFamilies(fonts, ON)), ["Lumen"]);
+  assert.equal(autoOf(fonts)[0].sources[0].reason, "foundry");
   // Spelled differently, still one foundry ("The Monotype Corporation", "Monotype Typography, Inc.").
   assert.equal(foundryKey("The Monotype Corporation"), foundryKey("Monotype Typography, Inc."));
   const same = [
@@ -311,6 +325,7 @@ test("G4: different foundries hold a merge back, as a suggestion; the same found
     font("Lumen Bold", "Regular", { postscriptName: "LmnB", manufacturer: "Monotype Typography, Inc." }),
   ];
   assert.deepEqual(names(groupFamilies(same, ON)), ["Lumen"]);
+  assert.deepEqual(autoOf(same), [], "grouped by name");
 });
 
 test("G5: Keep separate for a name keeps it out, and it isn't suggested", () => {
@@ -320,18 +335,19 @@ test("G5: Keep separate for a name keeps it out, and it isn't suggested", () => 
   const families = groupFamilies(fonts, options);
   assert.deepEqual(names(families), ["Dynasty", "Dynasty Heavy"]);
   assert.equal(family(families, "Dynasty Heavy").faces[0].groupedBy, "rule");
-  assert.deepEqual(suggestionsOf(fonts, options), []);
+  assert.deepEqual(autoOf(fonts, options), []);
 });
 
-test("a supporting signal is needed: without one it's a suggestion; the weight number is one", () => {
+test("grouping by name needs a supporting signal (without one, the family joins automatically); the weight number is one", () => {
   const fonts = [font("Flux", "Regular", { postscriptName: "Xa-1" }), font("Flux Bold", "Regular", { postscriptName: "Yb-2" })];
-  assert.equal(groupFamilies(fonts, ON).length, 2);
-  assert.equal(suggestionsOf(fonts)[0].sources[0].reason, "noSignal");
+  assert.equal(groupLibrary(fonts, ON).plan.held.get("Flux Bold")?.reason, "noSignal");
+  assert.deepEqual(names(groupFamilies(fonts, ON)), ["Flux"]);
+  assert.equal(autoOf(fonts)[0].sources[0].reason, "noSignal");
   const weighed = [font("Flux", "Regular", { postscriptName: "Xa-1" }), font("Flux Bold", "Regular", { postscriptName: "Yb-2", weight: 650 })];
-  assert.deepEqual(names(groupFamilies(weighed, ON)), ["Flux"], "Bold (700) and weight 650 agree within 100");
+  assert.deepEqual([names(groupFamilies(weighed, ON)), autoOf(weighed)], [["Flux"], []], "Bold (700) and weight 650 agree within 100");
   // A PostScript prefix the family already uses agrees too.
   const prefixed = [font("Flux", "Regular", { postscriptName: "QQ-1" }), font("Flux Bold", "Regular", { postscriptName: "QQ-2" })];
-  assert.deepEqual(names(groupFamilies(prefixed, ON)), ["Flux"]);
+  assert.deepEqual([names(groupFamilies(prefixed, ON)), autoOf(prefixed)], [["Flux"], []]);
 });
 
 test("abbreviations count only when the PostScript name agrees; capitals are acronyms", () => {
@@ -379,13 +395,13 @@ test("SC right after the family part: Simplified Chinese in a CJK font (Noto San
   assert.deepEqual(names(siblings), ["Source Han Sans", "Source Han Sans SC", "Source Han Sans TC"]);
 });
 
-test("a held SC name is suggested: Proxima Nova ScOsf names its own family (G1)", () => {
+test("a held SC name joins automatically: Proxima Nova ScOsf names its own family (G1)", () => {
   const fonts = [
     font("Proxima Nova", "Regular", { postscriptName: "ProximaNova-Regular", hasTypoFamily: true }),
     font("Proxima Nova ScOsf", "Regular", { postscriptName: "ProximaNovaS-Regular", hasTypoFamily: true }),
   ];
-  assert.equal(groupFamilies(fonts, ON).length, 2);
-  const [s] = suggestionsOf(fonts);
+  assert.deepEqual(shape(groupFamilies(fonts, ON)), ["Proxima Nova: Regular, SC OSF"]);
+  const [s] = autoOf(fonts);
   assert.deepEqual([s.into, s.sources[0].family.name, s.sources[0].reason], ["Proxima Nova", "Proxima Nova ScOsf", "ownName"]);
 });
 
@@ -488,17 +504,15 @@ test("your rule for a name comes next, and fonts that arrive later follow it", (
   assert.deepEqual(names(later), ["Arial"]);
 });
 
-test("with Group families by name off: the fonts' own names, your choices still apply, merges become suggestions", () => {
+test("with Group families by name off: the fonts' own names, your choices still apply, nothing is grouped automatically", () => {
   const fonts = aminta();
   assert.deepEqual(names(groupFamilies(fonts, OFF)), ["Aminta", "AmintaBlack", "AmintaBold"]);
   const choices = new Map<string, FaceChoice>([[keyOf("AmintaBold"), { faceKey: keyOf("AmintaBold"), family: "Aminta", style: null }]]);
   const families = groupFamilies(fonts, { byName: false, choices });
   assert.deepEqual(names(families), ["Aminta", "AmintaBlack"]);
   assert.deepEqual(styles(family(families, "Aminta")), ["Regular", "Bold"]);
-  const [s] = suggestionsOf(fonts, OFF);
-  assert.deepEqual([s.into, s.sources.map((x) => [x.family.name, x.reason])], ["Aminta", [["AmintaBlack", "strong"], ["AmintaBold", "strong"]]]);
-  assert.equal(reasonText(s.sources[0]), "Grouped when “Group families by name” is on");
-  assert.deepEqual(suggestionsOf(fonts, ON), [], "on, they're grouped already");
+  assert.deepEqual(autoOf(fonts, OFF), []);
+  assert.deepEqual(autoOf(fonts, ON), [], "on, they're grouped by name");
 });
 
 // ------------------------------------------------------------------ what keys stay the same
@@ -525,14 +539,25 @@ test("search finds a font by the family and style grouping gave it", () => {
   assert.equal(filterFamilies(families, { kind: "all" }, { query: "aminta black" })[0].faces.length, 1);
 });
 
-test("suggestions: each family once, never one you kept separate or made yourself", () => {
+test("automatic groups: each family once, never one you kept separate or arranged yourself", () => {
   const fonts = [font("Arial"), font("Arial Narrow"), font("Arial Narrow Bold", "Regular", { postscriptName: "ArialNarrow-Bold" }), font("Arial Wide")];
-  const all = suggestionsOf(fonts);
+  const all = autoOf(fonts);
   assert.equal(all.length, 1);
   assert.deepEqual(all[0].sources.map((s) => s.family.name), ["Arial Narrow", "Arial Wide"]);
   assert.equal(all[0].styles, 4);
+  assert.deepEqual(shape(groupFamilies(fonts, ON)), ["Arial: Narrow, Narrow Bold, Regular, Wide"]);
+  // Your Keep separate for a family wins: it stays as it is.
   const rules = new Map<string, NameRule>([["arialwide", { nameKey: "arialwide", name: "Arial Wide", decision: "separate", into: null }]]);
-  assert.deepEqual(suggestionsOf(fonts, { byName: true, rules })[0].sources.map((s) => s.family.name), ["Arial Narrow"]);
+  assert.deepEqual(autoOf(fonts, { byName: true, rules })[0].sources.map((s) => s.family.name), ["Arial Narrow"]);
+  assert.deepEqual(shape(groupFamilies(fonts, { byName: true, rules })), ["Arial: Narrow, Narrow Bold, Regular", "Arial Wide: Regular"]);
+  // So does a style you kept under its own name: it stays there, alone.
+  const key = keyOf("ArialNarrow-Bold");
+  const kept = new Map<string, FaceChoice>([[key, { faceKey: key, family: null, style: null }]]);
+  assert.deepEqual(shape(groupFamilies(fonts, { byName: true, choices: kept })), ["Arial: Narrow, Regular, Wide", "Arial Narrow Bold: Regular"]);
+  // And a family you moved a style into stays as you set it, whole.
+  const moved = new Map<string, FaceChoice>([[key, { faceKey: key, family: "Arial Narrow", style: "Bold" }]]);
+  assert.deepEqual(autoOf(fonts, { byName: true, choices: moved })[0].sources.map((s) => s.family.name), ["Arial Wide"]);
+  assert.deepEqual(shape(groupFamilies(fonts, { byName: true, choices: moved })), ["Arial: Regular, Wide", "Arial Narrow: Regular, Bold"]);
 });
 
 // ------------------------------------------------------------------------------- pieces
@@ -586,7 +611,7 @@ test("a new family keeps a style word all its names share: Times New Roman, not 
     font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT", manufacturer: "Monotype" }),
     font("Times New Roman Bold", "Regular", { postscriptName: "TimesNewRomanPS-BoldMT", manufacturer: "Monotype", hasTypoFamily: true }),
   ];
-  assert.ok(suggestionsOf(bold).every((s) => s.into === "Times New Roman"), "no Times New");
+  assert.ok(autoOf(bold).every((s) => s.into === "Times New Roman"), "no Times New");
   // Names that share no style word still make the family their base names ("Solo").
   assert.deepEqual(names(groupFamilies([font("Solo Bold", "Regular", { postscriptName: "Solo-Bold" }), font("Solo Light", "Regular", { postscriptName: "Solo-Light" })], ON)), ["Solo"]);
 });
@@ -604,12 +629,12 @@ test("foundries are compared by their words: two people with one first name diff
     font("Lumen", "Regular", { postscriptName: "Xa", manufacturer: "Daniel Bruce" }),
     font("Lumen Bold", "Regular", { postscriptName: "Yb", manufacturer: "Daniel Hernandez" }),
   ];
-  assert.equal(groupFamilies(fonts, ON).length, 2);
-  assert.equal(suggestionsOf(fonts)[0].sources[0].reason, "foundry");
-  // One-letter foundries say nothing, so nothing else agrees: only suggested.
+  assert.equal(groupLibrary(fonts, ON).plan.held.get("Lumen Bold")?.reason, "foundry");
+  assert.equal(autoOf(fonts)[0].sources[0].reason, "foundry");
+  // One-letter foundries say nothing, so nothing else agrees.
   const letters = [font("Lumen", "Regular", { postscriptName: "Xa", manufacturer: "A&O" }), font("Lumen Bold", "Regular", { postscriptName: "Yb", manufacturer: "a.Foundry" })];
-  assert.equal(groupFamilies(letters, ON).length, 2);
-  assert.equal(suggestionsOf(letters)[0].sources[0].reason, "noSignal");
+  assert.equal(groupLibrary(letters, ON).plan.held.get("Lumen Bold")?.reason, "noSignal");
+  assert.equal(autoOf(letters)[0].sources[0].reason, "noSignal");
 });
 
 test("chained suggestions are one: Merge all leaves no family behind (F4)", () => {
@@ -618,7 +643,7 @@ test("chained suggestions are one: Merge all leaves no family behind (F4)", () =
     font("Neutra Text TF", "Regular", { postscriptName: "NeutraTextTF-Book", hasTypoFamily: true }),
     font("Neutra Display", "Regular", { postscriptName: "NeutraDisplay-Titling" }),
   ];
-  const suggestions = suggestionsOf(fonts);
+  const suggestions = autoOf(fonts);
   assert.equal(suggestions.length, 1, "Neutra Text TF goes on with Neutra Text into Neutra");
   assert.equal(suggestions[0].into, "Neutra");
   assert.deepEqual(suggestions[0].sources.map((s) => s.family.name), ["Neutra Display", "Neutra Text", "Neutra Text TF"]);
@@ -706,7 +731,7 @@ test("a family's own weight numbers are kept when they tell its styles apart (F9
     const poker = groupFamilies([font("Pokerface", "Regular", { weight: 900 })], options);
     assert.equal(weightText(poker[0].faces), "900");
     const arial = groupFamilies([font("Arial", "Regular"), font("Arial Black", "Regular", { postscriptName: "Arial-Black", weight: 900, hasTypoFamily: true })], options);
-    assert.equal(weightText(family(arial, "Arial Black").faces), "900");
+    assert.equal(weightText(arial.flatMap((f) => f.faces).filter((x) => x.primary.family === "Arial Black")), "900");
   }
   // But in a family that says 500 for every weight, its Regular is 400, before its Medium.
   const amplitude = groupFamilies(
@@ -821,16 +846,22 @@ test("a per-style copy doesn't split a family its other copies share (M3-new-1: 
 
 test("a family only some of whose styles have another copy's name stays whole; a lone pair keeps its own (M3-new-1)", () => {
   // LTUnivers-Cond groups by name; half its styles also have an "LTUnivers" copy. It stays one
-  // family (a width word is only suggested), and so does LTUnivers.
+  // family by name (a width word isn't grouping by name), and so does LTUnivers; then the whole
+  // of LTUnivers-Cond joins LTUnivers automatically.
   const fonts = [
     font("LTUnivers", "Normal", { postscriptName: "LTUnivers-Normal" }),
     font("LTUnivers", "Bold", { postscriptName: "LTUnivers-Bold", weight: 700 }),
     ...copies("LTUnivers-CondThin", ["LTUnivers-CondThin", "Regular"], ["LTUnivers", "Normal"], { weight: 100 }),
     font("LTUnivers-CondBold", "Regular", { postscriptName: "LTUnivers-CondBold", weight: 700 }),
   ];
-  const families = groupFamilies(fonts, ON);
-  assert.deepEqual(shape(families), ["LTUnivers: Normal, Bold", "LTUnivers-Cond: Thin, Bold"]);
-  assert.ok(suggestionsOf(fonts).some((s) => s.into === "LTUnivers" && s.sources[0].family.name === "LTUnivers-Cond"), "suggested, as a width");
+  const library = groupLibrary(fonts, ON);
+  assert.deepEqual(library.auto.map((s) => [s.into, s.sources.map((src) => [src.family.name, src.reason])]), [["LTUnivers", [["LTUnivers-Cond", "width"]]]]);
+  assert.deepEqual(
+    library.auto[0].sources[0].family.faces.map((f) => f.key),
+    [keyOf("LTUnivers-CondThin"), keyOf("LTUnivers-CondBold")],
+    "the whole family, as grouping by name made it",
+  );
+  assert.deepEqual(shape(library.families), ["LTUnivers: Condensed Thin, Condensed Bold, Normal, Bold"], "narrow to wide");
   // One font in two files and nothing else carrying either name: the name that agrees with its
   // PostScript name.
   assert.deepEqual(shape(groupFamilies(copies("House-A-Rama-Kingpin", ["House-A-Rama-Kingpin", "Regular"], ["House-A-Rama", "Medium"]), ON)), [
@@ -923,13 +954,13 @@ test("spellings that differ only in case show the one that isn't all capitals (M
   assert.deepEqual(names(groupFamilies(more, ON)), ["GOTHAM"]);
 });
 
-test("a width or size suggestion joins the longest name left that's a family (F1: Times New Roman, not Times New)", () => {
+test("a width or size word joins the longest name left that's a family (F1: Times New Roman, not Times New)", () => {
   const times = font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT" });
   const condensed = font("Times New Roman Condensed", "Regular", { postscriptName: "TimesNewRomanPS-Condensed" });
   const narrow = font("Times New Roman Narrow", "Regular", { postscriptName: "TimesNewRomanPS-Narrow" });
-  const into = (fonts: FontSummary[]) => suggestionsOf(fonts).map((s) => `${s.into} <- ${s.sources.map((src) => src.family.name).join(", ")}`);
+  const into = (fonts: FontSummary[]) => autoOf(fonts).map((s) => `${s.into} <- ${s.sources.map((src) => src.family.name).join(", ")}`);
   assert.deepEqual(into([times, condensed, narrow]), ["Times New Roman <- Times New Roman Condensed, Times New Roman Narrow"]);
-  assert.deepEqual(into([times, condensed]), ["Times New Roman <- Times New Roman Condensed"], "a single variant is suggested too");
+  assert.deepEqual(into([times, condensed]), ["Times New Roman <- Times New Roman Condensed"], "a single variant joins too");
   assert.deepEqual(into([condensed, narrow]), ["Times New Roman <- Times New Roman Condensed, Times New Roman Narrow"], "no family yet: Roman is part of the name");
   const shadows = font("Shadows Into Light", "Regular", { postscriptName: "ShadowsIntoLight" });
   const display = font("Shadows Into Light Display", "Regular", { postscriptName: "ShadowsIntoLight-Display" });
@@ -941,8 +972,7 @@ test("a width or size suggestion joins the longest name left that's a family (F1
     font("Gotham Bold Narrow", "Regular", { postscriptName: "Gotham-BoldNarrow", weight: 700 }),
   ];
   assert.deepEqual(into(gotham), ["Gotham <- Gotham Bold Condensed, Gotham Bold Narrow"]);
-  // Still never merged automatically.
-  assert.equal(groupFamilies([times, condensed, narrow], ON).length, 3);
+  assert.deepEqual(shape(groupFamilies([times, condensed, narrow], ON)), ["Times New Roman: Condensed, Narrow, Regular"]);
 });
 
 test("merging writes the rule for the name a style was placed by (Face.name)", () => {
@@ -961,17 +991,28 @@ test("merging writes the rule for the name a style was placed by (Face.name)", (
   assert.deepEqual(shape(groupFamilies(fonts, { byName: true, choices })), ["House-A-Rama: Regular, Tenpin", "House-A-Rama-Kingpin: Regular"]);
 });
 
+/** The families as grouping by name made them, before the automatic groups joined some. */
+function byNameOnly(fonts: FontSummary[]): Family[] {
+  const { families, auto } = groupLibrary(fonts, ON);
+  const made = new Set(auto.map((g) => g.into));
+  return [...families.filter((f) => !made.has(f.name)), ...auto.flatMap((g) => [...(g.existing ? [g.existing] : []), ...g.sources.map((s) => s.family)])];
+}
+
 /**
  * Turning "Group families by name" off only ever splits families, by the fonts' own names:
- * - I1: every family with it off lies inside one family with it on (off refines on);
- * - I2: no style is alone with it off while it's in one family with it on with a family (off)
- *   that one of its copies names, or one whose styles have a copy carrying its name.
+ * - I1: every family with it off lies inside one family with it on (off refines on), and so
+ *   does every family grouping by name makes before the automatic groups (whole families join);
+ * - I2: no style is alone with it off while grouping by name lists it with a family (off) that
+ *   one of its copies names, or one whose styles have a copy carrying its name.
  */
 function offRefinesOn(fonts: FontSummary[]) {
   const on = groupFamilies(fonts, ON);
   const off = groupFamilies(fonts, OFF);
-  const onOf = new Map(on.flatMap((f) => f.faces.map((x) => [x.key, f.name] as const)));
-  for (const f of off) assert.equal(new Set(f.faces.map((x) => onOf.get(x.key))).size, 1, `${f.name} (off) lies inside one family on`);
+  const finalOf = new Map(on.flatMap((f) => f.faces.map((x) => [x.key, f.name] as const)));
+  const onOf = new Map(byNameOnly(fonts).flatMap((f) => f.faces.map((x) => [x.key, f.name] as const)));
+  for (const f of off) assert.equal(new Set(f.faces.map((x) => finalOf.get(x.key))).size, 1, `${f.name} (off) lies inside one family on`);
+  for (const f of off) assert.equal(new Set(f.faces.map((x) => onOf.get(x.key))).size, 1, `${f.name} (off) lies inside one family grouping by name makes`);
+  for (const f of byNameOnly(fonts)) assert.equal(new Set(f.faces.map((x) => finalOf.get(x.key))).size, 1, `${f.name} (by name) lies inside one family on`);
   for (const f of off) {
     if (f.faces.length !== 1) continue;
     const x = f.faces[0];
@@ -1004,12 +1045,11 @@ test("with grouping off, a style's other copies still keep its family together (
   }
   const caps = groupFamilies(fonts, OFF)[1].faces.find((f) => f.key === keyOf("MorganAvec-BoldCaps"))!;
   assert.deepEqual([caps.groupedBy, caps.name], ["own", "MorganAvec"], "the fonts' own names: its other copy's");
-  // Nothing to suggest for it any more; a name with no such copy still is.
+  // A name with no such copy keeps its own name off, and grouping by name joins it on.
   const lone = [...morgan, font("MorganAvec-ItalicCaps", "Regular", { postscriptName: "MorganAvec-ItalicCaps", italic: true })];
-  assert.deepEqual(
-    suggestionsOf(lone, OFF).map((s) => [s.into, s.sources.map((src) => [src.family.name, src.reason])]),
-    [["MorganAvec", [["MorganAvec-ItalicCaps", "strong"]]]],
-  );
+  assert.deepEqual(names(groupFamilies(lone, OFF)), ["MorganAvec", "MorganAvec-ItalicCaps"]);
+  assert.deepEqual(names(groupFamilies(lone, ON)), ["MorganAvec"]);
+  assert.deepEqual([autoOf(lone, OFF), autoOf(lone, ON)], [[], []]);
   for (const f of [fonts, lone]) offRefinesOn(f);
 });
 
@@ -1085,23 +1125,23 @@ test("a style's label comes from the copy whose names agree with its PostScript 
   assert.deepEqual(shape(groupFamilies(foo, { byName: true, choices })), ["Foo: Regular, Bold"]);
 });
 
-test("a numbered name is suggested for the longest name left that's a family, with its width word as the reason (F1, M3-r3-2)", () => {
-  const into = (fonts: FontSummary[]) => suggestionsOf(fonts).map((s) => `${s.into} <- ${s.sources.map((src) => `${src.family.name} (${reasonText(src)})`).join(", ")}`);
+test("a numbered name joins the longest name left that's a family, with its width word as the reason (F1, M3-r3-2)", () => {
+  const into = (fonts: FontSummary[]) => autoOf(fonts).map((s) => `${s.into} <- ${s.sources.map((src) => `${src.family.name} (${reasonText(src)})`).join(", ")}`);
   const numbered = (family: string, ps: string) => [
     font(`${family} 2 Bold`, "Regular", { postscriptName: `${ps}2-Bold`, weight: 700 }),
     font(`${family} 2 Italic`, "Regular", { postscriptName: `${ps}2-Italic`, italic: true }),
   ];
   const times = font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT" });
   const shadows = font("Shadows Into Light", "Regular", { postscriptName: "ShadowsIntoLight" });
-  const tnr = "Times New Roman <- Times New Roman 2 Bold (Numbered style), Times New Roman 2 Italic (Numbered style)";
-  const sil = "Shadows Into Light <- Shadows Into Light 2 Bold (Numbered style), Shadows Into Light 2 Italic (Numbered style)";
+  const tnr = "Times New Roman <- Times New Roman 2 Bold (Numbered style “2”), Times New Roman 2 Italic (Numbered style “2”)";
+  const sil = "Shadows Into Light <- Shadows Into Light 2 Bold (Numbered style “2”), Shadows Into Light 2 Italic (Numbered style “2”)";
   assert.deepEqual(into([times, ...numbered("Times New Roman", "TimesNewRoman")]), [tnr], "not a new Times New");
   assert.deepEqual(into([shadows, ...numbered("Shadows Into Light", "ShadowsIntoLight")]), [sil], "not a new Shadows Into");
   // No such family: the style words before the number that are part of the name stay.
   assert.deepEqual(into(numbered("Times New Roman", "TimesNewRoman")), [tnr]);
   assert.deepEqual(into(numbered("Shadows Into Light", "ShadowsIntoLight")), [sil]);
   for (const fonts of [[times, ...numbered("Times New Roman", "TimesNewRoman")], numbered("Shadows Into Light", "ShadowsIntoLight")]) {
-    assert.equal(groupFamilies(fonts, ON).length, fonts.length, "still never merged automatically");
+    assert.equal(groupFamilies(fonts, ON).length, 1, "one family");
   }
   // Joining MINI 7 takes Condensed off, not the number: that's the reason given.
   const mini = [font("MINI 7", "Regular", { postscriptName: "MINI7" }), font("MINI 7 Condensed", "Regular", { postscriptName: "MINI7Condensed" }), font("MINI 7 Extended", "Regular", { postscriptName: "MINI7Extended" })];
@@ -1124,18 +1164,14 @@ test("with grouping off, a name whose chosen name goes by another isn't left alo
   ];
   assert.deepEqual(shape(groupFamilies(fago, ON)), ["Fago: Regular, LF, Bold, LF Bold, LF Bold Caps"]);
   assert.deepEqual(shape(groupFamilies(fago, OFF)), ["Fago: Regular, LF, Bold, LF Bold", "FagoLf-BoldCaps: Regular"]);
-  assert.deepEqual(
-    suggestionsOf(fago, OFF).map((s) => [s.into, s.sources.map((src) => src.family.name)]),
-    [["Fago", ["FagoLf-BoldCaps"]]],
-    "still suggested for Fago",
-  );
+  assert.deepEqual(autoOf(fago, OFF), [], "off, nothing is grouped automatically");
   for (const other of variants(fago)) assert.deepEqual(shape(groupFamilies(other, OFF)), shape(groupFamilies(fago, OFF)), "whatever the order, folders or copy on");
   offRefinesOn(fago);
 });
 
-test("a numbered name is suggested for the longest name left that's a family as they stand (M3-r4-2: Gill Sans Light 2)", () => {
+test("a numbered name joins the longest name left that's a family as they stand (M3-r4-2: Gill Sans Light 2)", () => {
   // Grouping lists Gill Sans Light in Gill Sans, so no family is called Gill Sans Light: the
-  // numbered names are suggested for Gill Sans, not for a new Gill Sans Light beside it.
+  // numbered names join Gill Sans, not a new Gill Sans Light beside it.
   const gill = [
     font("Gill Sans", "Regular", { postscriptName: "GillSans" }),
     font("Gill Sans", "Bold", { postscriptName: "GillSans-Bold", weight: 700 }),
@@ -1145,13 +1181,13 @@ test("a numbered name is suggested for the longest name left that's a family as 
   const italic = font("Gill Sans Light 2 Italic", "Regular", { postscriptName: "GillSansLight2-Italic", italic: true });
   const bold = font("Gill Sans Light 2 Bold", "Regular", { postscriptName: "GillSansLight2-Bold", weight: 700 });
   const said = (fonts: FontSummary[], options: GroupingOptions) =>
-    suggestionsOf(fonts, options).map((s) => `${suggestionText(s)} [${s.existing?.name ?? "new"}]: ${s.sources.map((src) => `${src.family.name} (${src.reason})`).join(", ")}`);
-  assert.deepEqual(said([...gill, italic, bold], ON), ["Merge 2 families into Gill Sans (6 styles) [Gill Sans]: Gill Sans Light 2 Bold (number), Gill Sans Light 2 Italic (number)"]);
-  assert.deepEqual(said([...gill, italic], ON), ["Merge “Gill Sans Light 2 Italic” into Gill Sans (5 styles) [Gill Sans]: Gill Sans Light 2 Italic (number)"], "one numbered name, the same");
-  // Off, Gill Sans Light is a family as it stands, and it's suggested for Gill Sans itself.
-  assert.deepEqual(said([...gill, italic, bold], OFF), [
-    "Merge 3 families into Gill Sans (6 styles) [Gill Sans]: Gill Sans Light (strong), Gill Sans Light 2 Bold (number), Gill Sans Light 2 Italic (number)",
-  ]);
+    autoOf(fonts, options).map((s) => `${autoGroupText(s)} [${s.existing?.name ?? "new"}]: ${s.sources.map((src) => `${src.family.name} (${src.reason})`).join(", ")}`);
+  assert.deepEqual(said([...gill, italic, bold], ON), ["Grouped 2 families into Gill Sans (6 styles) [Gill Sans]: Gill Sans Light 2 Bold (number), Gill Sans Light 2 Italic (number)"]);
+  assert.deepEqual(said([...gill, italic], ON), ["Grouped “Gill Sans Light 2 Italic” into Gill Sans (5 styles) [Gill Sans]: Gill Sans Light 2 Italic (number)"], "one numbered name, the same");
+  assert.deepEqual(names(groupFamilies([...gill, italic, bold], ON)), ["Gill Sans"]);
+  // Off, nothing is grouped automatically: Gill Sans Light is a family as it stands.
+  assert.deepEqual(said([...gill, italic, bold], OFF), []);
+  assert.deepEqual(names(groupFamilies([...gill, italic, bold], OFF)), ["Gill Sans", "Gill Sans Light", "Gill Sans Light 2 Bold", "Gill Sans Light 2 Italic"]);
   for (const other of variants([...gill, italic, bold])) assert.deepEqual(said(other, ON), said([...gill, italic, bold], ON), "whatever the order");
 });
 
