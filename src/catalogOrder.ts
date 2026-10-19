@@ -4,7 +4,7 @@
 /** One row of a catalog page's list: a family, or a heading before a group of families. */
 export type CatalogItem<T> = { kind: "heading"; id: string; label: string; count: number } | { kind: "family"; family: T };
 
-export const YOURS_HEADING = "In your library";
+export const YOURS_HEADING = "Installed";
 export const REST_HEADING = "Everything else";
 
 /**
