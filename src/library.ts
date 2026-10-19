@@ -15,6 +15,13 @@ export interface Face {
 }
 
 export interface Family {
+  /**
+   * Stable for the same family from one list load to the next. Rows, the expanded set and
+   * lookups use it, never the name, so that grouping families by name (more than one family
+   * may then show the same name) doesn't break them. Today it's the grouping key: "n:" plus the
+   * family name. Font pages are found by face key instead (see nav.ts).
+   */
+  id: string;
   name: string;
   faces: Face[];
   /** The face used for the family's preview line: one that can draw its name (so Lucida Math
@@ -149,9 +156,13 @@ const drawsItsName = (f: FontSummary) => !f.preview || f.preview.kind === "name"
 const betterRepresentative = (a: FontSummary, b: FontSummary) =>
   drawsItsName(a) !== drawsItsName(b) ? drawsItsName(a) : regularness(a) < regularness(b);
 
-function makeFamily(name: string, faces: Face[]): Family {
+/** The id of the family grouped under this name (see Family.id). */
+export const familyId = (name: string) => `n:${name}`;
+
+function makeFamily(id: string, name: string, faces: Face[]): Family {
   const switchable = faces.filter((face) => !face.installed);
   return {
+    id,
     name,
     faces,
     representative: faces.reduce((best, face) => (betterRepresentative(face.primary, best.primary) ? face : best)),
@@ -172,7 +183,9 @@ export function groupFamilies(fonts: FontSummary[]): Family[] {
     if (list) list.push(face);
     else byFamily.set(face.primary.family, [face]);
   }
-  return [...byFamily.entries()].map(([name, faces]) => makeFamily(name, sortFaces(faces))).sort((a, b) => collator.compare(a.name, b.name));
+  return [...byFamily.entries()]
+    .map(([name, faces]) => makeFamily(familyId(name), name, sortFaces(faces)))
+    .sort((a, b) => collator.compare(a.name, b.name));
 }
 
 const matches = (f: FontSummary, q: string) =>
@@ -210,7 +223,8 @@ export function filterFamilies(
   const out: Family[] = [];
   for (const family of families) {
     const faces = family.faces.filter(keep);
-    if (faces.length) out.push(faces.length === family.faces.length ? family : makeFamily(family.name, faces));
+    // A narrowed family keeps its id, so its row, expanded state and selection carry over.
+    if (faces.length) out.push(faces.length === family.faces.length ? family : makeFamily(family.id, family.name, faces));
   }
   return out;
 }

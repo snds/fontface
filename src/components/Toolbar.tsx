@@ -7,6 +7,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { dragRegion, NO_DRAG, useTitleBar } from "./TitleBar";
 
+/** The search field's id, so ⌘F can focus it (also from a font page). */
+export const LIBRARY_SEARCH_ID = "library-search";
+
 interface Props {
   query: string;
   onQuery: (q: string) => void;
@@ -44,13 +47,12 @@ export function Toolbar({
 }: Props) {
   const titleBar = useTitleBar();
   return (
-    // On macOS this row is also the window's title bar (see TitleBar.tsx). It's often narrow:
-    // at the default window size with a font selected it gets about 680px. So it gives way in
+    // On macOS this row is also the window's title bar (see TitleBar.tsx). It can be narrow (a
+    // small window gives it well under 800px). So it gives way in
     // steps as it narrows (container queries on the width inside its padding): under 960px the
     // count goes (screen readers still hear it); under 880px Variable shows only its icon and the
     // size slider gets shorter; under 620px the preview text box goes, and under 520px the
-    // slider. Search always keeps room to type, and nothing paints past the edge into the detail
-    // panel.
+    // slider. Search always keeps room to type, and nothing paints past the window's edge.
     <header
       className="@container/toolbar flex h-13 shrink-0 items-center gap-3 overflow-hidden border-b px-4 select-none"
       {...dragRegion(titleBar)}
@@ -84,6 +86,7 @@ export function Toolbar({
       <div className="relative w-56 min-w-36">
         <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />
         <Input
+          id={LIBRARY_SEARCH_ID}
           type="search"
           placeholder="Search fonts"
           aria-label="Search fonts"

@@ -5,7 +5,7 @@ Fontface is a Tauri 2 app: a Rust back end does the real work, and a React web v
 ```
 React UI (src/)                              Rust core (src-tauri/src/)
 ───────────────                              ──────────────────────────
-App / Sidebar / FontList / DetailPanel
+App / Sidebar / FontList / FontPage
    │  invoke("list_fonts" …)  ───────────▶   commands.rs   ── db.rs (SQLite, WAL)
    │  listen("scan-progress") ◀───────────     │               scanner.rs (walk + parse)
    │  FontFace("ff://localhost/<id>") ───▶   protocol.rs   ── sfnt.rs (split .ttc faces)
@@ -206,14 +206,15 @@ row counts only while its file size, modified time and `rev` match the font and
   names (a late answer still counts) and the next call goes, so one stuck file read can't stop
   later rows getting profiles. Nothing ever downloads a cloud file or reads Creative Cloud's
   files to make a profile.
-- `font_characters` works out the detail panel's character grid on demand and stores nothing.
+- `font_characters` works out the font page's character grid on demand (when its Characters or
+  Info tab shows) and stores nothing.
 - Both commands read files on two long-lived preview reader threads (`preview::Readers`), not
   on Tauri's async workers: a slow disk or a stalled network share then can't hold up the
   other commands, such as the on/off switches. At most two reads run at once. Each command
   goes through its own latest-wins lane (`preview::Lane`): a job still queued when a newer one
   of the same command arrives is skipped when a thread takes it, reading nothing, and so is a
-  job nobody waits for any more. Holding an arrow key through the list then reads only the
-  latest character grid, and a profile call the UI has given up on doesn't hold up the call it
+  job nobody waits for any more. Stepping quickly through a font page's styles then reads only
+  the latest character grid, and a profile call the UI has given up on doesn't hold up the call it
   sent instead. A job that has started runs to the end; a stuck one holds only its own thread.
 
 **Fitting previews: no clipping, aligned baselines.** A list preview is a 1.3 em box that hides
@@ -229,10 +230,10 @@ installed Times, Helvetica and Courier), and its ink includes shaping (Zapfino's
 the profile's own text the ink is the larger of the canvas's and Rust's per-glyph ink; Rust's
 line metrics are the fallback when the canvas reports none. Nothing is measured before the
 row's own face has loaded (`isFaceLoaded`), and a row whose font changes reads as loading at
-once, so a fallback-font measurement is never taken or cached. The detail panel's waterfall
+once, so a fallback-font measurement is never taken or cached. The font page's waterfall
 never shrinks: a row grows to fit the ink. A preview (in the list and on the Google Fonts page)
-stays hidden until its font has loaded and its profile is known, or 300 ms have passed; in the
-detail panel, a face that fails to load draws in the fallback font, and the character grid then
+stays hidden until its font has loaded and its profile is known, or 300 ms have passed; on the
+font page, a face that fails to load draws in the fallback font, and the character grid then
 shows only its summary.
 
 **Purchases.**
@@ -385,7 +386,11 @@ Everything else (scanner, database, protocol, UI) is already cross-platform.
 - **Icons:** Google Material Symbols Rounded, from the bundled variable font (`<Icon name="…" />`).
 - **Type:** IBM Plex Sans for the interface. IBM Plex Mono for technical values such as paths, PostScript names, axis tags and counts. Both are bundled.
 - **Theme:** the Appearance setting: System, Light or Dark. `src/settings/theme.ts` puts a `.dark` class on `<html>`. The last setting used is kept in localStorage and applied before the first render, so the page never starts in the wrong colors; with System it follows `prefers-color-scheme` live. `window.setTheme` keeps the native parts (the window buttons) in step. The window's own background is set from Rust at setup (see **Settings**).
-- **Title bar (macOS):** an overlay (`src-tauri/tauri.macos.conf.json`: `titleBarStyle` Overlay, hidden title, window buttons inset). The app's 52px first row (sidebar strip, toolbar or page header, detail header) is the title bar: `src/components/TitleBar.tsx` marks it as a drag region (`data-tauri-drag-region="deep"`), with controls left clickable. A double-click does what macOS's "Double-click a window's title bar to" setting says (zoom, minimize or nothing) through the `title_bar_double_click` command, which reads `AppleActionOnDoubleClick` (or the older `AppleMiniaturizeOnDoubleClick`), instead of Tauri's built-in zoom. In full screen the row is a plain header. Windows keeps its native frame.
+- **Title bar (macOS):** an overlay (`src-tauri/tauri.macos.conf.json`: `titleBarStyle` Overlay, hidden title, window buttons inset). The app's 52px first row (sidebar strip, toolbar, or a page's header such as the font page's) is the title bar: `src/components/TitleBar.tsx` marks it as a drag region (`data-tauri-drag-region="deep"`), with controls left clickable. A double-click does what macOS's "Double-click a window's title bar to" setting says (zoom, minimize or nothing) through the `title_bar_double_click` command, which reads `AppleActionOnDoubleClick` (or the older `AppleMiniaturizeOnDoubleClick`), instead of Tauri's built-in zoom. In full screen the row is a plain header. Windows keeps its native frame.
 - **App menu (macOS):** built in `src-tauri/src/window.rs`. It repeats Tauri's default menu (About, Services, Hide, Quit; Edit with undo, cut, copy, paste and select all; View; Window; Help) and adds Settings… (⌘,) and Show All to the Fontface menu. Settings… shows the window if it was closed and sends `open-settings` to the page.
 - **Settings screen:** `src/settings/`. It covers the library while open: the sidebar becomes the list of sections, and a search box finds settings across all of them. Each change saves as it's made (`settings_update`); there's no Save button. Esc goes back to the library.
 - **Large libraries:** the list is virtualized, so only rows on screen exist. A font file loads only when its row scrolls into view.
+- **Places and pages:** the main column has two layers. The list layer is the place picked in the sidebar (App's `view` and filters): the toolbar and the list, or a service's own page. Pages are pushed on top of it (`src/nav.ts`, a pure reducer; `src/useNav.ts` wires it to the window). Today the only page is the font page; Compare, Pair and Family groups will join it. While a page shows, the list layer stays mounted, `invisible` and `inert`, like the library under Settings, so its scroll position, selection and loaded previews survive. Only the top page shows; pages under it stay mounted the same way. A sidebar click (`goToPlace`) replaces the place and clears the stack; fallbacks to All Fonts (a removed folder, a hidden section) keep the page. Back closes the top page: the header button, Cmd+[ (Alt+Left on Windows), the mouse's back button (`MouseEvent.button` 3), or Esc when focus isn't in a text field, menu or popover (`backKeyIntent`). They do nothing while Settings cover the page, a dialog or menu is open, or a drag is under way. After Back, App asks the list to focus the row that opened the page (`ListHandle.focusRow`) and announces "Back to …" in the live region; opening announces the family and focuses the page's `h1`. Cmd+F leaves the page and focuses Search. "Open where you left off" restores the place only, never a page.
+- **Font page:** `src/components/fontPage/`. Its stack entry holds the face key it was opened from, the chosen style (a face key) and the tab; App finds the family by face key in the whole library (`familyOfFace`), so filters never narrow it and regrouping families by name won't lose it. If no family has that face any more, the page says so and offers Back. Axis values and the character search live in the page's own state. Details (`get_font`) and characters (`font_characters`) are read for the chosen style only, characters only once a tab needs them. The tab used last is the `fontPageTab` setting (in `AppSettings` and `settings.rs`, so Reset covers it); Axes shows only for a variable style, and another style falls back to Specimen without changing the setting.
+- **Library list (Rows):** `src/components/FontList.tsx`. A listbox whose own element keeps focus and points at the active row with `aria-activedescendant` (rows scrolled away don't exist, so focus can't live on them). Selection is a pure model (`src/selection.ts`: click, Cmd-click, Shift-click, arrows, Home/End, Page Up/Down, Space, Cmd-A, Esc, and the key map) held by `src/components/library/useSelection.ts`, keyed by row key so reloads and expanding don't shift it. A click selects; double-click or Return opens; right-click only selects. Only the active row's controls are in the Tab order. Each option's accessible name is its family or style, style count and on/off state.
+- **Family ids:** `Family.id` (today "n:" plus the grouping name) keys rows, the expanded set and lookups, never the display name, so a later grouping by name, where two families may share a name, doesn't break them. A family narrowed by a filter keeps its id.

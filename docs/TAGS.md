@@ -9,10 +9,11 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 ## Using tags
 
 - **Make a tag:** the "+" (New tag) button in the sidebar's Tags section, or "Create" in any tag picker.
-- **Tag fonts:** right-click a row, a selection or the detail panel and choose **Add to tag**
+- **Tag fonts:** right-click a row, a selection or a font page and choose **Add to tag**
   (the tag tree, plus **Find a tag…** to search and **New tag…**). **Remove from tag** lists the
   tags they have, with "2/5" when only some of them have it. The tag button on a row (shown on
-  hover) and the "Tag" button in the detail panel open the same search. A family row tags every
+  hover) and the Tags button on a font page open the same search. On a font page, right-clicking
+  a style's line in "All styles" covers that style; anywhere else, the whole family. A family row tags every
   style in the family, even ones the current view hides. In a menu, typing the first letters of a
   tag jumps to it; in the search, Return picks the first match ("Create" comes last).
 - **Drag fonts onto a tag** in the sidebar to tag them (a row, or the selection it's in). A toast
@@ -23,9 +24,9 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
   range. With the list focused, Cmd-A selects every row and Escape clears the selection. A bar
   appears with a "Tags…" button. Selected rows get a bar along their left edge.
 - **Keyboard:** right-click menus (rows, tags, locations) also open with Shift-F10 (fn-Shift-F10
-  on most Mac keyboards) on whatever has focus, or with VoiceOver's VO-Shift-M. Rows can't take
-  focus yet, so selecting a range still needs the pointer; Cmd-A then "Tags…" works from the
-  keyboard.
+  on most Mac keyboards) on whatever has focus (in the font list, on the active row), or with
+  VoiceOver's VO-Shift-M. In the list, Shift-arrows select a range and Space adds or removes a
+  row, so "Tags…" on the selection bar works from the keyboard too.
 - **Nest tags** with `/`: "Sci-Fi/Star Trek" sits under "Sci-Fi". A tag's view shows its own
   fonts and those of every tag inside it. To move a tag, drag it onto another (hovering a closed
   tag opens it), onto "Move to the top level" (shown while dragging a nested tag), or use **Move

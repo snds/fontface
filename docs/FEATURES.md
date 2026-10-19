@@ -29,9 +29,9 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Activate / deactivate a style or family | ✅ | ⬜ | Persistent by default: stays on after quit and restart. Temporary mode in Settings |
 | Activation survives app not running | ✅ | ⬜ | CoreText persistent user scope |
 | Re-apply activations at launch and after scans | ✅ | ⬜ | Keeps intent if a file is only temporarily unreachable |
-| Detail panel: waterfall, characters, metadata | ✅ | ⬜ | The waterfall shows the pangram only when the font has its letters (else its own text), and grows a row instead of clipping tall ink. "Character set" in the info section |
-| Characters grid | 🟡 | ⬜ | Every real character of the font, by Unicode block (the biggest block first), with a summary line ("166 characters, all in Private Use Area …", "Expert set: 60 real characters; 175 slots share one placeholder (hidden)"). Hover shows the code point and glyph name; click or Enter copies the character. Arrow keys move between cells. 512 per block, then "Show all". Moving quickly through the list skips the fonts passed on the way, so the one you stop on shows sooner. Not yet checked in the running app |
-| Variable font axis sliders | ✅ | ⬜ | |
+| Font page: waterfall, paragraph, characters, metadata | 🟡 | ⬜ | Replaces the side detail panel (see **Font page and Back**). The waterfall shows the pangram only when the font has its letters (else its own text), and grows a row instead of clipping tall ink. "Character set" on the Info tab. Not yet checked in the running app |
+| Characters grid | 🟡 | ⬜ | On the font page's Characters tab. Every real character of the font, by Unicode block (the biggest block first), with a summary line ("166 characters, all in Private Use Area …", "Expert set: 60 real characters; 175 slots share one placeholder (hidden)"). Hover shows the code point and glyph name; click or Enter copies the character. Arrow keys move between cells. 512 per block, then "Show all". A search box finds typed characters or U+ codes (also ranges, "U+0041-U+005A"), and says which ones the font doesn't have; searching by character name isn't there yet. Not yet checked in the running app |
+| Variable font axis sliders | 🟡 | ⬜ | The font page's Axes tab (variable styles only): a slider and a number field per axis; the values also show in Specimen and Characters. Not yet checked in the running app |
 | Search by family / style / PostScript name | ✅ | ⬜ | |
 | Show in Finder / Explorer | ✅ | ⬜ | |
 
@@ -43,8 +43,8 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Font Book view (Windows: "Windows Fonts") | ✅ | ⬜ | OS-installed fonts; the three macOS font folders nested under it |
 | Active / Inactive filter on any view | ✅ | ⬜ | Toolbar segments |
 | Variable filter on any view | ✅ | ⬜ | Toolbar toggle: lists only variable styles, and only the families that have one; combines with All / Active / Inactive and search, and the counts follow it |
-| Seamless top bar | 🟡 | n/a | No separate title bar: the window buttons sit in the sidebar's top strip, and the 52px top row (toolbar, page headers, detail header) moves the window, also while a dialog is open. Double-click does what macOS's "Double-click a window's title bar" setting says (zoom, minimize or nothing). Full screen drops the strip. Windows keeps its native frame. Not yet checked in the running app |
-| Toolbar fits narrow windows | 🟡 | ⬜ | As the toolbar narrows (say a font is selected at the default window size), the count goes first, then Variable shows only its icon and the size slider shortens, then the preview text box and the slider go. Search always keeps room to type |
+| Seamless top bar | 🟡 | n/a | No separate title bar: the window buttons sit in the sidebar's top strip, and the 52px top row (toolbar, page headers, the font page's header) moves the window, also while a dialog is open. Double-click does what macOS's "Double-click a window's title bar" setting says (zoom, minimize or nothing). Full screen drops the strip. Windows keeps its native frame. Not yet checked in the running app |
+| Toolbar fits narrow windows | 🟡 | ⬜ | As the toolbar narrows (a small window), the count goes first, then Variable shows only its icon and the size slider shortens, then the preview text box and the slider go. Search always keeps room to type |
 | Google Fonts: browse, download, update, remove | ✅ | ⬜ | Keyless: Fontsource catalog + google/fonts repo files; downloads go to a managed folder and are turned on. An update downloads only the files that changed upstream (by each file's ETag); unchanged files are reused. If none changed, nothing is turned off or swapped and the page says it was already up to date |
 | Google Fonts: icon fonts (Material Icons, Material Symbols) | 🟡 | ⬜ | The 5 Material Icons styles and the 3 variable Material Symbols come from google/material-design-icons with its Apache 2.0 license (LICENSE.txt), and download, update, remove and turn on like other families. Listed under Icons with Apache-2.0 (Fontsource says OFL). The static "Material Symbols" entry is hidden: it's the same icons as Material Symbols Outlined. Downloaded icon families preview as five icons on the Google Fonts page, and as icons in the library list; Two Tone, a color font drawn in black, draws light in the dark theme. Updates are offered when the files change upstream (asked about on each catalog refresh), not by Fontsource's date, which runs ahead of Google's weekly push. An update in which nothing changed leaves the fonts on and says "already up to date". Checked live (all 8 download and parse); not yet checked in the running app. INTEGRATIONS.md §3.1 |
 | Adobe Fonts: list fonts Creative Cloud turned on | ✅ | ⬜ | Read-only by design (Adobe's terms); links to Adobe; untested with CC installed |
@@ -54,6 +54,19 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Purchases: "newer version available" offer | ✅ | ⬜ | "Replace" instead of "Add to library" when a download has the same store, the purchase's families and some of its fonts (by PostScript name) in different files. Version numbers aren't compared |
 | Open fonts catalog (Fontsource, Noto, Nerd Fonts, open foundries) | ⬜ | ⬜ | INTEGRATIONS.md §3.4 |
 | "Managed by" badges for Monotype Fonts, Connect, Fontstand | ⬜ | ⬜ | INTEGRATIONS.md §3.5 |
+
+## Font page and Back (2026-10-18)
+
+The first stage of the library redesign. Checked with unit tests (`npm run test:ui`) and in a
+browser against a stand-in back end; not yet checked in the running app.
+
+| Feature | macOS | Windows | Notes |
+|---|---|---|---|
+| A click selects; double-click or Return opens | 🟡 | ⬜ | Cmd-click and Shift-click only select. Right-click selects and shows the menu, and never opens. A family row opens its family; a style row opens its family on that style |
+| Font page in the main area | 🟡 | ⬜ | Opens over the list, which stays as it was underneath. Its top row: Back, the family name and style count, a style picker, the family switch (n/total) or the lock, Tags, and More (Show in Finder, Copy PostScript Name). Tag chips with remove buttons sit under it. Tabs: Specimen (waterfall, a paragraph, every style with its own switch), Characters, Axes (variable styles only) and Info (adds full name, file date, and each copy's place with Show in Finder). Right-click anywhere for the tag menu; on a style's line it covers that style. It always shows the whole family; opened from a Variable-only list, the variable style comes first. The tab used last is remembered |
+| Back | 🟡 | ⬜ | The Back button, Cmd+[ (Alt+Left on Windows), the mouse's back button where the system passes it on, and Esc when focus isn't in a text field, menu or popover (in a text field Esc leaves the field first). The list comes back at the same scroll position, with the row that opened the page focused, and "Back to …" is announced. A sidebar click closes the page instead. Cmd+F leaves the page and puts focus in Search |
+| Keyboard in the list | 🟡 | ⬜ | The list is one Tab stop (plus the active row's expand, tag and on/off controls). Up/Down, Home/End and Page Up/Down move and select (Shift extends; Cmd-Up/Down go to the ends), Space adds or removes a row, Right and Left expand and collapse a family, Return opens, Cmd-A selects all, Esc clears, Shift-F10 opens the active row's menu. Screen readers hear each row's name, style count and on/off state |
+| The font leaves the library while its page is open | 🟡 | ⬜ | The page says "This font isn't in your library anymore" and offers Back. A rescan or a removed folder can cause this |
 
 ## Settings (2026-10-12)
 

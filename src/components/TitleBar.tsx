@@ -6,7 +6,7 @@ import { Icon } from "@/components/ui/icon";
 /**
  * On macOS the window has no separate title bar (see src-tauri/tauri.macos.conf.json). The
  * close, minimize and zoom buttons sit in the sidebar's top strip, and the app's 52px top row
- * (sidebar strip, toolbar or page header, detail header) works as the title bar: drag it to move
+ * (sidebar strip, toolbar, or a page's header) works as the title bar: drag it to move
  * the window, double-click it to zoom or minimize, as macOS's own setting says
  * (watchTitleBarDoubleClick). While a dialog is open, a strip over its backdrop keeps the top
  * row working (DialogDragStrip). Windows keeps its native frame and the plain layout.

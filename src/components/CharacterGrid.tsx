@@ -1,33 +1,41 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api, type CharacterBlock, type FontCharacters } from "@/api";
+import { codeLabel, findCharacters, parseCharacterQuery, type CharacterMatch } from "@/characterSearch";
 import type { FaceState } from "@/fontLoader";
 import { Button } from "@/components/ui/button";
+import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
-// The detail panel's character grid: every real character of the face (placeholders and empty
-// slots left out), by Unicode block. Backed by `font_characters`, worked out on demand.
+// The font page's character grid: every real character of the face (placeholders and empty
+// slots left out), by Unicode block, or the ones a search asks for. Backed by
+// `font_characters`, worked out on demand.
 
 export type CharactersState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; data: FontCharacters };
 
-/** Reads a face's characters when the panel opens it. */
-export function useFontCharacters(fontId: number): CharactersState {
-  const [state, setState] = useState<CharactersState>({ status: "loading" });
+/**
+ * Reads a face's characters, once `enabled` (the font page asks only when a tab shows them).
+ * What was read stays while the face is the same, so switching tabs doesn't read it again.
+ */
+export function useFontCharacters(fontId: number, enabled = true): CharactersState {
+  const [read, setRead] = useState<{ id: number; state: CharactersState } | null>(null);
+  const wanted = enabled || read?.id === fontId;
   useEffect(() => {
+    if (!wanted) return;
     let live = true;
-    setState({ status: "loading" });
+    setRead((r) => (r?.id === fontId ? r : { id: fontId, state: { status: "loading" } }));
     api.fontCharacters(fontId).then(
-      (data) => live && setState({ status: "ready", data }),
-      (e) => live && setState({ status: "error", message: String(e) }),
+      (data) => live && setRead({ id: fontId, state: { status: "ready", data } }),
+      (e) => live && setRead({ id: fontId, state: { status: "error", message: String(e) } }),
     );
     return () => {
       live = false;
     };
-  }, [fontId]);
-  return state;
+  }, [fontId, wanted]);
+  return read?.id === fontId ? read.state : { status: "loading" };
 }
 
 /** Shown at first, per block; the rest wait for "Show all". */
@@ -35,7 +43,7 @@ const FIRST_CELLS = 512;
 /** Cell height in px. */
 const CELL = 44;
 
-const hex = (cp: number) => `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+const hex = codeLabel;
 
 const count = (b: CharacterBlock) => b.runs.reduce((n, [a, z]) => n + z - a + 1, 0);
 
@@ -73,26 +81,8 @@ export function characterSetLine(d: FontCharacters, label: string | undefined): 
   return `${label ? `${label} · ` : ""}${plural(d.total, "character")}${where}`;
 }
 
-async function copy(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // Older engines: copy through a hidden text field.
-    const field = document.createElement("textarea");
-    field.value = text;
-    field.style.position = "fixed";
-    field.style.opacity = "0";
-    document.body.appendChild(field);
-    field.select();
-    const ok = document.execCommand("copy");
-    field.remove();
-    return ok;
-  }
-}
-
 async function copyCharacter(cp: number, name: string) {
-  const ok = await copy(String.fromCodePoint(cp));
+  const ok = await copyText(String.fromCodePoint(cp));
   if (ok) toast.success(`Copied ${hex(cp)}`, { description: name ? `Glyph “${name}”` : undefined });
   else toast.error("Couldn't copy that character");
 }
@@ -108,11 +98,13 @@ interface Props {
   /** Whether the face has loaded: cells stay hidden (and out of the Tab order) while it loads,
    *  and aren't shown at all if it can't load. */
   fontState: FaceState;
+  /** A search (see characterSearch.ts): typed characters or U+ codes. Empty shows the blocks. */
+  query?: string;
 }
 
-/** Memoized: the detail panel re-renders on every keystroke in the preview field, and a block
- *  can hold tens of thousands of cells. */
-export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, face, fontVariationSettings, fontState }: Props) {
+/** Memoized: the font page re-renders on every keystroke in the preview field, and a block can
+ *  hold tens of thousands of cells. */
+export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, face, fontVariationSettings, fontState, query = "" }: Props) {
   if (state.status === "loading") return <p className="text-xs text-muted-foreground">Reading characters…</p>;
   if (state.status === "error") return <p className="text-xs text-muted-foreground italic">{state.message}</p>;
   if (fontState !== "loading" && fontState !== "ready") {
@@ -125,7 +117,14 @@ export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, fa
     );
   }
   return (
-    <Grid data={state.data} fontFamily={fontFamily} face={face} fontVariationSettings={fontVariationSettings} ready={fontState === "ready"} />
+    <Grid
+      data={state.data}
+      fontFamily={fontFamily}
+      face={face}
+      fontVariationSettings={fontVariationSettings}
+      ready={fontState === "ready"}
+      query={query}
+    />
   );
 });
 
@@ -135,9 +134,16 @@ interface GridProps {
   face?: string;
   fontVariationSettings?: string;
   ready: boolean;
+  query: string;
 }
 
-function Grid({ data, fontFamily, face, fontVariationSettings, ready }: GridProps) {
+/** "ß (U+00DF), € (U+20AC) and 3 more". */
+function listCodes(cps: number[], max = 12): string {
+  const shown = cps.slice(0, max).map((cp) => `${String.fromCodePoint(cp)} (${hex(cp)})`);
+  return cps.length > max ? `${shown.join(", ")} and ${(cps.length - max).toLocaleString()} more` : shown.join(", ");
+}
+
+function Grid({ data, fontFamily, face, fontVariationSettings, ready, query }: GridProps) {
   const dominant = useMemo(() => [...data.blocks].sort((a, b) => count(b) - count(a))[0]?.name ?? "", [data]);
   const [blockName, setBlockName] = useState(dominant);
   const [showAll, setShowAll] = useState(false);
@@ -148,10 +154,13 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready }: GridProp
   useEffect(() => {
     setBlockName(dominant);
   }, [dominant]);
+  const searching = query.trim().length > 0;
+  const wanted = useMemo(() => parseCharacterQuery(query), [query]);
+  const results = useMemo(() => (searching ? findCharacters(data.blocks, wanted) : null), [searching, data, wanted]);
   useEffect(() => {
     setShowAll(false);
     setFocus(0);
-  }, [blockName]);
+  }, [blockName, query]);
   useEffect(() => {
     if (!showAll || !focusFirstNew.current) return;
     focusFirstNew.current = false;
@@ -159,7 +168,10 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready }: GridProp
   }, [showAll]);
 
   const block = data.blocks.find((b) => b.name === blockName) ?? data.blocks[0];
-  const all = useMemo(() => (block ? codePoints(block) : []), [block]);
+  const all = useMemo<CharacterMatch[]>(
+    () => (results ? results.found : block ? codePoints(block).map((cp, i) => ({ cp, name: block.glyphNames[i] ?? "" })) : []),
+    [results, block],
+  );
   const shown = showAll ? all : all.slice(0, FIRST_CELLS);
 
   // Cells fit the ink most characters stay within, centred; outliers may be cut at the edge.
@@ -196,10 +208,22 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready }: GridProp
   };
 
   if (!block) return <p className="text-xs text-muted-foreground">{charactersSummary(data)}</p>;
+  const label = results ? `Characters found for “${query.trim()}”. Arrow keys move; Enter copies.` : `Characters in ${block.name}. Arrow keys move; Enter copies.`;
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs text-muted-foreground">{charactersSummary(data)}</p>
-      {data.blocks.length > 1 && (
+      {results ? (
+        // Read out as the results change.
+        <p className="text-xs text-muted-foreground" role="status">
+          {!wanted.length
+            ? "Type a character, or a code such as U+00DF."
+            : results.found.length === 0
+              ? `Not in this font: ${listCodes(results.missing)}.`
+              : `${plural(results.found.length, "character")} found.${results.missing.length ? ` Not in this font: ${listCodes(results.missing)}.` : ""}`}
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">{charactersSummary(data)}</p>
+      )}
+      {!results && data.blocks.length > 1 && (
         <div role="group" aria-label="Unicode blocks" className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
           {data.blocks.map((b) => (
             <Button
@@ -219,14 +243,14 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready }: GridProp
         ref={gridRef}
         role="group"
         data-face={face}
-        aria-label={`Characters in ${block.name}. Arrow keys move; Enter copies.`}
+        aria-label={label}
         // Hidden while the face loads: out of the Tab order too, so focus can't land on it.
         inert={!ready}
         className={cn("grid grid-cols-[repeat(auto-fill,minmax(2.75rem,1fr))] gap-1 transition-opacity", !ready && "preview-loading")}
         onKeyDown={onKeyDown}
       >
-        {shown.map((cp, i) => (
-          <Cell key={cp} cp={cp} index={i} name={block.glyphNames[i] ?? ""} tabbable={i === focus} glyphStyle={glyphStyle} onFocusCell={setFocus} onCopy={onCopy} />
+        {shown.map(({ cp, name }, i) => (
+          <Cell key={cp} cp={cp} index={i} name={name} tabbable={i === focus} glyphStyle={glyphStyle} onFocusCell={setFocus} onCopy={onCopy} />
         ))}
       </div>
       {!showAll && all.length > FIRST_CELLS && (

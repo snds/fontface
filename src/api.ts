@@ -344,6 +344,8 @@ export type ActivationMode = "persistent" | "temporary";
 export type SwitchOrigin = "switch" | "arrival";
 /** What launch does with fonts that were on last time but aren't on now. */
 export type RestorePolicy = "always" | "ask" | "never";
+/** A font page's tabs. "axes" shows only for variable styles (the page falls back to "specimen"). */
+export type FontPageTab = "specimen" | "characters" | "axes" | "info";
 
 export interface SidebarSections {
   fontBook: boolean;
@@ -375,6 +377,8 @@ export interface AppSettings {
   tagBackups: boolean;
   /** 1–50 (clamped). */
   tagBackupKeep: number;
+  /** The font page tab used last; the next font page opens on it. */
+  fontPageTab: FontPageTab;
 }
 
 /** Only the keys given change; `sidebar` may be partial too. */

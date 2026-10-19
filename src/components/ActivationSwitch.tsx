@@ -11,6 +11,8 @@ interface Props {
   label: string;
   /** A request for these fonts is queued or running: show progress and ignore clicks. */
   busy?: boolean;
+  /** -1 keeps it out of the Tab order (a list row that isn't the active one). */
+  tabIndex?: number;
   onChange: (next: boolean) => void;
 }
 
@@ -18,7 +20,7 @@ interface Props {
  * The on/off control for activation. When only some faces in a family are on, the switch
  * reads as off with an "n/total" count beside it, and switching it turns them all on.
  */
-export function ActivationSwitch({ active, total, label, busy = false, onChange }: Props) {
+export function ActivationSwitch({ active, total, label, busy = false, tabIndex, onChange }: Props) {
   const all = total > 0 && active === total;
   const partial = active > 0 && !all;
   return (
@@ -36,6 +38,7 @@ export function ActivationSwitch({ active, total, label, busy = false, onChange 
         aria-busy={busy}
         onCheckedChange={(on) => onChange(on)}
         aria-label={label}
+        tabIndex={tabIndex}
         className={cn("data-checked:bg-active", partial && "data-unchecked:bg-active/40")}
       />
     </span>

@@ -1,0 +1,94 @@
+// Run with `npm run test:ui`. The page stack over the library list and its Back keys (nav.ts).
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { backKeyIntent, EMPTY_NAV, isBackShortcut, navReducer, topPage, type KeyLike, type NavState, type NewPage } from "./nav.ts";
+
+const page = (faceKey: string, styleKey = faceKey): NewPage => ({ kind: "font", faceKey, styleKey, tab: "specimen", returnTo: `f:${faceKey}` });
+
+const open = (state: NavState, p: NewPage) => navReducer(state, { type: "open", page: p });
+
+const key = (k: string, mods: Partial<KeyLike> = {}): KeyLike => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
+
+test("opening pushes a page with its own id; Back pops it", () => {
+  const one = open(EMPTY_NAV, page("ps:Inter-Regular"));
+  assert.equal(one.pages.length, 1);
+  assert.equal(topPage(one)?.faceKey, "ps:Inter-Regular");
+  assert.equal(topPage(one)?.id, 1);
+  const two = open(one, page("ps:Lora-Regular"));
+  assert.deepEqual(
+    two.pages.map((p) => p.id),
+    [1, 2],
+  );
+  const back = navReducer(two, { type: "back" });
+  assert.equal(topPage(back)?.faceKey, "ps:Inter-Regular");
+  // Ids are never reused, so a page opened after Back gets a fresh React tree.
+  assert.equal(topPage(open(back, page("ps:Lora-Regular")))?.id, 3);
+});
+
+test("opening the font already on top changes nothing", () => {
+  const one = open(EMPTY_NAV, page("ps:Inter-Regular"));
+  assert.equal(open(one, page("ps:Inter-Regular")), one);
+  // Another style of it is a new page.
+  assert.equal(open(one, page("ps:Inter-Regular", "ps:Inter-Bold")).pages.length, 2);
+});
+
+test("Back and clear with nothing open return the same state", () => {
+  assert.equal(navReducer(EMPTY_NAV, { type: "back" }), EMPTY_NAV);
+  assert.equal(navReducer(EMPTY_NAV, { type: "clear" }), EMPTY_NAV);
+});
+
+test("a sidebar click clears every page", () => {
+  const two = open(open(EMPTY_NAV, page("a")), page("b"));
+  const cleared = navReducer(two, { type: "clear" });
+  assert.deepEqual(cleared.pages, []);
+  assert.equal(cleared.nextId, two.nextId, "ids keep counting");
+});
+
+test("update changes only the named page, and only when something differs", () => {
+  const two = open(open(EMPTY_NAV, page("a")), page("b"));
+  const styled = navReducer(two, { type: "update", id: 1, patch: { styleKey: "a-bold", tab: "info" } });
+  assert.deepEqual(
+    styled.pages.map((p) => [p.styleKey, p.tab]),
+    [
+      ["a-bold", "info"],
+      ["b", "specimen"],
+    ],
+  );
+  assert.equal(styled.pages[1], two.pages[1], "the other page is untouched");
+  assert.equal(navReducer(styled, { type: "update", id: 1, patch: { tab: "info" } }), styled);
+  assert.equal(navReducer(styled, { type: "update", id: 99, patch: { tab: "axes" } }), styled);
+});
+
+test("Back shortcut: Cmd+[ on macOS, Alt+Left on Windows", () => {
+  assert.ok(isBackShortcut(key("[", { metaKey: true }), true));
+  // Layouts where "[" needs Option still report the physical key.
+  assert.ok(isBackShortcut(key("“", { metaKey: true, code: "BracketLeft" }), true));
+  assert.ok(!isBackShortcut(key("[", { metaKey: true, shiftKey: true }), true));
+  assert.ok(!isBackShortcut(key("[", { ctrlKey: true }), true));
+  assert.ok(!isBackShortcut(key("ArrowLeft", { altKey: true }), true));
+  assert.ok(isBackShortcut(key("ArrowLeft", { altKey: true }), false));
+  assert.ok(!isBackShortcut(key("[", { metaKey: true }), false));
+  assert.ok(!isBackShortcut(key("ArrowLeft"), false));
+});
+
+test("Esc goes back outside text fields, menus and popovers", () => {
+  const mac = { mac: true, blocked: false };
+  assert.equal(backKeyIntent(key("Escape"), { ...mac, focus: "other" }), "back");
+  // In a text field Esc first leaves the field; the next Esc goes back.
+  assert.equal(backKeyIntent(key("Escape"), { ...mac, focus: "text" }), "leave-field");
+  assert.equal(backKeyIntent(key("Escape"), { ...mac, focus: "popup" }), null);
+  // Already handled: a popover closing, or a search box clearing its text.
+  assert.equal(backKeyIntent(key("Escape", { defaultPrevented: true }), { ...mac, focus: "other" }), null);
+  assert.equal(backKeyIntent(key("Escape", { isComposing: true }), { ...mac, focus: "other" }), null);
+  assert.equal(backKeyIntent(key("Escape", { shiftKey: true }), { ...mac, focus: "other" }), null);
+  assert.equal(backKeyIntent(key("x"), { ...mac, focus: "other" }), null);
+});
+
+test("Cmd+[ works from a text field, but not from a menu, and nothing works while blocked", () => {
+  const cmd = key("[", { metaKey: true });
+  assert.equal(backKeyIntent(cmd, { mac: true, focus: "text", blocked: false }), "back");
+  assert.equal(backKeyIntent(cmd, { mac: true, focus: "popup", blocked: false }), null);
+  // Settings over the page, a dialog open, or a drag under way.
+  assert.equal(backKeyIntent(cmd, { mac: true, focus: "other", blocked: true }), null);
+  assert.equal(backKeyIntent(key("Escape"), { mac: true, focus: "other", blocked: true }), null);
+});

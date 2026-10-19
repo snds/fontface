@@ -103,7 +103,7 @@ test("a row whose request was sent can't drop a newer row's request for the same
   frame();
   assert.deepEqual(calls[0].items, ["K"]);
   await settle(0); // say "retry": the family row stays mounted, drawing the name
-  // Later, the detail panel wants the same face, while another call holds the queue.
+  // Later, the font page wants the same face, while another call holds the queue.
   queue.want("other", "other");
   frame();
   assert.equal(calls.length, 2);

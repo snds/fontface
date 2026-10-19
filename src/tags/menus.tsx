@@ -99,15 +99,18 @@ function ColorSub({ kit, value, defaultColor, onPick }: { kit: Kit; value: TagCo
 
 const failed = (what: string) => (e: unknown) => toast.error(`Couldn't ${what}`, { description: String(e) });
 
+/** Shift-F10 (fn-Shift-F10 on most Mac keyboards) or the Menu key. */
+export const isMenuKey = (e: React.KeyboardEvent) => e.key === "ContextMenu" || (e.shiftKey && e.key === "F10");
+
 /**
- * Opens a right-click menu from the keyboard: Shift-F10 (fn-Shift-F10 on most Mac keyboards)
- * or the Menu key, on whatever has focus. The web view doesn't do this by itself. Returns true
- * if it handled the key. (VoiceOver's own VO-Shift-M works too.)
+ * Opens a right-click menu from the keyboard: Shift-F10 or the Menu key, on whatever has focus
+ * (or on `on`: a list's active row, while the list itself has focus). The web view doesn't do
+ * this by itself. Returns true if it handled the key. (VoiceOver's own VO-Shift-M works too.)
  */
-export function openMenuFromKeyboard(e: React.KeyboardEvent): boolean {
-  if (!(e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) return false;
+export function openMenuFromKeyboard(e: React.KeyboardEvent, on?: HTMLElement | null): boolean {
+  if (!isMenuKey(e)) return false;
   e.preventDefault();
-  const el = e.target as HTMLElement;
+  const el = on ?? (e.target as HTMLElement);
   const box = el.getBoundingClientRect();
   el.dispatchEvent(
     new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: box.left + 12, clientY: box.top + box.height / 2 }),

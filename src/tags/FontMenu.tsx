@@ -1,7 +1,5 @@
 import type { Face } from "@/library";
 import {
-  ContextMenu,
-  ContextMenuContent,
   ContextMenuGroup,
   ContextMenuItem,
   ContextMenuLabel,
@@ -9,14 +7,13 @@ import {
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
-  ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { SyncFontMenuItems } from "@/sync/SyncFontMenu";
 import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
-import { CONTEXT, GroupedTags, openMenuFromKeyboard } from "./menus";
-import { tagCoverage, useTagIndex, type TagIndex } from "./model";
+import { CONTEXT, GroupedTags } from "./menus";
+import { tagCoverage, type TagIndex } from "./model";
 import { applyTags } from "./TagPicker";
 
 const subContent = "max-h-[min(26rem,var(--available-height))] min-w-52 overflow-y-auto shadow-lg";
@@ -33,7 +30,7 @@ export function describeFaces(faces: Face[]): string {
 }
 
 /**
- * The tag part of a font's right-click menu (list rows, a selection, the detail panel):
+ * The tag part of a font's right-click menu (list rows, a selection, the font page):
  * Add to tag (the tag tree, Find a tag…, New tag…) and Remove from tag (the tags they have).
  * Menus also jump to an item when you type the first letters of its name.
  */
@@ -125,32 +122,5 @@ export function FontTagMenuItems({ faces, index }: { faces: Face[]; index: TagIn
       </ContextMenuSub>
       <SyncFontMenuItems faces={faces} />
     </>
-  );
-}
-
-/** Right-clicking selected text or a field keeps the normal menu (Copy, Paste). */
-function keepNativeMenu(e: React.MouseEvent) {
-  const selection = window.getSelection();
-  const target = e.target as HTMLElement;
-  if ((selection && !selection.isCollapsed && selection.toString().trim()) || target.closest("input, textarea, [role=slider]")) {
-    e.stopPropagation();
-  }
-}
-
-/**
- * Right-click anywhere in `render` (or focus it and press Shift-F10) for the tag menu of
- * `faces`. Used by the detail panel.
- */
-export function FontContextMenu({ faces, render, children }: { faces: Face[]; render: React.ReactElement; children: React.ReactNode }) {
-  const index = useTagIndex();
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger render={render} onContextMenuCapture={keepNativeMenu} onKeyDown={(e) => openMenuFromKeyboard(e)}>
-        {children}
-      </ContextMenuTrigger>
-      <ContextMenuContent className="min-w-56">
-        <FontTagMenuItems faces={faces} index={index} />
-      </ContextMenuContent>
-    </ContextMenu>
   );
 }

@@ -4,7 +4,7 @@ import { tagsApi, type Tag, type TagColor } from "./api";
 
 /**
  * Tags and location colors, shared by every component that shows them. One small store
- * instead of props threaded through App: the sidebar, the list and the detail panel all read
+ * instead of props threaded through App: the sidebar, the list and the font page all read
  * it, and changes show everywhere at once.
  */
 export interface OrganizeState {

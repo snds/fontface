@@ -20,13 +20,13 @@ import {
   activationIds,
   filterFamilies,
   groupFamilies,
+  INSTALLED_LABEL,
   onlyInOsFolders,
   viewKey,
-  type Face,
+  type Family,
   type LibraryView,
   type StatusFilter,
 } from "@/library";
-import { faceName } from "@/fontLoader";
 import { newestWins } from "@/newestWins";
 import { listenForProfiles } from "@/previewProfiles";
 import {
@@ -45,9 +45,9 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { SETTINGS_BUTTON_ID, Sidebar, scanStatus } from "@/components/Sidebar";
-import { Toolbar } from "@/components/Toolbar";
-import { FontList } from "@/components/FontList";
-import { DetailPanel } from "@/components/DetailPanel";
+import { LIBRARY_SEARCH_ID, Toolbar } from "@/components/Toolbar";
+import { FontList, type ListHandle, type OpenRequest } from "@/components/FontList";
+import { FontPage } from "@/components/fontPage/FontPage";
 import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
@@ -55,7 +55,7 @@ import { IS_MAC } from "@/components/TitleBar";
 import { cancelDrag, isDragging } from "@/tags/drag";
 import { locateFolder } from "@/tags/locate";
 import { useLocations } from "@/tags/locations";
-import { useFilterContext } from "@/tags/model";
+import { leafOf, useFilterContext, useTagIndex } from "@/tags/model";
 import { TagDialogHost } from "@/tags/TagDialogs";
 import { hiddenBySidebar, useLastView } from "@/settings/lastView";
 import type { SectionId } from "@/settings/parts";
@@ -64,6 +64,7 @@ import { SETTINGS_SEARCH_ID, SettingsScreen } from "@/settings/SettingsView";
 import { applyTheme, useDarkTheme } from "@/settings/theme";
 import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/useSettings";
 import { useSyncEvents } from "@/sync/store";
+import { useNav } from "@/useNav";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
@@ -87,8 +88,8 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [previewText, setPreviewText] = useState("");
   const [size, setSize] = useState(32);
+  /** Expanded families in the list, by Family.id. */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<number>();
   const [scans, setScans] = useState<Map<number, ScanProgress>>(new Map());
   const [pendingRemoval, setPendingRemoval] = useState<Folder | null>(null);
   /** Files with an on/off request queued or in progress. The OS acts on whole files, so every
@@ -192,6 +193,64 @@ export default function App() {
       target?.focus();
     });
   }, []);
+
+  // ------------------------------------------------------------------ pages and Back
+
+  // Pages (the font page) open over the list, which stays as it was underneath (see nav.ts).
+  // Back puts focus on the row that opened the page; ⌘F leaves the page for Search.
+  const listRef = useRef<ListHandle>(null);
+  const pendingFocus = useRef<{ row: string | null } | "search" | null>(null);
+  const placeNameRef = useRef("All Fonts");
+  const nav = useNav({
+    // Settings over the page take Esc themselves; a drag takes Esc to cancel.
+    blocked: () => settingsOpenRef.current || isDragging(),
+    onBack: (closed, remaining) => {
+      if (remaining.length) return;
+      pendingFocus.current = { row: closed.returnTo };
+      announce(`Back to ${placeNameRef.current}`);
+    },
+  });
+  const pageOpen = nav.pages.length > 0;
+  const focusSearch = () => {
+    const search = document.getElementById(LIBRARY_SEARCH_ID);
+    if (search instanceof HTMLInputElement) {
+      search.focus();
+      search.select();
+      return true;
+    }
+    return false;
+  };
+  useEffect(() => {
+    if (pageOpen) return;
+    const want = pendingFocus.current;
+    pendingFocus.current = null;
+    if (!want) return;
+    if (want !== "search" && listRef.current) listRef.current.focusRow(want.row);
+    else if (!focusSearch()) document.querySelector<HTMLElement>("main")?.focus();
+  }, [pageOpen]);
+  const { clear: clearPages } = nav;
+  /** A sidebar click (or another way of going somewhere): the place changes and every page closes. */
+  const goToPlace = useCallback(
+    (v: LibraryView) => {
+      setView(v);
+      clearPages();
+    },
+    [clearPages],
+  );
+  // ⌘F (Ctrl+F on Windows) goes to Search, leaving a font page if one is open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "f" || !(IS_MAC ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (settingsOpenRef.current || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      if (pageOpen) {
+        e.preventDefault();
+        pendingFocus.current = "search";
+        clearPages();
+      } else if (focusSearch()) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pageOpen, clearPages]);
 
   // Another app (Typeface, Font Book) may have turned fonts on or off while this window was in
   // the background. Re-read the OS state when it comes back to the front.
@@ -318,7 +377,7 @@ export default function App() {
         action: {
           label: "Review",
           onClick: () => {
-            setView({ kind: "service", id: "purchases" });
+            goToPlace({ kind: "service", id: "purchases" });
             // The page opens in the library, so leave settings if they're open.
             closeSettings();
           },
@@ -329,7 +388,7 @@ export default function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [countNewPurchases, closeSettings]);
+  }, [countNewPurchases, closeSettings, goToPlace]);
 
   // A folder view whose folder is gone (e.g. removed while a removal was still running) falls
   // back to All Fonts.
@@ -403,7 +462,7 @@ export default function App() {
     try {
       const folder = await api.addFolder(path);
       await refresh();
-      setView({ kind: "folder", id: folder.id });
+      goToPlace({ kind: "folder", id: folder.id });
       await scan(folder);
     } catch (e) {
       toast.error("Couldn't add that folder", { description: String(e) });
@@ -783,14 +842,27 @@ export default function App() {
     () => filterFamilies(allFamilies, view, { status, query, variableOnly, hideInstalled }, filterContext),
     [allFamilies, view, status, query, variableOnly, hideInstalled, filterContext],
   );
-  const faceById = useMemo(() => {
-    const map = new Map<number, Face>();
-    for (const family of allFamilies) for (const face of family.faces) for (const c of face.copies) map.set(c.id, face);
+  // A font page finds its family by face key, whatever the list shows (filters don't apply there).
+  const familyOfFace = useMemo(() => {
+    const map = new Map<string, Family>();
+    for (const family of allFamilies) for (const face of family.faces) map.set(face.key, family);
     return map;
   }, [allFamilies]);
-  const selected = selectedId === undefined ? undefined : faceById.get(selectedId);
-  // Service pages have their own layout; the selection comes back with the library views.
-  const showDetail = !!selected && view.kind !== "service";
+  const tagIndex = useTagIndex();
+  // What Back goes back to, in words.
+  const placeName =
+    view.kind === "all"
+      ? "All Fonts"
+      : view.kind === "installed"
+        ? INSTALLED_LABEL
+        : view.kind === "folder"
+          ? (folders.find((f) => f.id === view.id)?.label ?? "the folder")
+          : view.kind === "tag"
+            ? leafOf(tagIndex.byId.get(view.id)?.name ?? "the tag")
+            : view.kind === "location"
+              ? (view.path.split("/").pop() ?? "the folder")
+              : { google: "Google Fonts", adobe: "Adobe Fonts", purchases: "Purchases" }[view.id];
+  placeNameRef.current = placeName;
   const styleCount = useMemo(() => families.reduce((n, f) => n + f.faces.length, 0), [families]);
   const counts = useMemo(() => {
     let all = 0;
@@ -826,23 +898,27 @@ export default function App() {
     },
   });
 
-  const toggleExpanded = (name: string) =>
+  const toggleExpanded = (familyId: string) =>
     setExpanded((s) => {
       const next = new Set(s);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
+      if (next.has(familyId)) next.delete(familyId);
+      else next.add(familyId);
       return next;
     });
+
+  /** Double-click or Return on a row: the family's page, on the last tab used. */
+  const openFont = (r: OpenRequest) => {
+    nav.open({ kind: "font", faceKey: r.faceKey, styleKey: r.styleKey, tab: settings?.fontPageTab ?? "specimen", returnTo: r.rowKey });
+    announce(`Opened ${r.name}`);
+  };
+  const revealFont = (id: number) => api.revealFont(id).catch((e) => toast.error(String(e)));
 
   return (
     <SettingsContext.Provider value={settingsStore}>
       <TooltipProvider>
         <div className="relative h-full">
           {/* While settings are open, the library stays as it was, hidden and out of reach underneath. */}
-          <div
-            inert={settingsOpen}
-            className={cn("grid h-full", settingsOpen && "invisible", showDetail ? "grid-cols-[240px_1fr_clamp(272px,30vw,360px)]" : "grid-cols-[240px_1fr]")}
-          >
+          <div inert={settingsOpen} className={cn("grid h-full grid-cols-[240px_1fr]", settingsOpen && "invisible")}>
             <Sidebar
               folders={folders}
               counts={counts}
@@ -854,7 +930,7 @@ export default function App() {
               view={view}
               scans={scans}
               show={sidebarShows}
-              onView={setView}
+              onView={goToPlace}
               onAddFolder={addFolder}
               onRemoveFolder={setPendingRemoval}
               onRescan={(f) => scan(f)}
@@ -862,7 +938,10 @@ export default function App() {
               onOpenSettings={openSettings}
               onLocateFolder={relocate}
             />
-            <main className="flex min-h-0 min-w-0 flex-col">
+            <main className="relative flex min-h-0 min-w-0 flex-col outline-none" tabIndex={-1}>
+              {/* The list layer: the place picked in the sidebar. While a page is open it stays as it
+                  was (scroll, selection, loaded previews), hidden and out of reach underneath. */}
+              <div inert={pageOpen} className={cn("flex min-h-0 flex-1 flex-col", pageOpen && "invisible")}>
               {view.kind === "service" ? (
                 view.id === "google" ? (
                   <GoogleFontsPanel
@@ -907,18 +986,18 @@ export default function App() {
               />
               {families.length > 0 ? (
                 <FontList
+                  ref={listRef}
                   families={families}
                   expanded={expanded}
                   onToggleExpanded={toggleExpanded}
                   previewText={previewText}
                   size={size}
-                  selectedId={selectedId}
                   busy={busy}
                   resetKey={resetKey}
                   allFamilies={allFamilies}
                   locations={locations}
-                  onSelect={setSelectedId}
                   onActivate={setActivation}
+                  onOpen={openFont}
                 />
               ) : viewScan ? (
                 <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
@@ -955,20 +1034,31 @@ export default function App() {
               )}
               </>
               )}
+              </div>
+              {/* The page layer: only the top page shows; any under it stay as they were. */}
+              {nav.pages.map((page, i) => {
+                const covered = i < nav.pages.length - 1;
+                return (
+                  <div key={page.id} inert={covered} className={cn("absolute inset-0 flex flex-col bg-background", covered && "invisible")}>
+                    <FontPage
+                      page={page}
+                      family={familyOfFace.get(page.styleKey) ?? familyOfFace.get(page.faceKey)}
+                      placeName={placeName}
+                      previewText={previewText}
+                      busy={busy}
+                      locations={locations}
+                      onBack={nav.back}
+                      onChange={(patch) => {
+                        nav.update(page.id, patch);
+                        if (patch.tab && patch.tab !== settings?.fontPageTab) settingsStore.update({ fontPageTab: patch.tab });
+                      }}
+                      onActivate={setActivation}
+                      onReveal={revealFont}
+                    />
+                  </div>
+                );
+              })}
             </main>
-            {showDetail && selected && (
-              <DetailPanel
-                // Remount when the file changes, so its info and axes are re-read too.
-                key={faceName(selected.primary)}
-                face={selected}
-                previewText={previewText}
-                busy={selected.copies.some((c) => busy.has(c.path))}
-                locations={locations}
-                onClose={() => setSelectedId(undefined)}
-                onActivate={setActivation}
-                onReveal={(id) => api.revealFont(id).catch((e) => toast.error(String(e)))}
-              />
-            )}
           </div>
           {settingsOpen && (
             <SettingsScreen
@@ -985,7 +1075,7 @@ export default function App() {
                 countNewPurchases();
               }}
               onOpenPurchases={() => {
-                setView({ kind: "service", id: "purchases" });
+                goToPlace({ kind: "service", id: "purchases" });
                 closeSettings();
               }}
             />

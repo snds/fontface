@@ -54,6 +54,18 @@ pub enum RestorePolicy {
     Never,
 }
 
+/// The font page tab used last; the next font page opens on it. The page shows Axes only for a
+/// variable style and falls back to Specimen otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FontPageTab {
+    #[default]
+    Specimen,
+    Characters,
+    Axes,
+    Info,
+}
+
 /// Which sections the sidebar shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -98,6 +110,8 @@ pub struct AppSettings {
     pub restore_on_launch: RestorePolicy,
     pub tag_backups: bool,
     pub tag_backup_keep: u32,
+    /// Remembered by the UI, not chosen in the settings screen.
+    pub font_page_tab: FontPageTab,
 }
 
 impl Default for AppSettings {
@@ -117,6 +131,7 @@ impl Default for AppSettings {
             restore_on_launch: RestorePolicy::Always,
             tag_backups: true,
             tag_backup_keep: 10,
+            font_page_tab: FontPageTab::Specimen,
         }
     }
 }
@@ -185,6 +200,18 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
         }
         "tagBackups" => s.tag_backups = flag(value, "Back up tags")?,
         "tagBackupKeep" => s.tag_backup_keep = number(value, "Backups to keep", BACKUP_KEEP)?,
+        "fontPageTab" => {
+            s.font_page_tab = choice(
+                value,
+                "The font page tab",
+                &[
+                    ("specimen", FontPageTab::Specimen),
+                    ("characters", FontPageTab::Characters),
+                    ("axes", FontPageTab::Axes),
+                    ("info", FontPageTab::Info),
+                ],
+            )?
+        }
         // A setting from a newer Fontface, or a typo: ignored.
         _ => {}
     }

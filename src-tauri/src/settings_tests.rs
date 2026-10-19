@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::{
     activation::{launch_plan, temporary_after_swap, turn_on_plan, LaunchPlan, Scope, TurnOn},
     backups, db,
-    settings::{self, ActivationMode, AppSettings, RestorePolicy, SidebarSections, Theme},
+    settings::{self, ActivationMode, AppSettings, FontPageTab, RestorePolicy, SidebarSections, Theme},
     tags,
     window::{self, DoubleClick},
 };
@@ -50,6 +50,7 @@ fn defaults_match_the_spec() {
     assert_eq!(d.restore_on_launch, RestorePolicy::Always);
     assert!(d.tag_backups);
     assert_eq!(d.tag_backup_keep, 10);
+    assert_eq!(d.font_page_tab, FontPageTab::Specimen);
 }
 
 #[test]
@@ -71,7 +72,8 @@ fn serializes_in_the_shape_the_ui_expects() {
             "clearTemporaryOnQuit": false,
             "restoreOnLaunch": "always",
             "tagBackups": true,
-            "tagBackupKeep": 10
+            "tagBackupKeep": 10,
+            "fontPageTab": "specimen"
         })
     );
 }
@@ -179,6 +181,8 @@ fn bad_values_are_refused_in_plain_words_and_change_nothing() {
     assert_eq!(msg, "“Open at login” must be on or off");
     let msg = error_text(settings::apply_patch(&d, &json!({ "previewSize": "big" })));
     assert_eq!(msg, "Preview size must be a number");
+    let msg = error_text(settings::apply_patch(&d, &json!({ "fontPageTab": "opentype" })));
+    assert_eq!(msg, "The font page tab must be “specimen”, “characters”, “axes” or “info”");
     assert!(settings::apply_patch(&d, &json!({ "sidebar": true })).is_err());
     assert!(settings::apply_patch(&d, &json!({ "sidebar": { "tags": "no" } })).is_err());
     assert!(settings::apply_patch(&d, &json!({ "previewText": 12 })).is_err());
@@ -216,6 +220,7 @@ fn every_setting_can_be_changed_by_a_patch() {
         restore_on_launch: RestorePolicy::Never,
         tag_backups: false,
         tag_backup_keep: 3,
+        font_page_tab: FontPageTab::Characters,
     };
     let patch = serde_json::to_value(&custom).unwrap();
     assert_eq!(settings::apply_patch(&AppSettings::default(), &patch).unwrap(), custom);

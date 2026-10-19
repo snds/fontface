@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   restoreOnLaunch: "always",
   tagBackups: true,
   tagBackupKeep: 10,
+  fontPageTab: "specimen",
 };
 
 export interface Settings {
