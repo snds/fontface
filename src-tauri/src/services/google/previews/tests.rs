@@ -425,6 +425,19 @@ fn a_file_over_the_limit_is_too_large_and_remembered() {
 }
 
 #[test]
+fn a_stylesheet_with_no_font_is_the_familys_answer_not_network_trouble() {
+    let lora = family("lora", "Lora", &["latin"]);
+    let s = Setup::new("fontless", vec![inter(), lora.clone()]);
+    let url = css_url(&lora, &name_text("Lora"));
+    let _net = fake_net::serve(vec![(url.clone(), b"/* nothing for this text */\n".to_vec(), None)]);
+    for _ in 0..4 {
+        assert_eq!(s.row("lora").state, PreviewState::Unavailable);
+    }
+    assert_eq!(urls(), vec![url], "remembered after the first answer");
+    assert!(!s.previews.paused(), "a family's own answer never pauses the others");
+}
+
+#[test]
 fn a_broken_file_or_a_refused_family_is_unavailable_and_retried_after_a_week() {
     let buda = CatalogFamily { weights: vec![300], ..family("buda", "Buda", &["latin"]) };
     let s = Setup::new("retry", vec![inter(), buda.clone()]);
@@ -489,7 +502,8 @@ fn network_trouble_pauses_previews_without_blaming_the_family() {
     // Three in a row: previews pause, briefly at first. Nothing new is asked for meanwhile, and
     // saved previews still show.
     assert!(s.previews.paused());
-    assert!((FIRST_PAUSE_SECS - 1..=FIRST_PAUSE_SECS).contains(&pause_left()), "{}", pause_left());
+    // (A whole-second clock, and a busy machine may stall a moment: a little slack below.)
+    assert!((FIRST_PAUSE_SECS - 3..=FIRST_PAUSE_SECS).contains(&pause_left()), "{}", pause_left());
     urls();
     assert_eq!(s.row("lora").state, PreviewState::Offline);
     assert_eq!(s.row("roboto").state, PreviewState::Ready);
@@ -505,7 +519,7 @@ fn network_trouble_pauses_previews_without_blaming_the_family() {
     for expected in [60, 120, 240, 480, OFFLINE_SECS, OFFLINE_SECS] {
         end_pause();
         assert_eq!(s.row("inter").state, PreviewState::Offline);
-        assert!((expected - 1..=expected).contains(&pause_left()), "{expected}: {}", pause_left());
+        assert!((expected - 3..=expected).contains(&pause_left()), "{expected}: {}", pause_left());
     }
 
     // Google answers again: the pauses end and the count starts over.

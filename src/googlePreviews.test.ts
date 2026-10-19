@@ -156,7 +156,7 @@ test("files and final failures are kept for the session; the rest are asked agai
   assert.equal(keepAnswerUntil({ state: "tooLarge" }, now), Infinity);
   assert.equal(keepAnswerUntil({ state: "offline" }, now), now + RETRY_OFFLINE_MS);
   assert.equal(keepAnswerUntil(null, now), now + RETRY_OFFLINE_MS, "the call itself failed");
-  assert.ok(RETRY_OFFLINE_MS <= 30_000, "no longer than Rust's first pause after network trouble");
+  assert.ok(RETRY_OFFLINE_MS > 30_000 && RETRY_OFFLINE_MS <= 32_000, "just past Rust's first pause after network trouble");
 });
 
 test("an 'off' answer is asked again in a moment, not kept for a minute, and isn't shown as off", () => {

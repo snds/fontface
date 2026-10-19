@@ -484,6 +484,13 @@ fn font_url(css: &str) -> Option<String> {
     found
 }
 
+/// Whether Google's answer is a stylesheet with no font in it: CSS (or nothing), not a web page,
+/// and no `url(` anywhere.
+fn fontless_css(css: &str) -> bool {
+    let text = css.trim_start().to_ascii_lowercase();
+    !text.contains("url(") && !text.starts_with('<') && !text.contains("<html") && !text.contains("<!doctype")
+}
+
 // ------------------------------------------------------------------------------------- cache
 
 /// The saved catalog, by id, while its file is unchanged.
@@ -772,9 +779,17 @@ impl Previews {
             Ok(css) => css,
             Err(e) => return self.failed(e, remember),
         };
-        let Some(url) = font_url(&String::from_utf8_lossy(&css)) else {
-            // Not Google's usual answer (no font, or a font somewhere else): something between
-            // here and Google is off (a Wi-Fi sign-in page, say), so it counts as network trouble.
+        let css = String::from_utf8_lossy(&css);
+        let Some(url) = font_url(&css) else {
+            // A stylesheet with no font in it at all is Google's answer about this family, so it's
+            // remembered like a "no" (and a family that always answers so can't keep pausing
+            // every other row). Anything else (a Wi-Fi sign-in page, a font somewhere else) means
+            // something between here and Google is off: network trouble.
+            if fontless_css(&css) {
+                self.network_fine();
+                remember(Why::NotFound);
+                return Got::Not(PreviewState::Unavailable);
+            }
             self.network_trouble();
             return Got::Not(PreviewState::Offline);
         };

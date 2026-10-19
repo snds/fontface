@@ -159,10 +159,11 @@ export const previewFilePath = (f: PreviewFile) => `google/${f.id}/${f.token}/${
  *  lastModified, so a family Google updated is asked for again. */
 export const answerKey = (id: string, token: string, kind: GooglePreviewKind) => `${id}\n${token}\n${kind}`;
 
-/** How long an "offline" answer (or a call that failed) is kept before the row asks again. As
- *  long as Rust's first pause after network trouble; during a longer pause, asking costs nothing
+/** How long an "offline" answer (or a call that failed) is kept before the row asks again. Just
+ *  past Rust's first pause after network trouble (30 s, on a whole-second clock), so a row asks
+ *  once it's over rather than a moment before; during a longer pause, asking costs nothing
  *  (Rust answers "offline" at once, without the network). */
-export const RETRY_OFFLINE_MS = 30_000;
+export const RETRY_OFFLINE_MS = 31_000;
 
 /** How long an "off" answer is kept. Rows only ask while the page has previews on, so "off" only
  *  means Rust hadn't saved the switch yet: the page shows a switch at once and saves it a moment

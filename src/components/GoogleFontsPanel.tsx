@@ -276,17 +276,23 @@ function FamilyInfo({
           preview), its height can't, so the row never moves the rows below it. */}
       <div className="mt-0.5 flex h-5 min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden text-xs whitespace-nowrap text-muted-foreground">
         {facts && (
-          // Screen readers already hear the name from the preview when it draws the name, or
-          // shows it in the interface font while the font loads.
-          <span className="min-w-0 truncate text-foreground" aria-hidden={!f || (!f.sample && !f.typed) || undefined}>
+          // Screen readers already hear the name from the preview when it draws the name. While
+          // the font loads, the preview shows the name itself: this one only keeps its place
+          // (invisible, so nothing below moves when the font arrives), and so does the badge,
+          // which would describe characters the row isn't showing yet.
+          <span className={cn("min-w-0 truncate text-foreground", !f && "invisible")} aria-hidden={!f || (!f.sample && !f.typed) || undefined}>
             {family.family}
           </span>
         )}
         {facts && source === "library" && font && <YourCopy font={font} />}
-        {facts && facts.sample && !icons && <SampleBadge profile={facts.profile} row="family" />}
+        {facts && facts.sample && !icons && (
+          <span className={cn("contents", !f && "[&>*]:invisible")}>
+            <SampleBadge profile={facts.profile} row="family" />
+          </span>
+        )}
         {facts?.typed && <MissingHint text={facts.text} profile={facts.profile} />}
         {facts?.typed && source === "online" && <AlphabetHint text={facts.text} />}
-        {facts && <span className="shrink-0">·</span>}
+        {facts && <span className={cn("shrink-0", !f && "invisible")}>·</span>}
         <span className="shrink-0">{categoryLabel(family.category)}</span>
         <span className="shrink-0">·</span>
         <span className="shrink-0">
