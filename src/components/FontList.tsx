@@ -196,8 +196,9 @@ function FamilyRow(props: RowProps & { family: Family }) {
         <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">
           {single ? (
             <span className="shrink-0 font-mono">
-              {family.representative.primary.weight}
-              {family.representative.primary.italic ? " · italic" : ""}
+              {/* As the Table's Weights column and the Weight sort have it (familyGroups.traitsOf). */}
+              {family.representative.traits.weight}
+              {family.representative.traits.italic ? " · italic" : ""}
             </span>
           ) : (
             <span className="shrink-0">{styles}</span>

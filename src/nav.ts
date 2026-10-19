@@ -52,12 +52,15 @@ export interface GroupsPageEntry {
   focus: string[];
   /** Where focus goes back on Back: a list row (by row key) or an element (by id). */
   returnTo: { row: string } | { element: string } | null;
+  /** How many times it was asked for again while on top (Settings › Library, say): the page
+   *  focuses its heading each time, since it stays mounted. Set by the stack. */
+  opened: number;
 }
 
 export type Page = FontPageEntry | CatalogPageEntry | GroupsPageEntry;
 
 /** What a new page needs; the stack gives it its id. */
-export type NewPage = Omit<FontPageEntry, "id"> | Omit<CatalogPageEntry, "id"> | Omit<GroupsPageEntry, "id">;
+export type NewPage = Omit<FontPageEntry, "id"> | Omit<CatalogPageEntry, "id"> | Omit<GroupsPageEntry, "id" | "opened">;
 
 /** The parts of a page that change while it's open. */
 export type PagePatch = Partial<Pick<FontPageEntry, "styleKey" | "tab">> & Partial<Pick<GroupsPageEntry, "filter">>;
@@ -81,15 +84,17 @@ export const topPage = (state: NavState): Page | undefined => state.pages[state.
 export function navReducer(state: NavState, action: NavAction): NavState {
   switch (action.type) {
     case "open": {
-      // The same page already on top (a double-click and a Return, say): nothing new to show.
       const top = topPage(state);
-      if (top && samePage(top, action.page)) return state;
-      // Family groups on top already: it shows what was asked for now, with the same Back.
+      // Family groups on top already: it shows what was asked for now, with the same Back, and
+      // takes focus again (asked for from Settings, focus has nowhere else to be).
       if (top?.kind === "groups" && action.page.kind === "groups") {
-        const next: GroupsPageEntry = { ...top, filter: action.page.filter, focus: action.page.focus };
+        const next: GroupsPageEntry = { ...top, filter: action.page.filter, focus: action.page.focus, opened: top.opened + 1 };
         return { ...state, pages: [...state.pages.slice(0, -1), next] };
       }
-      return { pages: [...state.pages, { ...action.page, id: state.nextId } as Page], nextId: state.nextId + 1 };
+      // The same page already on top (a double-click and a Return, say): nothing new to show.
+      if (top && samePage(top, action.page)) return state;
+      const page = (action.page.kind === "groups" ? { ...action.page, id: state.nextId, opened: 0 } : { ...action.page, id: state.nextId }) as Page;
+      return { pages: [...state.pages, page], nextId: state.nextId + 1 };
     }
     case "back":
       return state.pages.length ? { ...state, pages: state.pages.slice(0, -1) } : state;
@@ -116,11 +121,11 @@ export function navReducer(state: NavState, action: NavAction): NavState {
   }
 }
 
-/** The same font on the same style, the same service's page, or Family groups as it is. */
+/** The same font on the same style, or the same service's page. (Family groups is never
+ *  stacked twice: see "open".) */
 function samePage(a: Page, b: NewPage): boolean {
   if (a.kind === "font" && b.kind === "font") return a.faceKey === b.faceKey && a.styleKey === b.styleKey;
   if (a.kind === "catalog" && b.kind === "catalog") return a.service === b.service;
-  if (a.kind === "groups" && b.kind === "groups") return a.filter === b.filter && a.focus.join("\n") === b.focus.join("\n");
   return false;
 }
 

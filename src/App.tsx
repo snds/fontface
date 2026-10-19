@@ -23,6 +23,7 @@ import {
   filterFamilies,
   groupFamilies,
   groupLibrary,
+  warmUpGrouping,
   INSTALLED_LABEL,
   placeCounts,
   recentSince,
@@ -197,7 +198,18 @@ export default function App() {
   // A request overtaken by a newer one (say the preview backfill's reload during the launch
   // load) settles only when the newest list is on screen, so after `await refresh()` the fonts
   // are really there (launch checks the saved view against them).
-  const [loadFonts] = useState(() => newestWins(() => api.listFonts(), setFonts, () => mutationEpoch.current));
+  const [loadFonts] = useState(() =>
+    newestWins(
+      () => {
+        const list = api.listFonts();
+        // While the first list is on its way: the grouping code gets compiled (library.ts).
+        warmUpGrouping();
+        return list;
+      },
+      setFonts,
+      () => mutationEpoch.current,
+    ),
+  );
 
   const refresh = useCallback(async () => {
     const [f, svc] = await Promise.all([api.listFolders(), api.listServices(), loadFonts()]);
@@ -1338,7 +1350,8 @@ export default function App() {
                 closeSettings({ restoreFocus: false });
               }}
               familySuggestions={familySuggestions}
-              onReviewFamilyGroups={() => openFamilyGroups(undefined, { filter: "suggested" })}
+              // "Review n suggestions" opens them; with none, the button reads "Family groups…" and opens every family.
+              onReviewFamilyGroups={() => openFamilyGroups(undefined, { filter: familySuggestions > 0 ? "suggested" : "all" })}
             />
           )}
         </div>

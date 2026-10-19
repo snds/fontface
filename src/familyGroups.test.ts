@@ -5,12 +5,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FontSummary } from "./api.ts";
 import { filterFamilies, groupFamilies, groupLibrary, ungroup, type Family } from "./library.ts";
+import { weightText } from "./familyFacts.ts";
 import {
   analyzeName,
   foundryKey,
   leftover,
   postscriptStems,
   reasonText,
+  sameFoundry,
   squash,
   styleLabel,
   suggestGroups,
@@ -178,7 +180,7 @@ test("Arial Narrow, MetaCond and FarnhamDisplay are only suggested (width and si
 test("Univers 45 Light is a numbered style: only suggested", () => {
   const fonts = [
     font("Univers 45 Light", "Regular", { postscriptName: "Univers-Light", weight: 300 }),
-    font("Univers 45 Light Oblique", "Regular", { postscriptName: "Univers-LightOblique", weight: 300 }),
+    font("Univers 55 Roman", "Regular", { postscriptName: "Univers-Roman" }),
     font("Univers 65 Bold", "Regular", { postscriptName: "Univers-Bold", weight: 700 }),
   ];
   const families = groupFamilies(fonts, ON);
@@ -190,11 +192,21 @@ test("Univers 45 Light is a numbered style: only suggested", () => {
     suggestions[0].sources.map((src) => [src.family.name, src.reason, src.word]),
     [
       ["Univers 45 Light", "number", "45"],
-      ["Univers 45 Light Oblique", "number", "45"],
+      ["Univers 55 Roman", "number", "55"],
       ["Univers 65 Bold", "number", "65"],
     ],
   );
   assert.equal(reasonText(suggestions[0].sources[0]), "Numbered style");
+  // Its Oblique is a slope word on Univers 45 Light's own name: the number is part of that
+  // family's name (as in Bodoni 72), so it joins it, and the family is still only suggested.
+  const oblique = [...fonts, font("Univers 45 Light Oblique", "Regular", { postscriptName: "Univers-LightOblique", weight: 300 })];
+  const withOblique = groupFamilies(oblique, ON);
+  assert.deepEqual(styles(family(withOblique, "Univers 45 Light")), ["Regular", "Oblique"]);
+  assert.deepEqual(suggestionsOf(oblique)[0].sources.map((src) => [src.family.name, src.word]), [
+    ["Univers 45 Light", "45"],
+    ["Univers 55 Roman", "55"],
+    ["Univers 65 Bold", "65"],
+  ]);
 });
 
 test("Barlow Condensed and Avenir Next Condensed name their own families (G1): they stay", () => {
@@ -337,18 +349,44 @@ test("abbreviations count only when the PostScript name agrees; capitals are acr
   assert.deepEqual(styles(family(families, "Kappa")), ["Light", "Regular"], "Lt is spelled out");
 });
 
-test("SC right after the family part is a script (Noto Sans SC), elsewhere small capitals", () => {
+test("SC right after the family part: Simplified Chinese in a CJK font (Noto Sans SC), else small capitals", () => {
   const families = groupFamilies(
     [
       font("Noto Sans", "Regular", { postscriptName: "NotoSans-Regular", manufacturer: "Google" }),
-      font("Noto Sans SC", "Regular", { postscriptName: "NotoSansSC-Regular", manufacturer: "Google" }),
+      font("Noto Sans SC", "Regular", { postscriptName: "NotoSansSC-Regular", manufacturer: "Google", glyphCount: 30_000 }),
       font("Elementa", "Regular", { postscriptName: "Elementa-Regular" }),
       font("ElementaBold SC", "Regular", { postscriptName: "ElementaBoldSC" }),
+      // Small capitals right after the family part, in a font of a few hundred glyphs.
+      font("Elementa SC", "Regular", { postscriptName: "ElementaSC", glyphCount: 229 }),
+      font("Elementa SC", "Bold", { postscriptName: "ElementaSC-Bold", glyphCount: 229, weight: 700 }),
+      font("LTAroma", "Regular", { postscriptName: "LinotypeAroma", manufacturer: "Linotype GmbH" }),
+      font("LTAromaSC", "Regular", { postscriptName: "LinotypeAromaSC", manufacturer: "Linotype GmbH", glyphCount: 248 }),
     ],
     ON,
   );
-  assert.deepEqual(names(families), ["Elementa", "Noto Sans", "Noto Sans SC"]);
-  assert.deepEqual(styles(family(families, "Elementa")), ["Regular", "Bold SC"]);
+  assert.deepEqual(names(families), ["Elementa", "LTAroma", "Noto Sans", "Noto Sans SC"]);
+  assert.deepEqual(styles(family(families, "Elementa")), ["Regular", "SC", "Bold SC", "SC Bold"]);
+  assert.deepEqual(styles(family(families, "LTAroma")), ["Regular", "SC"]);
+  // A name with siblings for other scripts is a script code too, whatever its glyph count.
+  const siblings = groupFamilies(
+    [
+      font("Source Han Sans", "Regular", { postscriptName: "SourceHanSans-Regular", manufacturer: "Adobe" }),
+      font("Source Han Sans SC", "Regular", { postscriptName: "SourceHanSansSC-Regular", manufacturer: "Adobe" }),
+      font("Source Han Sans TC", "Regular", { postscriptName: "SourceHanSansTC-Regular", manufacturer: "Adobe" }),
+    ],
+    ON,
+  );
+  assert.deepEqual(names(siblings), ["Source Han Sans", "Source Han Sans SC", "Source Han Sans TC"]);
+});
+
+test("a held SC name is suggested: Proxima Nova ScOsf names its own family (G1)", () => {
+  const fonts = [
+    font("Proxima Nova", "Regular", { postscriptName: "ProximaNova-Regular", hasTypoFamily: true }),
+    font("Proxima Nova ScOsf", "Regular", { postscriptName: "ProximaNovaS-Regular", hasTypoFamily: true }),
+  ];
+  assert.equal(groupFamilies(fonts, ON).length, 2);
+  const [s] = suggestionsOf(fonts);
+  assert.deepEqual([s.into, s.sources[0].family.name, s.sources[0].reason], ["Proxima Nova", "Proxima Nova ScOsf", "ownName"]);
 });
 
 test("folders are never a signal: the same names group wherever the files are", () => {
@@ -391,8 +429,8 @@ test("style labels: the words past the family, spelled the usual way, then the f
 });
 
 test("sorting uses the style's words when the font's numbers are wrong, in every family", () => {
-  assert.deepEqual(traitsOf("Black Italic", { weight: 400, width: 5, italic: false, variable: false }), { weight: 900, width: 5, italic: true });
-  assert.deepEqual(traitsOf("Book", { weight: 350, width: 5, italic: false, variable: false }), { weight: 350, width: 5, italic: false }, "close enough: its own number");
+  assert.deepEqual(traitsOf("Black Italic", { weight: 400, width: 5, italic: false, variable: false }), { weight: 900, width: 5, italic: true, variant: false });
+  assert.deepEqual(traitsOf("Book", { weight: 350, width: 5, italic: false, variable: false }), { weight: 350, width: 5, italic: false, variant: false }, "close enough: its own number");
   assert.deepEqual(traitsOf("Condensed Bold", { weight: 700, width: 5, italic: false, variable: false }).width, 3);
   assert.equal(traitsOf("Bold", { weight: 400, width: 5, italic: false, variable: true }).weight, 400, "a variable font keeps its default");
   // A family that was never regrouped: its own style names say what the numbers don't.
@@ -523,4 +561,211 @@ test("leftover: what a name has past a family, ignoring spaces and case", () => 
   assert.equal(leftover("AauxPro-BlackOSF", "Aaux Pro"), "-BlackOSF");
   assert.equal(leftover("Aaux ProBold", "AauxPro"), "Bold");
   assert.equal(leftover("Arial Black", "Helvetica"), null);
+});
+
+// ------------------------------------------------------------- fixes after the M3 review
+
+test("a new family keeps a style word all its names share: Times New Roman, not Times New (F1)", () => {
+  const times = groupFamilies(
+    [
+      font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT", manufacturer: "Monotype Typography, Inc." }),
+      font("Times New Roman Italic", "Regular", { postscriptName: "TimesNewRomanPS-ItalicMT", manufacturer: "The Monotype Corporation", italic: true }),
+    ],
+    ON,
+  );
+  assert.deepEqual(names(times), ["Times New Roman"]);
+  assert.deepEqual(styles(times[0]), ["Regular", "Italic"]);
+  const shadows = groupFamilies(
+    [font("Shadows Into Light", "Regular", { postscriptName: "ShadowsIntoLight" }), font("Shadows Into Light Bold", "Regular", { postscriptName: "ShadowsIntoLight-Bold", weight: 700 })],
+    ON,
+  );
+  assert.deepEqual(names(shadows), ["Shadows Into Light"]);
+  assert.deepEqual(styles(shadows[0]), ["Regular", "Bold"]);
+  // Nothing suggests "Times New" either.
+  const bold = [
+    font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT", manufacturer: "Monotype" }),
+    font("Times New Roman Bold", "Regular", { postscriptName: "TimesNewRomanPS-BoldMT", manufacturer: "Monotype", hasTypoFamily: true }),
+  ];
+  assert.ok(suggestionsOf(bold).every((s) => s.into === "Times New Roman"), "no Times New");
+  // Names that share no style word still make the family their base names ("Solo").
+  assert.deepEqual(names(groupFamilies([font("Solo Bold", "Regular", { postscriptName: "Solo-Bold" }), font("Solo Light", "Regular", { postscriptName: "Solo-Light" })], ON)), ["Solo"]);
+});
+
+test("foundries are compared by their words: two people with one first name differ (F2)", () => {
+  assert.notEqual(foundryKey("Daniel Bruce"), foundryKey("Daniel Hernandez"));
+  assert.equal(sameFoundry(foundryKey("Daniel Bruce")!, foundryKey("Daniel Hernandez")!), false);
+  assert.equal(foundryKey("A&O"), undefined, "one-letter words don't count");
+  assert.equal(foundryKey("a.Foundry"), undefined);
+  assert.equal(foundryKey("A-1 Corp ZenFonts"), "zenfonts");
+  assert.ok(sameFoundry(foundryKey("Linotype GmbH")!, foundryKey("Linotype-Hell AG")!), "one's words are all the other's");
+  assert.ok(sameFoundry(foundryKey("Apple Inc.")!, foundryKey("Apple Computer, Inc.")!));
+  // G4: both name a foundry and they differ, though they start alike.
+  const fonts = [
+    font("Lumen", "Regular", { postscriptName: "Xa", manufacturer: "Daniel Bruce" }),
+    font("Lumen Bold", "Regular", { postscriptName: "Yb", manufacturer: "Daniel Hernandez" }),
+  ];
+  assert.equal(groupFamilies(fonts, ON).length, 2);
+  assert.equal(suggestionsOf(fonts)[0].sources[0].reason, "foundry");
+  // One-letter foundries say nothing, so nothing else agrees: only suggested.
+  const letters = [font("Lumen", "Regular", { postscriptName: "Xa", manufacturer: "A&O" }), font("Lumen Bold", "Regular", { postscriptName: "Yb", manufacturer: "a.Foundry" })];
+  assert.equal(groupFamilies(letters, ON).length, 2);
+  assert.equal(suggestionsOf(letters)[0].sources[0].reason, "noSignal");
+});
+
+test("chained suggestions are one: Merge all leaves no family behind (F4)", () => {
+  const fonts = [
+    font("Neutra Text", "Regular", { postscriptName: "NeutraText-Book" }),
+    font("Neutra Text TF", "Regular", { postscriptName: "NeutraTextTF-Book", hasTypoFamily: true }),
+    font("Neutra Display", "Regular", { postscriptName: "NeutraDisplay-Titling" }),
+  ];
+  const suggestions = suggestionsOf(fonts);
+  assert.equal(suggestions.length, 1, "Neutra Text TF goes on with Neutra Text into Neutra");
+  assert.equal(suggestions[0].into, "Neutra");
+  assert.deepEqual(suggestions[0].sources.map((s) => s.family.name), ["Neutra Display", "Neutra Text", "Neutra Text TF"]);
+  assert.equal(suggestions[0].styles, 3);
+});
+
+test("a name's own PostScript name doesn't back itself: spelling variants need another signal (F5)", () => {
+  const futura = [font("Futura", "Bold", { postscriptName: "Futura-Bold", manufacturer: "Bitstream" }), font("FUTURA", "Regular", { postscriptName: "XYZ123" })];
+  assert.deepEqual(names(groupFamilies(futura, ON)), ["FUTURA", "Futura"]);
+  assert.deepEqual([...groupLibrary(futura, ON).plan.held.values()].map((h) => h.reason), ["noSignal"]);
+  const caslon = [font("Big Caslon", "Medium", { postscriptName: "AAA" }), font("BigCaslon", "Regular", { postscriptName: "BBB" })];
+  assert.equal(groupFamilies(caslon, ON).length, 2);
+  // The same foundry, or PostScript names that agree, still merge them.
+  assert.equal(groupFamilies(caslon.map((f) => ({ ...f, manufacturer: "Apple Inc." })), ON).length, 1);
+  assert.equal(groupFamilies([font("Big Caslon", "Medium", { postscriptName: "BigCaslon-Medium" }), font("BigCaslon", "Regular", { postscriptName: "BigCaslon-Regular" })], ON).length, 1);
+});
+
+test("names that differ only in case come out the same whatever order the fonts come in (F6)", () => {
+  const fonts = [font("GOTHAM", "Bold", { postscriptName: "Gotham-Bold", manufacturer: "H&FJ" }), font("Gotham", "Regular", { postscriptName: "Gotham-Regular", manufacturer: "H&FJ" })];
+  assert.deepEqual(names(groupFamilies(fonts, ON)), names(groupFamilies([...fonts].reverse(), ON)));
+  // A shuffled library groups the same.
+  const library = [
+    ...aminta(),
+    font("AAUX Pro", "Regular", { postscriptName: "AauxPro-Regular" }),
+    font("Aaux ProBold", "Regular", { postscriptName: "AauxProBold" }),
+    font("Aaux Pro Light", "Regular", { postscriptName: "AauxPro-Light" }),
+    ...fonts,
+  ];
+  const shape = (families: Family[]) => families.map((f) => `${f.name}: ${styles(f).join(", ")}`);
+  const expected = shape(groupFamilies(library, ON));
+  for (let seed = 1; seed <= 5; seed++) {
+    const shuffled = [...library].sort((a, b) => ((a.id * 7919 * seed) % 101) - ((b.id * 7919 * seed) % 101));
+    assert.deepEqual(shape(groupFamilies(shuffled, ON)), expected);
+  }
+});
+
+test("keeping one name's styles apart by hand doesn't leave the other name renamed (F7)", () => {
+  const fonts = [font("Solo Bold", "Regular", { postscriptName: "Solo-Bold" }), font("Solo Light", "Regular", { postscriptName: "Solo-Light" })];
+  const choices = new Map<string, FaceChoice>([[keyOf("Solo-Light"), { faceKey: keyOf("Solo-Light"), family: null, style: null }]]);
+  const families = groupFamilies(fonts, { byName: true, choices });
+  assert.deepEqual(names(families), ["Solo Bold", "Solo Light"]);
+  assert.deepEqual(styles(family(families, "Solo Bold")), ["Regular"]);
+});
+
+test("a Fontographer \"Medium\" isn't added to a weight the family name already says (F8)", () => {
+  assert.equal(styleLabel("VisageBold", "Medium", "Visage", 400), "Bold");
+  assert.equal(styleLabel("VisageBlackOblique", "Medium", "Visage", 400), "Black Oblique");
+  assert.equal(styleLabel("Beekman-SquareBoldExpert", "Medium", "Beekman-Square", 400), "Bold Expert");
+  assert.equal(styleLabel("VisageOblique", "Medium", "Visage", 400), "Oblique Medium", "no weight in the name: its Medium stays");
+  assert.equal(styleLabel("VisageBold", "Medium", "Visage", 500), "Bold Medium", "a real Medium (500) stays");
+  assert.equal(styleLabel("LTAroma Light", "Bold", "LTAroma"), "Light Bold", "a real second weight stays");
+  const visage = groupFamilies(
+    ["Light", "Book", "Medium", "Bold", "Black"].map((w) => font(`Visage${w}`, "Medium", { postscriptName: `Visage${w}` })).concat(font("Visage", "Regular", { postscriptName: "Visage" })),
+    ON,
+  );
+  assert.deepEqual(styles(family(visage, "Visage")), ["Light", "Book", "Regular", "Medium", "Bold", "Black"]);
+});
+
+test("a family's own weight numbers are kept when they tell its styles apart (F9, R1)", () => {
+  // BB Strata Pro numbers its styles 100 to 500 on purpose.
+  const strata = groupFamilies(
+    (
+      [
+        ["Light", 200],
+        ["Semi Regular", 250],
+        ["Regular", 300],
+        ["Semi Medium", 350],
+        ["Medium", 400],
+        ["Semi Bold", 450],
+        ["Bold", 500],
+        ["Skeleton", 100],
+        ["Thin", 150],
+      ] as const
+    ).map(([style, weight]) => font("BB Strata Pro HL", style, { weight })),
+    ON,
+  );
+  assert.deepEqual(styles(strata[0]), ["Skeleton", "Thin", "Light", "Semi Regular", "Regular", "Semi Medium", "Medium", "Semi Bold", "Bold"]);
+  assert.equal(weightText(strata[0].faces), "100–500");
+  // Book Heavy (850) is a heavy Book: its nearest word and its own number agree.
+  const neuzeit = groupFamilies([font("Neuzeit S LT Std", "Book Heavy", { weight: 850 }), font("Neuzeit S LT Std", "Book")], ON);
+  assert.deepEqual(styles(neuzeit[0]), ["Book", "Book Heavy"]);
+  // "Regular" never says a correct number is wrong; a lone Black stays 900, with grouping on or off.
+  assert.equal(traitsOf("Regular", { weight: 900, width: 5, italic: false, variable: false }).weight, 900);
+  for (const options of [ON, OFF]) {
+    const poker = groupFamilies([font("Pokerface", "Regular", { weight: 900 })], options);
+    assert.equal(weightText(poker[0].faces), "900");
+    const arial = groupFamilies([font("Arial", "Regular"), font("Arial Black", "Regular", { postscriptName: "Arial-Black", weight: 900, hasTypoFamily: true })], options);
+    assert.equal(weightText(family(arial, "Arial Black").faces), "900");
+  }
+  // But in a family that says 500 for every weight, its Regular is 400, before its Medium.
+  const amplitude = groupFamilies(
+    ["Light", "Book", "Regular", "Medium", "Black"].map((w) => font(`Amplitude-${w}`, "Regular", { postscriptName: `Amplitude-${w}`, weight: 500 })),
+    ON,
+  );
+  assert.deepEqual(styles(family(amplitude, "Amplitude")), ["Light", "Book", "Regular", "Medium", "Black"]);
+  // Abbreviations give way to whole words ("Semi Medium" is Medium).
+  assert.equal(traitsOf("Semi Medium", { weight: 400, width: 5, italic: false, variable: false }).weight, 500);
+});
+
+test("which copy names a face doesn't depend on the order the list sends them in (F10, S1)", () => {
+  // The same font twice, with different family names, the same date and format.
+  const a = font("BlindfishDemi", "Regular", { postscriptName: "BlindfishDemi", path: "/Drive/b/BlindfishDemi.otf", id: 23797 });
+  const b = font("Blindfish", "Demi", { postscriptName: "BlindfishDemi", path: "/Drive/a/Blindfish-Demi.otf", id: 25477, hasTypoFamily: true });
+  const place = (fonts: FontSummary[], options: GroupingOptions) =>
+    groupFamilies(fonts, options).flatMap((f) => f.faces.map((x) => `${f.name}/${x.style}/${x.groupedBy}`));
+  assert.deepEqual(place([a, b], ON), place([b, a], ON));
+  // Your rule for either copy's name holds, whichever copy is shown.
+  const rules = new Map<string, NameRule>([["blindfishdemi", { nameKey: "blindfishdemi", name: "BlindfishDemi", decision: "separate", into: null }]]);
+  const kept = { byName: true, rules };
+  assert.deepEqual(place([a, b], kept), ["BlindfishDemi/Regular/rule"]);
+  assert.deepEqual(place([b, a], kept), ["BlindfishDemi/Regular/rule"]);
+  const [face] = groupFamilies([b, a], kept)[0].faces;
+  assert.equal(face.ruleKey, "blindfishdemi", "Clear my choices finds the rule");
+  // A copy whose names agree with its PostScript name is the one shown ("Engine-LightLF", not
+  // a copy that calls it Engine Medium).
+  const engine = [
+    font("Engine", "Medium", { postscriptName: "Engine-LightLF", path: "/Fonts/Engine/desktop/EngineLightLF.otf" }),
+    font("Engine-LightLF", "Regular", { postscriptName: "Engine-LightLF", path: "/Fonts/EngineLightLF/EngineLightLF.otf" }),
+  ];
+  for (const order of [engine, [...engine].reverse()]) assert.equal(groupFamilies(order, ON)[0].faces[0].primary.family, "Engine-LightLF");
+});
+
+test("Keep separate keeps every spelling of the name in one family (S2)", () => {
+  const fonts = [
+    font("Meta Cond", "Regular", { postscriptName: "MetaCond-Regular" }),
+    font("Meta Cond LF", "Regular", { postscriptName: "MetaCondLF-Regular", hasTypoFamily: true }),
+    font("MetaCond LF", "Bold", { postscriptName: "MetaCondLF-Bold", weight: 700 }),
+  ];
+  const rules = new Map<string, NameRule>([["metacondlf", { nameKey: "metacondlf", name: "Meta Cond LF", decision: "separate", into: null }]]);
+  const families = groupFamilies(fonts, { byName: true, rules });
+  assert.deepEqual(names(families), ["Meta Cond", "Meta Cond LF"]);
+  assert.deepEqual(styles(family(families, "Meta Cond LF")), ["Regular", "Bold"]);
+  assert.ok(family(families, "Meta Cond LF").faces.every((f) => f.groupedBy === "rule" && f.kept));
+  const poster = [font("Aaux ProPoster", "Regular", { postscriptName: "AauxProPoster" }), font("AauxPro-Poster", "Italic", { postscriptName: "AauxPro-PosterItalic", italic: true })];
+  const posterRules = new Map<string, NameRule>([["aauxproposter", { nameKey: "aauxproposter", name: "Aaux ProPoster", decision: "separate", into: null }]]);
+  assert.deepEqual(names(groupFamilies(poster, { byName: true, rules: posterRules })), ["Aaux ProPoster"]);
+});
+
+test("a plain style shows the family and comes before its variants (R2)", () => {
+  const families = groupFamilies(
+    [
+      font("Proxima Nova", "Regular", { postscriptName: "ProximaNova-Regular", manufacturer: "Mark Simonson Studio" }),
+      font("Proxima Nova Alt", "Regular", { postscriptName: "ProximaNovaA-Regular", manufacturer: "Mark Simonson Studio" }),
+    ],
+    ON,
+  );
+  assert.deepEqual(names(families), ["Proxima Nova"]);
+  assert.equal(families[0].representative.style, "Regular");
+  assert.deepEqual(styles(families[0]), ["Regular", "Alt"]);
 });

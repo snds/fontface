@@ -128,7 +128,10 @@ test("Cmd+F: the list's Search, leaving a font page, or the Google catalog's own
 test("Family groups: one page at a time, its filter changes in place, and Cmd+F goes to its search", () => {
   const groups: NewPage = { kind: "groups", filter: "all", focus: [], returnTo: null };
   const one = navReducer(EMPTY_NAV, { type: "open", page: groups });
-  assert.equal(navReducer(one, { type: "open", page: groups }), one, "the same page again: nothing new");
+  const again = navReducer(one, { type: "open", page: groups });
+  assert.equal(again.pages.length, 1, "the same page again: still one page");
+  assert.equal(top(again)!.id, top(one)!.id, "the same page, so it keeps its state");
+  assert.equal((top(again) as { opened: number }).opened, (top(one) as { opened: number }).opened + 1, "asked for again: its heading takes focus (from Settings, say)");
   const focused = navReducer(one, { type: "open", page: { kind: "groups", filter: "suggested", focus: ["ps:A|static|r"], returnTo: null } });
   assert.equal(focused.pages.length, 1, "opened again from elsewhere, it shows that instead of stacking");
   assert.deepEqual([top(focused)!.id, (top(focused) as { filter: string }).filter], [top(one)!.id, "suggested"]);

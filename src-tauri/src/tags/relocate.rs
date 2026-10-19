@@ -1,10 +1,10 @@
 //! "Locate…" for a library folder that was moved or renamed.
 //!
 //! Removing the folder and adding the new one would lose what's tied to its path: fonts that
-//! are turned on, tags kept for fonts without a PostScript name (their key is the file), and
-//! the colors of the folder and its subfolders. Relocating moves all of that to the new path
-//! instead, along with which fonts are on for this login only. A rescan afterwards picks up any
-//! files that changed.
+//! are turned on, tags and family choices kept for fonts without a PostScript name (their key
+//! is the file), and the colors of the folder and its subfolders. Relocating moves all of that
+//! to the new path instead, along with which fonts are on for this login only. A rescan
+//! afterwards picks up any files that changed.
 //!
 //! Each move is also remembered in `folder_moves`, so a tags backup made before it (which names
 //! colors and some fonts by path) restores onto the folder's current place (see [`Moves`]).
@@ -50,8 +50,8 @@ pub struct Relocated {
     pub old_paths: Vec<String>,
 }
 
-/// Points a user folder at `new_root`, carrying its fonts, tags kept by file, and location
-/// colors along. Refuses folders that would overlap another library folder.
+/// Points a user folder at `new_root`, carrying its fonts, tags and family choices kept by file,
+/// and location colors along. Refuses folders that would overlap another library folder.
 pub fn relocate(conn: &mut Connection, folder_id: i64, new_root: &Path, force: bool) -> AppResult<Relocated> {
     let folder = db::get_folder(conn, folder_id)?;
     if folder.kind != "user" {
@@ -149,6 +149,13 @@ pub fn relocate(conn: &mut Connection, folder_id: i64, new_root: &Path, force: b
         params![old, new],
     )?;
     tx.execute("DELETE FROM tag_fonts WHERE substr(face_key, 1, length(?1) + 6) = 'file:' || ?1 || '/'", [&old])?;
+    // Family choices kept by file (families.rs), the same way. A choice at the new path wins.
+    tx.execute(
+        "UPDATE OR IGNORE family_overrides SET face_key = 'file:' || ?2 || substr(face_key, length(?1) + 6)
+         WHERE substr(face_key, 1, length(?1) + 6) = 'file:' || ?1 || '/'",
+        params![old, new],
+    )?;
+    tx.execute("DELETE FROM family_overrides WHERE substr(face_key, 1, length(?1) + 6) = 'file:' || ?1 || '/'", [&old])?;
     // Colors of the folder and its subfolders. One already set at the new place wins.
     tx.execute("UPDATE OR IGNORE location_colors SET location = ?2 WHERE location = ?1", params![old, new])?;
     tx.execute(

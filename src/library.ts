@@ -13,7 +13,18 @@ import {
   shortVersion,
   weightSpan,
 } from "./familyFacts.ts";
-import { planByName, placeFace, traitsOf, type GroupedBy, type GroupingOptions, type GroupPlan, type Traits } from "./familyGroups.ts";
+import {
+  compareNames,
+  familyWeightSource,
+  planByName,
+  placeFace,
+  squash,
+  traitsOf,
+  type GroupedBy,
+  type GroupingOptions,
+  type GroupPlan,
+  type Traits,
+} from "./familyGroups.ts";
 
 /**
  * One style of a family. Libraries often hold several copies of the same font (an .otf and a
@@ -35,6 +46,11 @@ export interface Face {
   style: string;
   /** How it got its family. */
   groupedBy: GroupedBy;
+  /** Your rule or choice keeps it under its own name (rather than moving it into a family). */
+  kept: boolean;
+  /** The name key of your rule that placed it (`groupedBy` "rule"): its own family name's, or
+   *  one of its copies'. */
+  ruleKey?: string;
   /** Weight, width and slope for sorting, from its style's words where its own numbers disagree. */
   traits: Traits;
 }
@@ -162,18 +178,48 @@ export const INSTALLED_LABEL =
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
-const regularness = ({ traits: t }: Face) => (t.italic ? 1000 : 0) + Math.abs(t.width - 5) * 100 + Math.abs(t.weight - 400);
+/** How far a style is from the family's Regular: slope, then width, then weight; a variant (Alt,
+ *  Caps, LF) a little further than the plain style of its weight. */
+const regularness = ({ traits: t }: Face) => (t.italic ? 1000 : 0) + Math.abs(t.width - 5) * 100 + Math.abs(t.weight - 400) + (t.variant ? 50 : 0);
 
 const isCollection = (f: FontSummary) => f.format.endsWith("Collection");
 
-/** Which copy to show or turn on: one already on, installed, a single-font file, CFF, newest. */
+const plainStyle = new Set(["regular", "roman", "plain", "normal", "book", ""]);
+
+/**
+ * How well a copy's family and style names agree with its PostScript name: 2 when they spell it
+ * ("Engine-LightLF" for family Engine-LightLF, style Regular; "Blindfish" + "Demi" for
+ * BlindfishDemi), 1 when the family starts it, 0 otherwise. Copies of one font sometimes carry
+ * different names ("Engine", style "Medium", for the same Engine-LightLF): the one whose names
+ * agree is the better one to group by.
+ */
+function namesAgree(f: FontSummary): number {
+  if (!f.postscriptName) return 0;
+  const ps = squash(f.postscriptName);
+  const family = squash(f.family);
+  if (!ps.startsWith(family)) return 0;
+  const rest = ps.slice(family.length);
+  const style = squash(f.subfamily);
+  return rest === style || (!rest && plainStyle.has(style)) ? 2 : 1;
+}
+
+/**
+ * Which copy to show or turn on: one already on, installed, a single-font file, CFF, newest, one
+ * whose names agree with its PostScript name, one that names its own family (name ID 16), then
+ * by path. Never by the order the list sends rows in: a copy's id changes when its folder is
+ * removed and added again, and the copy shown decides the family name a face is grouped by.
+ */
 function preferred(a: FontSummary, b: FontSummary): number {
   return (
     Number(b.osActive) - Number(a.osActive) ||
     Number(b.installed) - Number(a.installed) ||
     Number(isCollection(a)) - Number(isCollection(b)) ||
     Number(b.format.startsWith("OpenType CFF")) - Number(a.format.startsWith("OpenType CFF")) ||
-    b.mtime - a.mtime
+    b.mtime - a.mtime ||
+    (a.family === b.family && a.subfamily === b.subfamily ? 0 : namesAgree(b) - namesAgree(a)) ||
+    Number(b.hasTypoFamily === true) - Number(a.hasTypoFamily === true) ||
+    (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) ||
+    a.faceIndex - b.faceIndex
   );
 }
 
@@ -208,13 +254,15 @@ function groupFaces(fonts: FontSummary[]): Face[] {
       family: primary.family,
       style: primary.subfamily,
       groupedBy: "own",
-      traits: { weight: primary.weight, width: primary.width, italic: primary.italic },
+      kept: false,
+      traits: { weight: primary.weight, width: primary.width, italic: primary.italic, variant: false },
     };
   });
 }
 
 /** A family's styles: upright before italic, narrow to wide, light to heavy (by what the style's
- *  name says where the font's own numbers disagree), variable first, then by style name. */
+ *  name says where the font's own numbers are wrong), variable first, a plain style before its
+ *  variants (Alt, Caps), then by style name. */
 const sortFaces = (faces: Face[]) =>
   faces.sort(
     (a, b) =>
@@ -222,7 +270,9 @@ const sortFaces = (faces: Face[]) =>
       a.traits.width - b.traits.width ||
       a.traits.weight - b.traits.weight ||
       Number(b.primary.variable) - Number(a.primary.variable) ||
-      collator.compare(a.style, b.style),
+      Number(a.traits.variant) - Number(b.traits.variant) ||
+      compareNames(a.style, b.style) ||
+      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
   );
 
 /** The face's preview reads as its name: drawn as is, tidied or in one case. Unknown counts too
@@ -267,22 +317,73 @@ export interface Library {
  */
 export function groupLibrary(fonts: FontSummary[], grouping: GroupingOptions = BY_NAME): Library {
   const faces = groupFaces(fonts);
-  const plan = planByName(faces, grouping.rules);
+  const plan = planByName(faces, grouping.rules, grouping.choices);
   const byFamily = new Map<string, Face[]>();
   for (const face of faces) {
     const placed = placeFace(face, plan, grouping);
     face.family = placed.family;
     face.style = placed.style;
     face.groupedBy = placed.by;
-    face.traits = traitsOf(placed.style, face.primary);
+    face.kept = placed.kept ?? false;
+    face.ruleKey = placed.ruleKey;
     const list = byFamily.get(face.family);
     if (list) list.push(face);
     else byFamily.set(face.family, [face]);
   }
-  const families = [...byFamily.entries()]
-    .map(([name, list]) => makeFamily(familyId(name), name, sortFaces(list)))
-    .sort((a, b) => collator.compare(a.name, b.name));
+  const families: Family[] = [];
+  for (const [name, list] of byFamily) {
+    // A family whose own weight numbers tell its styles apart keeps them (BB Strata Pro's 250
+    // Semi Regular); one whose numbers are shown wrong (all 400) goes by its styles' names.
+    const source = familyWeightSource(list);
+    for (const face of list) face.traits = traitsOf(face.style, face.primary, source);
+    families.push(makeFamily(familyId(name), name, sortFaces(list)));
+  }
+  families.sort((a, b) => compareNames(a.name, b.name));
   return { families, plan };
+}
+
+let warmed = false;
+
+/**
+ * Groups a few made-up fonts once, so that the first real grouping (about 12,000 fonts, at
+ * launch) runs already-compiled code: about 4 ms less on the first list in WebKit's engine.
+ * App calls it while the first list is still on its way from the library. Nothing it makes is
+ * kept, beyond a few hundred entries in the name caches.
+ */
+export function warmUpGrouping(): void {
+  if (warmed) return;
+  warmed = true;
+  const words = ["Thin", "Light", "Regular", "Medium", "Bold", "Black", "Italic", "Bold Italic", "Condensed", "Display", "SC", "OSF"];
+  const fonts: FontSummary[] = [];
+  for (let i = 0; i < 300; i++) {
+    const family = `Warm${String.fromCharCode(65 + (i % 26))}${i % 7}`;
+    const word = words[i % words.length];
+    fonts.push({
+      id: -1 - i,
+      folderId: 0,
+      path: `/warm-up/${i}.otf`,
+      faceIndex: 0,
+      family: i % 3 ? `${family} ${word}` : family,
+      subfamily: i % 2 ? "Regular" : "Italic",
+      fullName: null,
+      postscriptName: `${family}-${word.replace(/ /g, "")}${i}`,
+      weight: 100 + (i % 9) * 100,
+      width: 5,
+      italic: i % 2 === 0,
+      monospace: false,
+      variable: false,
+      format: "OpenType CFF",
+      activated: false,
+      installed: false,
+      mtime: 0,
+      fileSize: 0,
+      osActive: false,
+      glyphCount: 100,
+      manufacturer: i % 5 ? "Warm Type" : undefined,
+      preview: null,
+    });
+  }
+  groupLibrary(fonts, BY_NAME);
 }
 
 /** `groupLibrary`'s families. */

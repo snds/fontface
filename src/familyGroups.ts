@@ -43,7 +43,8 @@ export interface Word {
   weight?: number;
   /** The width it names, 1 (ultra-condensed) to 9 (ultra-expanded). */
   width?: number;
-  /** Never the word right after the family part: "SC" there means Simplified Chinese (Noto Sans SC). */
+  /** Right after the family part it may name a script instead: "SC" is Simplified Chinese in
+   *  Noto Sans SC, small capitals in Elementa SC (`NameAnalysis.smallCaps`, `planByName`). */
   notInnermost?: boolean;
 }
 
@@ -142,9 +143,27 @@ const isUpper = (c: string | undefined) => {
   if (n < 128) return n >= 65 && n <= 90;
   return c !== c.toLowerCase() && c === c.toUpperCase();
 };
-const isDigit = (c: string | undefined) => !!c && c >= "0" && c <= "9";
 const isSeparator = (c: string | undefined) => c === " " || c === "-" || c === "_" || c === "\t" || c === "\u00a0";
 const SEPARATOR = /[\s\-_]/;
+
+// The same tests by position, without making a string of each character (the word search runs
+// on every family and PostScript name in the library).
+const lowerAt = (s: string, i: number) => {
+  const n = s.charCodeAt(i);
+  return n < 128 ? n >= 97 && n <= 122 : n === n && isLower(s[i]);
+};
+const upperAt = (s: string, i: number) => {
+  const n = s.charCodeAt(i);
+  return n < 128 ? n >= 65 && n <= 90 : n === n && isUpper(s[i]);
+};
+const digitAt = (s: string, i: number) => {
+  const n = s.charCodeAt(i);
+  return n >= 48 && n <= 57;
+};
+const separatorAt = (s: string, i: number) => {
+  const n = s.charCodeAt(i);
+  return n === 32 || n === 45 || n === 95 || n === 9 || n === 160;
+};
 
 /**
  * A word may be taken off only where a word starts: after a space, hyphen or underscore, at a
@@ -154,11 +173,9 @@ const SEPARATOR = /[\s\-_]/;
  */
 function startsWord(s: string, at: number, atStart: boolean): boolean {
   if (at === 0) return atStart;
-  const prev = s[at - 1];
-  const first = s[at];
-  if (isSeparator(prev)) return true;
-  if (!isUpper(first)) return false;
-  return isLower(prev) || isDigit(prev) || (isUpper(prev) && isLower(s[at + 1]));
+  if (separatorAt(s, at - 1)) return true;
+  if (!upperAt(s, at)) return false;
+  return lowerAt(s, at - 1) || digitAt(s, at - 1) || (upperAt(s, at - 1) && lowerAt(s, at + 1));
 }
 
 interface Found {
@@ -173,41 +190,84 @@ interface Found {
  * and underscores inside it don't matter ("Extra Light" is ExtraLight).
  */
 function wordAtEnd(s: string, set: WordSet, atStart: boolean): Found | null {
-  const lastSeparator = Math.max(s.lastIndexOf(" "), s.lastIndexOf("-"), s.lastIndexOf("_"));
+  // Every spelling ends in a letter: most names that don't are done with at once ("Univers 45").
+  const last = s.charCodeAt(s.length - 1);
+  if (!(last >= 128 || (last >= 65 && last <= 90) || (last >= 97 && last <= 122))) return null;
+  let lower: string | undefined;
+  let lastSeparator = -1;
   // No word is longer than the longest spelling, give or take a separator or two inside it.
   for (let start = Math.max(atStart ? 0 : 1, s.length - LONGEST_FORM - 2); start < s.length; start++) {
-    if (isSeparator(s[start]) || !startsWord(s, start, atStart)) continue;
-    const text = s.slice(start);
-    const lower = text.toLowerCase();
-    const word = BY_FORM.get(start > lastSeparator ? lower : lower.replace(/[ _-]/g, ""));
+    if (separatorAt(s, start) || !startsWord(s, start, atStart)) continue;
+    if (lower === undefined) {
+      lower = s.toLowerCase();
+      // Lowercasing that changes the length (a rare letter) can't be cut at the same places.
+      if (lower.length !== s.length) lower = "";
+      lastSeparator = Math.max(s.lastIndexOf(" "), s.lastIndexOf("-"), s.lastIndexOf("_"));
+    }
+    const tail = lower ? lower.slice(start) : s.slice(start).toLowerCase();
+    const word = BY_FORM.get(start > lastSeparator ? tail : tail.replace(/[ _-]/g, ""));
     if (!word || !inSet(word, set)) continue;
     // An abbreviation in capitals is an acronym: "LT" (Linotype), not Light.
-    if (word.abbrev && text.length > 1 && text === text.toUpperCase()) continue;
+    if (word.abbrev && s.length - start > 1) {
+      const text = s.slice(start);
+      if (text === text.toUpperCase()) continue;
+    }
     return { word, start };
   }
   return null;
 }
 
-const trimEnd = (s: string) => s.replace(/[\s\-_]+$/, "");
+/** Without separators at the end. Nearly every name ends in a letter or digit already. */
+const trimEnd = (s: string) => {
+  const c = s.charCodeAt(s.length - 1);
+  if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) return s;
+  return s.replace(/[\s\-_]+$/, "");
+};
 const trimStart = (s: string) => s.replace(/^[\s\-_]+/, "");
 
 /** Where a number at the end starts, if it's a word of its own ("Univers 45"; not "X01"). */
 const TRAILING_NUMBER = /(\d+)$/;
 function numberAtEnd(s: string): number | null {
+  if (!digitAt(s, s.length - 1)) return null;
   const m = TRAILING_NUMBER.exec(s);
   if (!m || m.index === 0) return null;
   return isSeparator(s[m.index - 1]) ? m.index : null;
 }
 
+const squashed = new Map<string, string>();
+const squashNow = (name: string) => name.toLowerCase().replace(/[\s\-_.™®]/g, "");
+
 /** Names compared this way match: lowercase, without spaces, hyphens, underscores, dots, ™ and ®. */
 export function squash(name: string): string {
-  return name.toLowerCase().replace(/[\s\-_.™®]/g, "");
+  let out = squashed.get(name);
+  if (out === undefined) {
+    out = squashNow(name);
+    // A few thousand family and designer names; never without bound.
+    if (squashed.size > 100_000) squashed.clear();
+    squashed.set(name, out);
+  }
+  return out;
 }
 
 /** A family name without ™ and ®, trimmed. */
-const clean = (name: string) => name.replace(/[™®]/g, "").trim();
+const clean = (name: string) => {
+  const s = name.indexOf("™") < 0 && name.indexOf("®") < 0 ? name : name.replace(/[™®]/g, "");
+  // Trimmed only when it starts or ends with what might be white space (nearly never).
+  const a = s.charCodeAt(0);
+  const b = s.charCodeAt(s.length - 1);
+  return a > 32 && a < 127 && b > 32 && b < 127 ? s : s.trim();
+};
 
-const letters = (s: string) => (s.match(/\p{L}/gu) ?? []).length;
+const LETTER = /\p{L}/u;
+/** How many letters a name has (G3). */
+function letters(s: string): number {
+  let n = 0;
+  for (const ch of s) {
+    const c = ch.charCodeAt(0);
+    if (c < 128 ? (c >= 65 && c <= 90) || (c >= 97 && c <= 122) : LETTER.test(ch)) n++;
+  }
+  return n;
+}
 
 // ------------------------------------------------------------------------------- analysis
 
@@ -215,6 +275,8 @@ export interface Removed {
   word: Word;
   /** The words as the name spells them. */
   text: string;
+  /** Where they start in `NameAnalysis.clean`. */
+  start: number;
 }
 
 /** What a family name says about itself. */
@@ -230,6 +292,12 @@ export interface NameAnalysis {
   abbrev: boolean;
   /** What's left ends in a number ("Univers 45"): a numbered style, only ever suggested. */
   numbered: boolean;
+  /**
+   * "SC" right after the family part is read as a script code here (Noto Sans SC: Simplified
+   * Chinese), so it stays in `base`. When it may be small capitals instead (Elementa SC), this
+   * is the reading that takes it off too; `planByName` picks one by the font.
+   */
+  smallCaps?: NameAnalysis;
 }
 
 /** A name's base with width, size and number words taken off too ("Arial Narrow" → "Arial"),
@@ -243,36 +311,48 @@ export interface WideName {
 }
 
 const analyses = new Map<string, NameAnalysis>();
+const analysesWithout = new Map<string, NameAnalysis>();
 
 /** Reads a family name (cached: the library has a few thousand). `abbrev`: abbreviations count. */
 export function analyzeName(name: string, abbrev = true): NameAnalysis {
-  const cacheKey = `${abbrev ? "a" : "w"}${name}`;
-  const known = analyses.get(cacheKey);
+  const cache = abbrev ? analyses : analysesWithout;
+  const known = cache.get(name);
   if (known) return known;
   const c = clean(name);
-  const words: (Removed & { start: number })[] = [];
+  const words: Removed[] = [];
   let rest = trimEnd(c);
   for (;;) {
     const found = wordAtEnd(rest, abbrev ? "mergeAbbrev" : "merge", false);
     if (!found) break;
-    words.unshift({ word: found.word, text: rest.slice(found.start), start: found.start });
+    words.unshift({ word: found.word, text: rest.slice(found.start).trim(), start: found.start });
     rest = trimEnd(rest.slice(0, found.start));
   }
-  // "SC" right after the family part names a script (Noto Sans SC), not small capitals.
-  while (words.length && words[0].word.notInnermost) {
-    words.shift();
-    rest = trimEnd(c.slice(0, words.length ? words[0].start : c.length));
-  }
-  const analysis: NameAnalysis = {
+  const make = (base: string, list: Removed[]): NameAnalysis => ({
     clean: c,
-    base: rest,
-    key: squash(rest),
-    words: words.map(({ word, text }) => ({ word, text: text.trim() })),
-    abbrev: words.some((w) => w.word.abbrev),
-    numbered: numberAtEnd(rest) !== null,
-  };
-  analyses.set(cacheKey, analysis);
+    base,
+    key: squashNow(base),
+    words: list,
+    abbrev: list.some((w) => w.word.abbrev),
+    numbered: numberAtEnd(base) !== null,
+  });
+  let analysis: NameAnalysis;
+  if (words.length && words[0].word.notInnermost) {
+    // "SC" right after the family part: a script (Noto Sans SC) unless the font says otherwise.
+    const smallCaps = make(rest, words);
+    let at = 0;
+    while (at < words.length && words[at].word.notInnermost) at++;
+    analysis = { ...make(trimEnd(c.slice(0, at < words.length ? words[at].start : c.length)), words.slice(at)), smallCaps };
+  } else analysis = make(rest, words);
+  cache.set(name, analysis);
   return analysis;
+}
+
+/** The analysis that reads the name's family part to the end of `words[0..count)` too: what's
+ *  left when its first `count` style words are part of the family's name ("Times New Roman"). */
+function keepingWords(a: NameAnalysis, count: number): NameAnalysis {
+  const base = trimEnd(a.clean.slice(0, count < a.words.length ? a.words[count].start : a.clean.length));
+  const words = a.words.slice(count);
+  return { clean: a.clean, base, key: squash(base), words, abbrev: words.some((w) => w.word.abbrev), numbered: numberAtEnd(base) !== null };
 }
 
 const wides = new Map<string, WideName>();
@@ -310,16 +390,17 @@ const stems = new Map<string, string[]>();
 /**
  * The family part of a PostScript name, as squash keys: the part before the first "-", and the
  * whole name, each with style words taken off its end ("AbhayaLibre-ExtraBold" → "abhayalibre";
- * "AauxProBold" → "aauxpro"; "Beekman-SquareBold" → "beekman" and "beekmansquare"). Empty
- * without a name.
+ * "AauxProBold" → "aauxpro"; "Beekman-SquareBold" → "beekman" and "beekmansquare"; "ElementaSC"
+ * → "elementasc" and, read as small capitals, "elementa"). Empty without a name.
  */
 export function postscriptStems(ps: string | null | undefined): readonly string[] {
   if (!ps) return [];
   const known = stems.get(ps);
   if (known) return known;
-  const prefix = analyzeName(ps.split("-")[0]).key;
-  const whole = analyzeName(ps).key;
-  const out = prefix === whole ? [prefix] : [prefix, whole];
+  const dash = ps.indexOf("-");
+  const out: string[] = [];
+  for (const a of dash < 0 ? [analyzeName(ps)] : [analyzeName(ps.slice(0, dash)), analyzeName(ps)])
+    for (const key of a.smallCaps ? [a.key, a.smallCaps.key] : [a.key]) if (!out.includes(key)) out.push(key);
   stems.set(ps, out);
   return out;
 }
@@ -330,21 +411,36 @@ const FOUNDRY_NOISE = new Set([
   "systems", "type", "typography", "foundry", "fonts", "font", "design", "studio", "studios", "imaging", "library", "by", "and",
 ]);
 
-/** A foundry (name ID 8) as one word to compare: "The Monotype Corporation" and "Monotype
- *  Typography, Inc." are both "monotype". Undefined when the font doesn't say. */
+/**
+ * A foundry (name ID 8) to compare: its words that say which foundry it is, A to Z, without the
+ * ones that don't ("The Monotype Corporation" and "Monotype Typography, Inc." are both
+ * "monotype"; "Pablo Impallari" is "impallari pablo"). Words of one letter don't count ("A&O").
+ * Undefined when the font doesn't say. Compare two with `sameFoundry`.
+ */
 export function foundryKey(manufacturer: string | null | undefined): string | undefined {
   if (!manufacturer) return undefined;
   if (foundryKeys.has(manufacturer)) return foundryKeys.get(manufacturer);
-  let key: string | undefined;
-  for (const word of manufacturer.toLowerCase().split(/[^\p{L}\p{N}]+/u))
-    if (word && !FOUNDRY_NOISE.has(word)) {
-      key = word;
-      break;
-    }
+  const words = new Set<string>();
+  for (const word of manufacturer.toLowerCase().split(/[^\p{L}\p{N}]+/u)) if (word.length >= 2 && !FOUNDRY_NOISE.has(word)) words.add(word);
+  const key = words.size ? [...words].sort().join(" ") : undefined;
   foundryKeys.set(manufacturer, key);
   return key;
 }
 const foundryKeys = new Map<string, string | undefined>();
+const foundryWords = new Map<string, readonly string[]>();
+
+/** The same foundry: one key's words are all among the other's ("Linotype" and "Linotype-Hell
+ *  AG"; not "Daniel Bruce" and "Daniel Hernandez", two people). */
+export function sameFoundry(a: string, b: string): boolean {
+  if (a === b) return true;
+  const words = (k: string) => {
+    let w = foundryWords.get(k);
+    if (!w) foundryWords.set(k, (w = k.split(" ")));
+    return w;
+  };
+  const [small, big] = words(a).length <= words(b).length ? [words(a), words(b)] : [words(b), words(a)];
+  return small.every((w) => big.includes(w));
+}
 
 // --------------------------------------------------------------------------- style labels
 
@@ -398,10 +494,15 @@ const labels = new Map<string, string>();
  * Normal, without repeating a word. "AmintaBlackItalic" (style Regular) in Aminta is "Black
  * Italic"; "Dynasty Heavy" (Italic) in Dynasty is "Heavy Italic". A face under its own name
  * keeps its own style; one moved under an unrelated family puts its family name first.
+ *
+ * `weight` is the font's stored weight. Old Fontographer fonts call every style "Medium" and
+ * store 400: when the family name already names a weight ("VisageBold"), that "Medium" is
+ * dropped ("Bold", not "Bold Medium").
  */
-export function styleLabel(raw: string, own: string, family: string): string {
+export function styleLabel(raw: string, own: string, family: string, weight?: number): string {
   if (raw === family) return own;
-  const cacheKey = `${raw}\u0000${own}\u0000${family}`;
+  const fallback = weight === 400 && own.trim().toLowerCase() === "medium";
+  const cacheKey = `${raw}\u0000${own}\u0000${family}\u0000${fallback ? 1 : 0}`;
   const known = labels.get(cacheKey);
   if (known !== undefined) return known;
   const after = leftover(clean(raw), family);
@@ -413,13 +514,15 @@ export function styleLabel(raw: string, own: string, family: string): string {
     seen.add(k);
     out.push(word);
   };
+  let namesWeight = false;
   if (after === null) add(clean(raw));
   else {
     const { words, rest } = styleWords(trimStart(after));
     for (const t of tokens(rest)) add(t);
     for (const w of words) add(w.canon);
+    namesWeight = words.some((w) => w.kind === "weight");
   }
-  if (!PLAIN.has(own.trim().toLowerCase())) {
+  if (!PLAIN.has(own.trim().toLowerCase()) && !(fallback && namesWeight)) {
     const { words, rest } = styleWords(own);
     if (rest) add(own.trim());
     else for (const w of words) add(w.canon);
@@ -434,32 +537,128 @@ export interface Traits {
   weight: number;
   width: number;
   italic: boolean;
+  /** Its style names a variant (Alt, Swash, Caps, SC, OSF, LF, TF, Expert…): a plain style of
+   *  the same weight comes before it, and shows the family. */
+  variant: boolean;
 }
 
-const traitWords = new Map<string, { weight?: number; width?: number; slope: boolean }>();
+type TraitFont = Pick<FontSummary, "weight" | "width" | "italic" | "variable">;
+
+interface NamedWeight {
+  weight: number;
+  /** Regular, Roman, Normal or Plain. */
+  plain: boolean;
+}
+
+/** What a style's words say. */
+interface Said {
+  /** The weights its words name: whole words only, unless it has none ("Semi Medium" is
+   *  Medium; "Semi" alone is SemiBold). */
+  weights: NamedWeight[];
+  width?: number;
+  slope: boolean;
+  variant: boolean;
+}
+
+const saids = new Map<string, Said>();
+
+function saidOf(label: string): Said {
+  let said = saids.get(label);
+  if (!said) {
+    const full: NamedWeight[] = [];
+    const abbrevs: NamedWeight[] = [];
+    said = { weights: full, slope: false, variant: false };
+    for (const w of styleWords(label).words) {
+      if (w.weight !== undefined) (w.abbrev ? abbrevs : full).push({ weight: w.weight, plain: PLAIN.has(w.canon.toLowerCase()) });
+      if (w.width !== undefined && said.width === undefined) said.width = w.width;
+      if (w.kind === "slope") said.slope = true;
+      if (w.kind === "variant") said.variant = true;
+    }
+    if (!full.length) said.weights = abbrevs;
+    saids.set(label, said);
+  }
+  return said;
+}
 
 /**
- * What a style says about itself, where the font's own numbers disagree (1,583 of Sean's faces
- * say weight 400 whatever their name, and 406 italics aren't flagged): a weight word 100 or more
- * from the stored weight wins (a variable font keeps its default), a width word wins over the
- * normal width, and Italic or Oblique counts as italic.
+ * The weight a style's name gives it (`Said.weights`), and of several ("Book Heavy"), the one
+ * nearest the font's own number. A plain word (Regular, Roman, Normal, Plain) says 400 but
+ * corrects a number only when the family's numbers are shown wrong (`traitsOf`).
  */
-export function traitsOf(label: string, font: Pick<FontSummary, "weight" | "width" | "italic" | "variable">): Traits {
-  let said = traitWords.get(label);
-  if (!said) {
-    const { words } = styleWords(label);
-    said = {
-      weight: words.find((w) => w.weight !== undefined)?.weight,
-      width: words.find((w) => w.width !== undefined)?.width,
-      slope: words.some((w) => w.kind === "slope"),
-    };
-    traitWords.set(label, said);
-  }
+function namedWeight(said: Said, stored: number): NamedWeight | undefined {
+  const list = said.weights;
+  if (list.length < 2) return list[0];
+  let best = list[0];
+  for (const w of list) if (Math.abs(w.weight - stored) < Math.abs(best.weight - stored)) best = w;
+  return best;
+}
+
+const widthOf = (said: Said, font: TraitFont) => (said.width !== undefined && font.width === 5 ? said.width : font.width);
+
+/**
+ * Where a family's style weights come from (`familyWeightSource`): the fonts' own numbers, or
+ * the styles' names. "allNames" lets a plain word correct a number too ("Regular" in a family
+ * that stores 500 for every weight).
+ */
+export type WeightSource = "numbers" | "names" | "allNames";
+
+/**
+ * What a style says about itself, where the font's own numbers are wrong (1,583 of Sean's faces
+ * say weight 400 whatever their name, and 406 italics aren't flagged): the weight its name gives
+ * it (`namedWeight`) wins when it's 100 or more from the stored weight, unless the family's
+ * numbers are to be trusted (`source` "numbers"), the word is a plain one outside "allNames"
+ * ("Regular" says nothing about Pokerface, stored at 900), or the font is variable (it keeps its
+ * default). A width word wins over the normal width, and Italic or Oblique counts as italic.
+ */
+export function traitsOf(label: string, font: TraitFont, source: WeightSource = "names"): Traits {
+  const said = saidOf(label);
+  const named = source === "numbers" || font.variable ? undefined : namedWeight(said, font.weight);
   return {
-    weight: said.weight !== undefined && !font.variable && Math.abs(said.weight - font.weight) >= 100 ? said.weight : font.weight,
-    width: said.width !== undefined && font.width === 5 ? said.width : font.width,
+    weight: named && (!named.plain || source === "allNames") && Math.abs(named.weight - font.weight) >= 100 ? named.weight : font.weight,
+    width: widthOf(said, font),
     italic: font.italic || said.slope,
+    variant: said.variant,
   };
+}
+
+/** Slope, width and stored weight → the weight named there (reused: one family at a time). */
+const slots = new Map<number, number>();
+
+/**
+ * Whether a family's own weight numbers order its styles, or their names do (`traitsOf`):
+ * - The names, plain words too, when the numbers are shown wrong: two styles of the same slope
+ *   and width that name different weights share a number, or a style at 400 names a weight more
+ *   than 100 away ("Heavy": the 400 many fonts store whatever their weight). Aaux Pro says 400
+ *   for all its weights; Amplitude says 500.
+ * - The numbers when they tell the styles apart (two different ones at least) and aren't shown
+ *   wrong. BB Strata Pro numbers its styles 100 to 500 on purpose, so its Semi Regular (250)
+ *   stays before its Regular (300).
+ * - Otherwise (one style, or one number for all) the names, but a plain word doesn't change a
+ *   number: a lone "Regular" stored at 900 is a Black.
+ */
+export function familyWeightSource(faces: readonly { style: string; primary: TraitFont }[]): WeightSource {
+  // One style: nothing to tell apart (and a plain word can't be shown wrong).
+  if (faces.length < 2) return "names";
+  let first: number | undefined;
+  let varied = false;
+  let wrong = false;
+  const named = slots;
+  named.clear();
+  for (const { style, primary: f } of faces) {
+    if (f.variable) continue;
+    if (first === undefined) first = f.weight;
+    else if (f.weight !== first) varied = true;
+    if (wrong) continue;
+    const said = saidOf(style);
+    const n = namedWeight(said, f.weight);
+    if (!n) continue;
+    if (f.weight === 400 && !n.plain && Math.abs(n.weight - 400) > 100) wrong = true;
+    const slot = (f.italic || said.slope ? 100_000 : 0) + widthOf(said, f) * 10_000 + f.weight;
+    const there = named.get(slot);
+    if (there === undefined) named.set(slot, n.weight);
+    else if (there !== n.weight) wrong = true;
+  }
+  return wrong ? "allNames" : varied ? "numbers" : "names";
 }
 
 // ---------------------------------------------------------------------------- your choices
@@ -497,7 +696,13 @@ export type GroupedBy = "own" | "name" | "rule" | "choice";
 /** What the rules need to know about a face. */
 export interface FaceInput {
   key: string;
-  primary: Pick<FontSummary, "family" | "subfamily" | "postscriptName" | "weight" | "width" | "italic" | "variable" | "manufacturer" | "designer" | "hasTypoFamily">;
+  primary: Pick<
+    FontSummary,
+    "family" | "subfamily" | "postscriptName" | "weight" | "width" | "italic" | "variable" | "manufacturer" | "designer" | "hasTypoFamily" | "glyphCount"
+  >;
+  /** Every copy, the primary first (library.ts). Copies can carry other family names
+   *  ("BlindfishDemi" and "Blindfish"): your rule for any of them applies. */
+  copies?: readonly Pick<FontSummary, "family" | "subfamily">[];
 }
 
 /** Why a name that could join a family isn't grouped with it automatically. */
@@ -563,29 +768,81 @@ function factsOf(info: NameInfo): NameFacts {
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
+/** A to Z, ignoring case and accents; names that differ only there ("GOTHAM", "Gotham") still
+ *  come in one order, whatever order they arrived in. */
+export const compareNames = (a: string, b: string): number => collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
+
 /** The spelling a group shows: one with spaces ("Big Caslon" over "BigCaslon"), then the one
  *  most faces use, then A to Z. */
 function bestSpelling(candidates: [spelling: string, faces: number][]): string {
   const totals = new Map<string, number>();
   for (const [s, n] of candidates) totals.set(s, (totals.get(s) ?? 0) + n);
-  return [...totals].sort(([a, n], [b, m]) => Number(/\s/.test(b)) - Number(/\s/.test(a)) || m - n || collator.compare(a, b))[0][0];
+  return [...totals].sort(([a, n], [b, m]) => Number(/\s/.test(b)) - Number(/\s/.test(a)) || m - n || compareNames(a, b))[0][0];
 }
 
-const intersects = (a: ReadonlySet<string>, b: ReadonlyMap<string, number>) => {
-  for (const x of a) if ((b.get(x) ?? 0) > 0) return true;
-  return false;
-};
+/**
+ * What the other names of a group say: how many names have each value (`countsOf`), less the
+ * name's own when it's among those counted (`inside`). A name's own PostScript name, foundry or
+ * designer is no signal for itself.
+ */
+class Others {
+  private counts: ReadonlyMap<string, number>;
+  private own: ReadonlySet<string>;
+  private inside: boolean;
+  constructor(counts: ReadonlyMap<string, number>, own: ReadonlySet<string>, inside: boolean) {
+    this.counts = counts;
+    this.own = own;
+    this.inside = inside;
+  }
+  private count(v: string, n: number) {
+    return this.inside && this.own.has(v) ? n - 1 : n;
+  }
+  /** Some other name has this value. */
+  has(v: string): boolean {
+    return this.count(v, this.counts.get(v) ?? 0) > 0;
+  }
+  /** Some other name has any value at all. */
+  any(): boolean {
+    for (const [v, n] of this.counts) if (this.count(v, n) > 0) return true;
+    return false;
+  }
+  /** Some other name has one of these. */
+  shares(mine: ReadonlySet<string>): boolean {
+    for (const v of mine) if (this.has(v)) return true;
+    return false;
+  }
+  /** Some other name has the same foundry as one of these (`sameFoundry`). */
+  sharesFoundry(mine: ReadonlySet<string>): boolean {
+    for (const a of mine) for (const [b, n] of this.counts) if (this.count(b, n) > 0 && sameFoundry(a, b)) return true;
+    return false;
+  }
+}
 
-/** Counts of each value over some names, less one name's own (`except`). */
+/** How many style words, from the innermost, every name has in common ("Times New Roman" and
+ *  "Times New Roman Italic" share "Roman"). */
+function sharedWords(members: readonly NameInfo[]): number {
+  let count = 0;
+  for (;;) {
+    const first = members[0].a.words[count];
+    if (!first) return count;
+    const text = squash(first.text);
+    for (const m of members) {
+      const w = m.a.words[count];
+      if (!w || squash(w.text) !== text) return count;
+    }
+    count++;
+  }
+}
+
+/** A CJK font, or one whose name has siblings for other scripts: "SC" after its family part is
+ *  Simplified Chinese, not small capitals. */
+const CJK_GLYPHS = 10_000;
+const SCRIPT_SIBLINGS = ["tc", "hk", "jp", "kr"];
+
+/** How many of these names have each value. */
 function countsOf(names: readonly NameInfo[], pick: (n: NameFacts) => Set<string>): Map<string, number> {
   const out = new Map<string, number>();
   for (const n of names) for (const v of pick(factsOf(n))) out.set(v, (out.get(v) ?? 0) + 1);
-  return out;
-}
-function without(counts: Map<string, number>, own: Set<string>, inside: boolean): Map<string, number> {
-  if (!inside || !own.size) return counts;
-  const out = new Map(counts);
-  for (const v of own) out.set(v, (out.get(v) ?? 1) - 1);
   return out;
 }
 
@@ -598,19 +855,32 @@ function without(counts: Map<string, number>, own: Set<string>, inside: boolean)
  * Two passes: names that reduce to the same base once style words are off, then names left on
  * their own that differ only in spelling ("Times New Roman" / "TimesNewRoman").
  */
-export function planByName(faces: readonly FaceInput[], rules?: ReadonlyMap<string, NameRule>): GroupPlan {
+export function planByName(faces: readonly FaceInput[], rules?: ReadonlyMap<string, NameRule>, choices?: ReadonlyMap<string, FaceChoice>): GroupPlan {
+  // A font you chose a family for doesn't speak for its name: keeping one name's styles apart
+  // by hand doesn't leave the other name renamed on its own.
   const byName = new Map<string, FaceInput[]>();
   for (const face of faces) {
+    if (choices?.has(face.key)) continue;
     const list = byName.get(face.primary.family);
     if (list) list.push(face);
     else byName.set(face.primary.family, [face]);
   }
   const infos: NameInfo[] = [];
+  const keys = new Set<string>();
   for (const [raw, list] of byName) {
     let a = analyzeName(raw, true);
     // Abbreviations count only when the PostScript name agrees.
     if (a.abbrev && !list.some((f) => postscriptStems(f.primary.postscriptName).includes(a.key))) a = analyzeName(raw, false);
     infos.push({ raw, a, faces: list.length, list });
+    keys.add(a.key);
+  }
+  // "SC" right after the family part is small capitals (Elementa SC), unless the font is a CJK
+  // one or the name has siblings for other scripts (Noto Sans SC, with Noto Sans TC).
+  for (const info of infos) {
+    const sc = info.a.smallCaps;
+    if (!sc) continue;
+    const script = info.list.some((f) => f.primary.glyphCount > CJK_GLYPHS) || SCRIPT_SIBLINGS.some((s) => keys.has(sc.key + s));
+    if (!script) info.a = sc;
   }
 
   const merges = new Map<string, string>();
@@ -624,18 +894,22 @@ export function planByName(faces: readonly FaceInput[], rules?: ReadonlyMap<stri
   const settle = (key: string, members: NameInfo[], anchors: NameInfo[], display: string, displayIsName: boolean) => {
     // What the others say: the family that exists (its names), or the other names.
     const context = anchors.length ? anchors : members;
-    const anchorStems = new Set(anchors.flatMap((m) => [...factsOf(m).stems]));
+    const inContext = new Set(context);
+    const isAnchor = new Set(anchors);
+    const stems = countsOf(anchors, (m) => m.stems);
     const foundries = countsOf(context, (m) => m.foundries);
     const designers = countsOf(context, (m) => m.designers);
     const moving: NameInfo[] = [];
     for (const m of members) {
-      if (m.raw === display || rules?.has(squash(m.raw))) continue; // already it; or G5, or your rule decides
+      if (m.raw === display || (rules?.size && rules.has(squash(m.raw)))) continue; // already it; or G5, or your rule decides
       // G3: too little left to be a family name.
       if (letters(m.a.words.length ? m.a.base : m.a.clean) < 3) continue;
-      const inside = context.includes(m);
+      const inside = inContext.has(m);
       const f = factsOf(m);
-      const theirFoundries = without(foundries, f.foundries, inside);
-      const theirDesigners = without(designers, f.designers, inside);
+      // What the other names say: a name's own PostScript name, foundry or designer is no signal.
+      const theirStems = new Others(stems, f.stems, isAnchor.has(m));
+      const theirFoundries = new Others(foundries, f.foundries, inside);
+      const theirDesigners = new Others(designers, f.designers, inside);
       const hold = (reason: HoldReason) => held.set(m.raw, { into: display, reason });
       // G2: a numbered style, unless what's left is a family that exists ("Bodoni 72"). It's
       // suggested for the family without the number ("Univers 45 Light" for Univers).
@@ -650,15 +924,19 @@ export function planByName(faces: readonly FaceInput[], rules?: ReadonlyMap<stri
         continue;
       }
       // G4: both name a foundry, and they differ.
-      if (f.foundries.size && [...theirFoundries.values()].some((n) => n > 0) && !intersects(f.foundries, theirFoundries)) {
+      if (f.foundries.size && theirFoundries.any() && !theirFoundries.sharesFoundry(f.foundries)) {
         hold("foundry");
         continue;
       }
       const weightWord = m.a.words.find((w) => w.word.weight !== undefined)?.word.weight;
       const agrees =
-        [...f.stems].some((s) => s === key || anchorStems.has(s)) ||
-        intersects(f.foundries, theirFoundries) ||
-        intersects(f.designers, theirDesigners) ||
+        // A PostScript name whose family part is the key backs a name that had style words
+        // taken off ("AbhayaLibre-ExtraBold" says Abhaya Libre). For a spelling of the name
+        // itself it's its own name again, so only the other names' PostScript names count.
+        (m.a.words.length > 0 && f.stems.has(key)) ||
+        theirStems.shares(f.stems) ||
+        theirFoundries.sharesFoundry(f.foundries) ||
+        theirDesigners.shares(f.designers) ||
         (weightWord !== undefined && f.weights.some((w) => Math.abs(w - weightWord) <= 100));
       if (!agrees) {
         hold("noSignal");
@@ -685,17 +963,29 @@ export function planByName(faces: readonly FaceInput[], rules?: ReadonlyMap<stri
   for (const [key, members] of groups) {
     if (members.length < 2) continue;
     const anchors = members.filter((m) => m.a.words.length === 0);
+    if (anchors.length) {
+      settle(key, members, anchors, bestSpelling(anchors.map((m) => [m.raw, m.faces])), true);
+      continue;
+    }
     // Two spellings of one name are one name here: the base must exist, or two different names
     // reduce to it.
-    if (!anchors.length && new Set(members.map((m) => squash(m.a.clean))).size < 2) continue;
-    if (anchors.length) settle(key, members, anchors, bestSpelling(anchors.map((m) => [m.raw, m.faces])), true);
-    else settle(key, members, anchors, bestSpelling(members.map((m) => [m.a.base, m.faces])), false);
+    if (new Set(members.map((m) => squash(m.a.clean))).size < 2) continue;
+    // With no family of that name, the family is what every name has in common: a style word
+    // they all share is part of its name ("Times New Roman" and "Times New Roman Italic" are
+    // Times New Roman, not "Times New"), and a name that's only that is the family.
+    const shared = sharedWords(members);
+    if (shared) {
+      const named = members.map((m) => ({ ...m, a: keepingWords(m.a, shared) }));
+      const own = named.filter((m) => m.a.words.length === 0);
+      if (own.length) settle(named[0].a.key, named, own, bestSpelling(own.map((m) => [m.raw, m.faces])), true);
+      else settle(named[0].a.key, named, [], bestSpelling(named.map((m) => [m.a.base, m.faces])), false);
+    } else settle(key, members, anchors, bestSpelling(members.map((m) => [m.a.base, m.faces])), false);
   }
 
   // 2. Names still on their own that differ only in spelling.
   const spellings = new Map<string, NameInfo[]>();
   for (const info of infos) {
-    if (decided(info) || rules?.has(squash(info.raw))) continue;
+    if (decided(info) || (rules?.size && rules.has(squash(info.raw)))) continue;
     const key = squash(info.a.clean);
     const list = spellings.get(key);
     if (list) list.push(info);
@@ -715,24 +1005,49 @@ export interface Placement {
   family: string;
   style: string;
   by: GroupedBy;
+  /** Your rule or choice keeps it under its own name, rather than moving it anywhere. */
+  kept?: boolean;
+  /** The name key of the rule that placed it: its own family name's, or a copy's. */
+  ruleKey?: string;
 }
 
-/** Where one face goes (precedence 1 to 4, above). */
+/**
+ * Where one face goes (precedence 1 to 4, above). Your rule for a name applies to a face when
+ * any of its copies carries that name (the primary's first), so it holds whichever copy is shown.
+ * A "keep separate" rule lists every spelling of the name under the one you chose it for
+ * ("MetaCond LF" with "Meta Cond LF").
+ */
 export function placeFace(face: FaceInput, plan: GroupPlan, options: GroupingOptions): Placement {
   const raw = face.primary.family;
   const own = face.primary.subfamily;
+  const weight = face.primary.weight;
   const choice = options.choices?.get(face.key);
   if (choice) {
-    if (choice.family === null || choice.family === raw) return { family: raw, style: choice.style ?? own, by: "choice" };
-    return { family: choice.family, style: choice.style ?? styleLabel(raw, own, choice.family), by: "choice" };
+    if (choice.family === null || choice.family === raw) return { family: raw, style: choice.style ?? own, by: "choice", kept: true };
+    return { family: choice.family, style: choice.style ?? styleLabel(raw, own, choice.family, weight), by: "choice" };
   }
-  const rule = options.rules?.get(squash(raw));
-  if (rule) {
-    if (rule.decision === "separate" || !rule.into || rule.into === raw) return { family: raw, style: own, by: "rule" };
-    return { family: rule.into, style: styleLabel(raw, own, rule.into), by: "rule" };
+  const rules = options.rules;
+  if (rules?.size) {
+    let ruleKey = squash(raw);
+    let rule = rules.get(ruleKey);
+    let name = raw;
+    let style = own;
+    if (!rule && face.copies)
+      for (const copy of face.copies) {
+        if (copy.family === raw) continue;
+        const k = squash(copy.family);
+        const r = rules.get(k);
+        if (!r) continue;
+        [rule, ruleKey, name, style] = [r, k, copy.family, copy.subfamily];
+        break;
+      }
+    if (rule) {
+      const family = rule.decision === "separate" || !rule.into ? rule.name : rule.into;
+      return { family, style: styleLabel(name, style, family, weight), by: "rule", kept: squash(family) === ruleKey, ruleKey };
+    }
   }
   const into = options.byName ? plan.merges.get(raw) : undefined;
-  if (into) return { family: into, style: styleLabel(raw, own, into), by: "name" };
+  if (into) return { family: into, style: styleLabel(raw, own, into, weight), by: "name" };
   return { family: raw, style: own, by: "own" };
 }
 
@@ -824,16 +1139,38 @@ export function suggestGroups<F extends FamilyLike>(families: readonly F[], plan
     const into = target?.name ?? pending?.into ?? bestSpelling(w.spellings);
     for (const { family, a } of w.list) add(into, family, a.kind!, a.word);
   }
+  // A family that others would join, and that would join another family itself, takes them
+  // along: "Neutra Text TF" into Neutra Text, and Neutra Text into Neutra, is one suggestion,
+  // all into Neutra (so "Merge all" leaves no Neutra Text behind). Never round in a circle.
+  const sourceOf = new Map<string, string>();
+  for (const [id, s] of out) for (const src of s.sources) sourceOf.set(src.family.id, id);
+  const finalOf = (id: string): string => {
+    const seen = new Set([id]);
+    for (let at = id; ; ) {
+      const target = byKey.get(at);
+      const next = target ? sourceOf.get(target.id) : undefined;
+      if (!next) return at;
+      if (seen.has(next)) return id;
+      seen.add(next);
+      at = next;
+    }
+  };
+  for (const id of [...out.keys()]) {
+    const to = finalOf(id);
+    if (to === id) continue;
+    out.get(to)!.sources.push(...out.get(id)!.sources);
+    out.delete(id);
+  }
   const suggestions: Suggestion<F>[] = [];
   for (const [id, s] of out) {
     const existing = byKey.get(id);
     const sources = s.sources.filter((src) => src.family !== existing);
     if (!sources.length) continue;
-    sources.sort((a, b) => collator.compare(a.family.name, b.family.name));
+    sources.sort((a, b) => compareNames(a.family.name, b.family.name));
     const styles = (existing?.faces.length ?? 0) + sources.reduce((n, src) => n + src.family.faces.length, 0);
     suggestions.push({ id, into: existing?.name ?? s.into, existing, sources, styles });
   }
-  return suggestions.sort((a, b) => collator.compare(a.into, b.into));
+  return suggestions.sort((a, b) => compareNames(a.into, b.into));
 }
 
 /** A suggestion's sentence: "Merge 3 families into Abhaya Libre (5 styles)". */

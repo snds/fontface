@@ -24,7 +24,7 @@ import { ChoiceGroup } from "@/components/ChoiceGroup";
 import { BackButton } from "@/components/fontPage/PageHeader";
 import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
 import { applyChange, keepSeparate, mergeNames, moveFaces, resetChoices, useFamilyChoices, type UndoEntry } from "@/families/store";
-import { familiesText, mergeChange, mergeEdits, nameRef, runChange, stylesText, undo, yourEdits } from "@/families/feedback";
+import { familiesText, familyRuleKeys, mergeChange, mergeEdits, nameRef, runChange, stylesText, undo, yourEdits } from "@/families/feedback";
 import type { Locations } from "@/tags/locations";
 
 export const GROUPS_SEARCH_ID = "family-groups-search";
@@ -48,6 +48,8 @@ interface Props {
 
 /** Changed by you: a rule for its name or a choice for it decided its family. */
 const yours = (face: Face) => face.groupedBy === "rule" || face.groupedBy === "choice";
+/** Kept out of suggestions by your rule on the family's own name (familyEdits.familyRuleKey). */
+const keptFamily = (family: Family, familyRules: ReadonlySet<string>) => familyRules.has(squash(family.name));
 /** The family names its styles carry (more than one: grouped from several). */
 const namesIn = (family: Family) => new Set(family.faces.map((f) => f.primary.family)).size;
 
@@ -68,11 +70,14 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
   const [checked, setChecked] = useState<Set<string>>(() => new Set(page.focus));
   // Worked out when the page opens and when the library changes; never for the list itself.
   const suggestions = useMemo(() => suggestGroups(library.families, library.plan, grouping), [library, grouping]);
+  const familyRules = useMemo(() => familyRuleKeys(library.families, grouping.rules), [library, grouping.rules]);
   const filter = page.filter;
 
+  // The heading takes focus when the page opens, and when it's asked for again while it's on
+  // top (Settings › Library opens it over itself).
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
-  }, []);
+  }, [page.opened]);
 
   // Opened again on other fonts (a font's menu while the page is open): those are checked.
   const focusKey = page.focus.join("\n");
@@ -89,8 +94,8 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
       !q ||
       f.name.toLowerCase().includes(q) ||
       f.faces.some((x) => x.style.toLowerCase().includes(q) || x.primary.family.toLowerCase().includes(q) || (x.primary.postscriptName?.toLowerCase().includes(q) ?? false));
-    return library.families.filter((f) => (filter !== "changed" || f.faces.some(yours)) && matches(f));
-  }, [library.families, filter, q]);
+    return library.families.filter((f) => (filter !== "changed" || f.faces.some(yours) || keptFamily(f, familyRules)) && matches(f));
+  }, [library.families, filter, q, familyRules]);
 
   const checkedFaces = useMemo(() => {
     const out: Face[] = [];
@@ -159,8 +164,11 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
             checked={checked}
             onChecked={setChecked}
             locations={locations}
+            familyRules={familyRules}
           />
-          {checkedFaces.length > 0 && <SelectionBar faces={checkedFaces} families={library.families} onDone={done} onClear={done} announce={announce} />}
+          {checkedFaces.length > 0 && (
+            <SelectionBar faces={checkedFaces} families={library.families} familyRules={familyRules} onDone={done} onClear={done} announce={announce} />
+          )}
           <div className="sr-only" aria-live="polite">
             {checkedFaces.length ? `${stylesText(checkedFaces.length)} selected` : ""}
           </div>
@@ -201,6 +209,7 @@ interface TreeProps {
   checked: Set<string>;
   onChecked: (next: Set<string>) => void;
   locations: Locations;
+  familyRules: ReadonlySet<string>;
 }
 
 /**
@@ -210,7 +219,7 @@ interface TreeProps {
  * clears. The list keeps focus and points at the current row (aria-activedescendant), since
  * rows are only drawn while they're in view.
  */
-function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecked, locations }: TreeProps) {
+function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecked, locations, familyRules }: TreeProps) {
   const base = useId();
   const helpId = `${base}-help`;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -415,12 +424,13 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
               const open = expanded.has(row.family.id);
               const names = namesIn(row.family);
               const changed = row.family.faces.some(yours);
+              const kept = keptFamily(row.family, familyRules);
               return (
                 <div
                   key={v.key}
                   {...common}
                   aria-expanded={open}
-                  aria-label={`${row.family.name}, ${stylesText(row.family.faces.length)}${names > 1 ? `, grouped from ${names} names` : ""}${changed ? ", changed by you" : ""}`}
+                  aria-label={`${row.family.name}, ${stylesText(row.family.faces.length)}${names > 1 ? `, grouped from ${names} names` : ""}${kept ? ", kept separate by you" : changed ? ", changed by you" : ""}`}
                   className={cn(common.className, "pl-2")}
                 >
                   <span
@@ -438,9 +448,9 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
                   <span className="min-w-0 truncate font-semibold">{row.family.name}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">{stylesText(row.family.faces.length)}</span>
                   {names > 1 && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">· grouped from {names.toLocaleString()} names</span>}
-                  {changed && (
+                  {(changed || kept) && (
                     <Badge variant="outline" className="shrink-0">
-                      Changed by you
+                      {kept ? "Kept separate" : "Changed by you"}
                     </Badge>
                   )}
                 </div>
@@ -449,7 +459,7 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
             const face = row.face;
             const from = face.primary.family !== row.family.name ? face.primary.family : null;
             const how = face.groupedBy === "choice" ? "moved by you" : face.groupedBy === "rule" ? "by your rule" : from ? "grouped by name" : "";
-            const kept = yours(face) && !from;
+            const kept = yours(face) && face.kept;
             return (
               <div
                 key={v.key}
@@ -480,13 +490,27 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
 
 // --------------------------------------------------------------------- the selection bar
 
-function SelectionBar({ faces, families, onDone, onClear, announce }: { faces: Face[]; families: Family[]; onDone: () => void; onClear: () => void; announce: (text: string) => void }) {
+function SelectionBar({
+  faces,
+  families,
+  familyRules,
+  onDone,
+  onClear,
+  announce,
+}: {
+  faces: Face[];
+  families: Family[];
+  familyRules: ReadonlySet<string>;
+  onDone: () => void;
+  onClear: () => void;
+  announce: (text: string) => void;
+}) {
   const inputId = useId();
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const names = useMemo(() => families.map((f) => f.name), [families]);
   const n = faces.length;
-  const mine = yourEdits(faces);
+  const mine = yourEdits(faces, familyRules);
   const run = async (op: () => Promise<boolean>) => {
     if (busy) return;
     setBusy(true);

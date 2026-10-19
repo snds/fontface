@@ -9,7 +9,7 @@ import { characterSetLine, type CharactersState } from "@/components/CharacterGr
 import { IS_MAC } from "@/components/TitleBar";
 import { colorVar } from "@/tags/api";
 import type { Locations } from "@/tags/locations";
-import { keepSeparate, resetChoices, useOpenFamilyGroups } from "@/families/store";
+import { keepSeparate, resetChoices, useFamilyChoices, useOpenFamilyGroups } from "@/families/store";
 import { nameRef, runChange } from "@/families/feedback";
 import { squash } from "@/familyGroups";
 import { formatBytes, SectionTitle } from "./parts";
@@ -45,8 +45,11 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
   const rows: [string, string | null | undefined, boolean?][] = [
     ["On or off", status],
     // The font's own names, when it's listed under another family or style.
-    ["Its family name", face.family !== font.family ? font.family : font.legacyFamily],
+    ["Its family name", face.family !== font.family ? font.family : null],
     ["Its style name", face.style !== font.subfamily ? font.subfamily : null],
+    // Name ID 1, when the font's own family name is its name ID 16: what apps that list four
+    // styles per family show ("Avenir Next Medium" for Avenir Next's Medium).
+    ["Name in older apps", font.legacyFamily],
     ["Full name", font.fullName],
     ["PostScript", font.postscriptName, true],
     ["Version", detail?.version],
@@ -118,14 +121,18 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
 
 /**
  * How this style got its family, when it isn't simply its own name: grouped by name (with Keep
- * separate), or by your rule or choice (with a way back). Each change has Undo.
+ * separate), or by your rule or choice (with a way back). Also your rule for the family's own
+ * name, when it keeps the family out of suggestions. Each change has Undo.
  */
 function FamilyGroupNote({ face }: { face: Face }) {
   const openFamilyGroups = useOpenFamilyGroups();
+  const { rules } = useFamilyChoices();
   const raw = face.primary.family;
-  const moved = face.family !== raw;
-  if (face.groupedBy === "own") return null;
-  let text: string;
+  const familyKey = squash(face.family);
+  // Your rule for the family's own name, other than the one that placed this style.
+  const familyKept = face.ruleKey !== familyKey && rules.get(familyKey)?.decision === "separate";
+  if (face.groupedBy === "own" && !familyKept) return null;
+  let text: string | null = null;
   let action: { label: string; run: () => void } | null = null;
   if (face.groupedBy === "name") {
     text = `Grouped by name into ${face.family}, from “${raw}”.`;
@@ -134,30 +141,60 @@ function FamilyGroupNote({ face }: { face: Face }) {
       run: () => void runChange(() => keepSeparate(`Kept “${raw}” separate`, [nameRef(raw)]), "Couldn't keep it separate"),
     };
   } else if (face.groupedBy === "rule") {
-    text = moved ? `Merged into ${face.family} by you, from “${raw}”.` : `You chose to keep “${raw}” separate.`;
+    const ruleKey = face.ruleKey ?? squash(raw);
+    text = face.kept ? `You chose to keep “${face.family}” separate.` : `Merged into ${face.family} by you, from “${raw}”.`;
     action = {
-      label: moved ? "Undo this merge" : "Allow grouping by name",
-      run: () => void runChange(() => resetChoices(moved ? `Took “${raw}” out of ${face.family}` : `Allowed grouping “${raw}” by name`, [], [squash(raw)]), "Couldn't change it"),
+      label: face.kept ? "Allow grouping by name" : "Undo this merge",
+      run: () =>
+        void runChange(
+          () => resetChoices(face.kept ? `Allowed grouping “${face.family}” by name` : `Took “${raw}” out of ${face.family}`, [], [ruleKey]),
+          "Couldn't change it",
+        ),
     };
-  } else {
-    text = moved ? `Moved into ${face.family} by you, from “${raw}”.` : "You chose to keep this style under its own family name.";
+  } else if (face.groupedBy === "choice") {
+    text = face.kept ? "You chose to keep this style under its own family name." : `Moved into ${face.family} by you, from “${raw}”.`;
     action = {
-      label: moved ? "Use its own family name" : "Allow grouping by name",
-      run: () => void runChange(() => resetChoices(moved ? `Took ${face.style} out of ${face.family}` : `Allowed grouping ${face.style} by name`, [face.key], []), "Couldn't change it"),
+      // Forgets the move: grouping by name (or the font's own name) decides again.
+      label: face.kept ? "Allow grouping by name" : "Undo my move",
+      run: () =>
+        void runChange(() => resetChoices(face.kept ? `Allowed grouping ${face.style} by name` : `Took ${face.style} out of ${face.family}`, [face.key], []), "Couldn't change it"),
     };
   }
   return (
-    <section aria-label="Family group" className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2.5 text-sm">
-      <Icon name="account_tree" size={16} className="text-muted-foreground" />
-      <span className="min-w-0 flex-1">{text}</span>
-      {action && (
-        <Button variant="link" size="sm" className="h-auto p-0" onClick={action.run}>
-          {action.label}
-        </Button>
+    <section aria-label="Family group" className="flex flex-col gap-2 rounded-lg border px-3 py-2.5 text-sm">
+      {text && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Icon name="account_tree" size={16} className="text-muted-foreground" />
+          <span className="min-w-0 flex-1">{text}</span>
+          {action && (
+            <Button variant="link" size="sm" className="h-auto p-0" onClick={action.run}>
+              {action.label}
+            </Button>
+          )}
+          <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>
+            Family groups…
+          </Button>
+        </div>
       )}
-      <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>
-        Family groups…
-      </Button>
+      {familyKept && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Icon name="account_tree" size={16} className="text-muted-foreground" />
+          <span className="min-w-0 flex-1">You chose to keep {face.family} separate: it isn't suggested for another family.</span>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0"
+            onClick={() => void runChange(() => resetChoices(`Allowed suggestions for ${face.family}`, [], [familyKey]), "Couldn't change it")}
+          >
+            Allow suggestions
+          </Button>
+          {!text && (
+            <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>
+              Family groups…
+            </Button>
+          )}
+        </div>
+      )}
     </section>
   );
 }

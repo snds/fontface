@@ -27,6 +27,7 @@ impl Library {
         let conn = db::open(&dir.join("library.sqlite3")).unwrap();
         super::ensure_schema(&conn).unwrap();
         crate::activation::ensure_schema(&conn).unwrap();
+        crate::families::ensure_schema(&conn).unwrap();
         conn.execute("INSERT INTO folders (path, added_at, kind) VALUES ('/fonts', 0, 'user')", []).unwrap();
         let user_folder = conn.last_insert_rowid();
         conn.execute("INSERT INTO folders (path, added_at, kind) VALUES ('/Library/Fonts', 0, 'system')", []).unwrap();
@@ -1350,6 +1351,9 @@ fn a_moved_folder_keeps_its_fonts_tags_and_colors() {
         .unwrap();
     let t = super::create_tag(&mut lib.conn, "Sci-Fi", None).unwrap();
     super::assign(&mut lib.conn, &[t.id], &[b_key.clone()], true).unwrap();
+    // A family choice for the font without a PostScript name (kept by file), and one by name.
+    let a_key = "ps:A-Regular|static|r".to_string();
+    crate::families::apply(&mut lib.conn, &crate::families::move_change(&[b_key.clone(), a_key.clone()], "Display Faces", None)).unwrap();
     super::set_location_color(&lib.conn, &old, Some("green")).unwrap();
     super::set_location_color(&lib.conn, &format!("{old}/sub"), Some("red")).unwrap();
     super::set_location_color(&lib.conn, "/fonts", Some("blue")).unwrap();
@@ -1378,8 +1382,10 @@ fn a_moved_folder_keeps_its_fonts_tags_and_colors() {
     assert_eq!(skipped, format!("{new}/bad.otf"));
     assert_eq!(r.active, vec![format!("{new}/A.otf")]);
     assert_eq!(r.old_paths.len(), 2);
-    // The tag kept by file follows the file.
+    // The tag kept by file follows the file, and so does its family choice.
     assert_eq!(lib.keys_of("Sci-Fi"), vec![face_key(None, false, false, &format!("{new}/sub/B.otf"), 0)]);
+    let choices: Vec<String> = crate::families::load(&lib.conn).unwrap().choices.into_iter().map(|c| c.face_key).collect();
+    assert_eq!(choices, vec![face_key(None, false, false, &format!("{new}/sub/B.otf"), 0), a_key], "by file follows; by name stays");
     let colors = super::location_colors(&lib.conn).unwrap();
     assert_eq!(colors.get(&new).map(String::as_str), Some("green"));
     assert_eq!(colors.get(&format!("{new}/sub")).map(String::as_str), Some("red"));
