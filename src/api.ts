@@ -336,6 +336,21 @@ export interface GoogleInstallResult {
   temporaryFiles: string[];
 }
 
+/** `google_remove`: what it turned off, so Undo (`google_restore`) turns the same files back on,
+ *  the same way. The files are set aside until Fontface quits, which deletes them. */
+export interface GoogleRemoved {
+  /** File names that were on. */
+  wasActiveFiles: string[];
+  /** Of those, the ones that were on until logout (scope "temporary"). */
+  temporaryFiles: string[];
+}
+
+/** `google_restore`: the removed family's folder, back in place, and its font file names. */
+export interface GoogleRestored {
+  dir: string;
+  files: string[];
+}
+
 export interface AdobeFace {
   postscriptName: string;
   family: string;
@@ -695,7 +710,9 @@ export const api = {
   listServices: () => invoke<ServiceInfo[]>("list_services"),
   googleCatalog: (refresh = false) => invoke<GoogleCatalog>("google_catalog", { refresh }),
   googleInstall: (id: string) => invoke<GoogleInstallResult>("google_install", { id }),
-  googleRemove: (id: string) => invoke<void>("google_remove", { id }),
+  googleRemove: (id: string) => invoke<GoogleRemoved>("google_remove", { id }),
+  /** Undo for googleRemove, until Fontface quits. */
+  googleRestore: (id: string) => invoke<GoogleRestored>("google_restore", { id }),
   /** An online preview file of a family (googlePreviewStore.ts). The only call that may use the
    *  network for previews, and only while `googlePreviews` is on. */
   googlePreview: (id: string, kind: GooglePreviewKind) => invoke<GooglePreview>("google_preview", { id, kind }),

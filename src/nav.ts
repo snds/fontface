@@ -3,9 +3,9 @@ import type { CompareList, PairFonts } from "./compare.ts";
 
 /**
  * Pages over the library list (see docs/ARCHITECTURE.md, Front end). The sidebar picks a place
- * (App's `view` and filters), and pages are pushed on top of it: the font page, the Google
- * Fonts and Purchases pages ("catalog" pages, opened with Browse from those sources' lists),
- * Family groups, Compare and Pair. While a page shows, the list stays mounted underneath,
+ * (App's `view` and filters), and pages are pushed on top of it: the font page, the Purchases
+ * page (a "catalog" page, opened with Browse from its list), Family groups, Compare and Pair.
+ * (Google Fonts' catalog isn't a page: it's that source's own view.) While a page shows, the list stays mounted underneath,
  * hidden and inert, so it keeps its scroll position, selection and loaded previews.
  *
  * - Back (the header button, Cmd+[ or Alt+Left on Windows, the mouse's back button, Esc outside
@@ -31,12 +31,12 @@ export interface FontPageEntry {
   returnTo: string | null;
 }
 
-/** A service's own page, opened over its list with Browse: the Google Fonts catalog, or the
- *  Purchases page (new downloads, imports, watched folders). */
+/** A service's own page, opened over its list with Browse: the Purchases page (new downloads,
+ *  imports, watched folders). Google Fonts' catalog used to be one; it's that source's view now. */
 export interface CatalogPageEntry {
   kind: "catalog";
   id: number;
-  service: "google" | "purchases";
+  service: "purchases";
   /** The element (by id) that opened it, focused again on Back: the Browse button. */
   returnTo: string | null;
 }
@@ -231,15 +231,15 @@ export function backKeyIntent(e: KeyLike, ctx: BackContext): "back" | "leave-fie
 export const MOUSE_BACK_BUTTON = 3;
 
 /**
- * What Cmd+F (Ctrl+F on Windows) does, by the page on top: "list" goes to the library's Search
- * (no page is open); "leave" closes the pages, then goes there (a font page, Compare or Pair,
- * which have no search of their own); "page" goes to the page's own search field (the Google Fonts catalog, Family
- * groups), keeping what's typed and picked there; null does nothing (the Purchases page has no
- * search field, and leaving it would lose its place).
+ * What Cmd+F (Ctrl+F on Windows) does, by the page on top: "list" goes to the toolbar's Search
+ * (no page is open; on the Google Fonts view it searches the catalog); "leave" closes the pages,
+ * then goes there (a font page, Compare or Pair, which have no search of their own); "page" goes
+ * to the page's own search field (Family groups), keeping what's typed and picked there; null
+ * does nothing (the Purchases page has no search field, and leaving it would lose its place).
  */
 export function findIntent(top: Page | undefined): "list" | "leave" | "page" | null {
   if (!top) return "list";
   if (top.kind === "font" || top.kind === "compare" || top.kind === "pair") return "leave";
   if (top.kind === "groups") return "page";
-  return top.service === "google" ? "page" : null;
+  return null;
 }

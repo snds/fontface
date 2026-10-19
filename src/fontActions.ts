@@ -444,6 +444,9 @@ export interface NativeMenuState {
 export interface MenuInput {
   /** The library list is showing and takes commands: no page, settings or Adobe Fonts' own page over it. */
   list: boolean;
+  /** The list showing is the Google Fonts view: one layout and the catalog's own order, so only
+   *  the preview size takes commands. */
+  catalog?: boolean;
   /** Back would close a page. */
   back: boolean;
   layout: LibraryLayout;
@@ -468,7 +471,7 @@ export function nativeMenuState(m: MenuInput): NativeMenuState {
   texts[SORT_ASC_ITEM] = up;
   texts[SORT_DESC_ITEM] = down;
   if (m.list) {
-    enabled.push(...Object.values(LAYOUT_ITEMS), GROUP_ITEM, ...MENU_IDS.filter((id) => id.startsWith("sort.")));
+    if (!m.catalog) enabled.push(...Object.values(LAYOUT_ITEMS), GROUP_ITEM, ...MENU_IDS.filter((id) => id.startsWith("sort.")));
     if (stepSize(m.size, 1) !== m.size) enabled.push(BIGGER_ITEM);
     if (stepSize(m.size, -1) !== m.size) enabled.push(SMALLER_ITEM);
   }

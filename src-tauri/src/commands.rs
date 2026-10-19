@@ -788,21 +788,58 @@ pub async fn google_install(app: AppHandle, id: String) -> AppResult<GoogleInsta
     .await
 }
 
-/// Removes a Google Fonts family: its fonts are turned off, then its folder is deleted.
-/// The UI rescans the service folder afterwards.
+/// What `google_remove` turned off, so Undo (`google_restore`) turns the same files back on,
+/// the same way.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleRemoved {
+    /// File names that were on.
+    was_active_files: Vec<String>,
+    /// Of those, the ones that were on for this login only (scope "temporary").
+    temporary_files: Vec<String>,
+}
+
+/// Removes a Google Fonts family: its fonts are turned off, then its folder is set aside
+/// (hidden, out of the library) until Fontface quits, which deletes it. Until then Undo puts it
+/// back (`google_restore`). The UI rescans the service folder afterwards.
 #[tauri::command]
-pub async fn google_remove(app: AppHandle, id: String) -> AppResult<()> {
+pub async fn google_remove(app: AppHandle, id: String) -> AppResult<GoogleRemoved> {
     blocking(move || {
         let state = app.state::<AppState>();
         let _op = FamilyOp::start(&state, &id)?;
         let dir = services::google::installed_dir(&state.data_dir, &id)
             .ok_or_else(|| AppError::NotFound(format!("{id} isn't installed")))?;
         let turned_off = turn_off_under(&state, &dir)?;
-        if let Err(e) = std::fs::remove_dir_all(&dir) {
+        if let Err(e) = services::google::hold_removed(&dir) {
             restore(&state, &turned_off);
-            return Err(e.into());
+            return Err(e);
         }
-        Ok(())
+        let name = |p: &String| Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned());
+        Ok(GoogleRemoved {
+            was_active_files: turned_off.iter().filter_map(|(p, _)| name(p)).collect(),
+            temporary_files: turned_off.iter().filter(|(_, scope)| *scope == Scope::Session).filter_map(|(p, _)| name(p)).collect(),
+        })
+    })
+    .await
+}
+
+/// A Google Fonts family put back by Undo: its folder and font file names, as `google_install`
+/// gives them, so the UI rescans and turns back on what `google_remove` turned off.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleRestored {
+    dir: String,
+    files: Vec<String>,
+}
+
+/// Undo for `google_remove`: the family's folder, set aside until Fontface quits, goes back.
+#[tauri::command]
+pub async fn google_restore(app: AppHandle, id: String) -> AppResult<GoogleRestored> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let _op = FamilyOp::start(&state, &id)?;
+        let services::google::Restored { dir, files } = services::google::restore_removed(&state.data_dir, &id)?;
+        Ok(GoogleRestored { dir, files })
     })
     .await
 }
