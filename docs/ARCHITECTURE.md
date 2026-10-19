@@ -148,20 +148,33 @@ guards G1–G5), else the font's own name. Width, size and numbered words, and h
 only become suggestions (`suggestGroups`), worked out when the Family groups page opens (and
 counted while Settings are open), never for the list; suggestions that chain (a family that
 others join, joining another) are folded into one. The work is per family name, not per face,
-and name analysis, PostScript stems, labels and traits are cached by string. On a copy of
-Sean's library (12,257 rows, 11,047 faces, about 3,800 names), in JavaScriptCore (WebKit's
-engine, the one the app's web view runs; the `jsc` shell on this Mac) the first grouping after
-launch takes about 28 ms with empty caches, about 25 ms after `warmUpGrouping` (App runs it on
-a few made-up fonts while the first list is on its way, so the code is compiled), and every
-regroup after that (each switch, each live reload during a scan) about 9 ms. Nothing depends
-on the order rows arrive in: the copy that names a face is chosen by its state, format, date,
-whether its names agree with its PostScript name, name ID 16, then its path, never its row id;
-names and labels that tie ignoring case are put in code-point order. Each face carries its
+and name analysis, PostScript stems, style words, labels and traits are cached by string. On a
+copy of Sean's library (12,257 rows, 11,047 faces, about 3,600 names, in the order `list_fonts`
+sends them), in JavaScriptCore (WebKit's engine, the one the app's web view runs; the `jsc`
+shell on this Mac) the first grouping after launch takes about 24 ms with empty caches and
+about 20 ms after `warmUpGrouping` (App runs it, about 6 ms, on a made-up library with every
+kind of name while the first list is on its way, so the code is compiled); in Node about 32
+and 28 ms. Every regroup after that (each switch, each live reload during a scan) takes about
+7 ms in JavaScriptCore, 10 in Node. Nothing depends on the order rows arrive in, a file's path
+or which copy is on: when a face's copies carry different names of one family (`namedCopy`),
+it's grouped by the one whose names agree with its PostScript name, then the more general one,
+name ID 16, then A to Z; a family whose every style also has a copy with a name more of the
+library carries goes by that name (`planByName`'s step 3: a per-style folder's
+House-A-Rama-Kingpin is House-A-Rama's Kingpin); and its label comes from the copy whose
+names say it best (`labelFor`). The copy shown and turned on (`primary`) is chosen by state,
+format and date first, then the same names, and by path only between copies named alike.
+Names and labels that tie ignoring case are put in code-point order. Each face carries its
 `family`, its `style` label ("Black Italic"), how it got them (`groupedBy`: own, name, rule,
-choice; `kept` and `ruleKey` for your rules) and its sorting `traits`. A family's weights come
+choice; `kept` and `ruleKey` for your rules), the name it was placed by (`name`: its own, or
+the copy's it went by) and its sorting `traits`. A family's weights come
 from its fonts' numbers when they tell its styles apart and from its styles' words where the
 numbers are shown wrong (`familyWeightSource`). Your rule for a name applies when any of a
 face's copies carries that name; a "separate" rule lists every spelling under the rule's own.
+A new family made by grouping (no font of that name) keeps a style word all its names share
+only when it's part of the name (`partOfName`: a plain word, a weight the fonts' numbers
+contradict, or one a PostScript family part spells), so "Gotham Bold" and "Gotham Bold Italic"
+are Gotham's. A width or size suggestion joins the longest name left that's a family
+(`WideName.steps`: "Times New Roman Condensed" for Times New Roman).
 
 Your choices (`src-tauri/src/families.rs`) are two side tables made by `ensure_schema` at launch,
 outside the numbered migrations like the tag tables: `family_overrides(face_key, family,

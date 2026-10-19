@@ -9,9 +9,9 @@ import type { Face, Family } from "./library.ts";
 
 /**
  * What merging some families into another writes: a rule for each family name their styles
- * carry (fonts that arrive later follow it), and for styles you'd moved into one of them by
- * hand, a choice that moves them along. A rule written for the name a style shows also holds
- * when another of its copies is shown (familyGroups.placeFace reads every copy's name).
+ * carry (`Face.name`: the name each was placed by; fonts that arrive later follow it), and for
+ * styles you'd moved into one of them by hand, a choice that moves them along. A rule written
+ * for that name holds whichever copy is shown (familyGroups.placeFace reads every copy's name).
  */
 export function mergeEdits(families: readonly Family[]): { names: NameRef[]; faces: string[] } {
   const names = new Map<string, NameRef>();
@@ -19,7 +19,7 @@ export function mergeEdits(families: readonly Family[]): { names: NameRef[]; fac
   for (const family of families)
     for (const face of family.faces) {
       if (face.groupedBy === "choice") faces.push(face.key);
-      else names.set(squash(face.primary.family), { nameKey: squash(face.primary.family), name: face.primary.family });
+      else names.set(squash(face.name), { nameKey: squash(face.name), name: face.name });
     }
   return { names: [...names.values()], faces };
 }
@@ -71,7 +71,7 @@ export function yourEdits(faces: readonly Face[], familyRules?: ReadonlySet<stri
   const names = new Set<string>();
   for (const f of faces) {
     if (f.groupedBy === "choice") keys.push(f.key);
-    if (f.groupedBy === "rule") names.add(f.ruleKey ?? squash(f.primary.family));
+    if (f.groupedBy === "rule") names.add(f.ruleKey ?? squash(f.name));
     const own = squash(f.family);
     if (familyRules?.has(own)) names.add(own);
   }

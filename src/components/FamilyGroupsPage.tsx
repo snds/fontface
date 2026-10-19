@@ -51,7 +51,7 @@ const yours = (face: Face) => face.groupedBy === "rule" || face.groupedBy === "c
 /** Kept out of suggestions by your rule on the family's own name (familyEdits.familyRuleKey). */
 const keptFamily = (family: Family, familyRules: ReadonlySet<string>) => familyRules.has(squash(family.name));
 /** The family names its styles carry (more than one: grouped from several). */
-const namesIn = (family: Family) => new Set(family.faces.map((f) => f.primary.family)).size;
+const namesIn = (family: Family) => new Set(family.faces.map((f) => f.name)).size;
 
 /**
  * Family groups (opened from View options, a font's More or right-click menu, or Settings ›
@@ -93,7 +93,7 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
     const matches = (f: Family) =>
       !q ||
       f.name.toLowerCase().includes(q) ||
-      f.faces.some((x) => x.style.toLowerCase().includes(q) || x.primary.family.toLowerCase().includes(q) || (x.primary.postscriptName?.toLowerCase().includes(q) ?? false));
+      f.faces.some((x) => x.style.toLowerCase().includes(q) || x.name.toLowerCase().includes(q) || x.primary.family.toLowerCase().includes(q) || (x.primary.postscriptName?.toLowerCase().includes(q) ?? false));
     return library.families.filter((f) => (filter !== "changed" || f.faces.some(yours) || keptFamily(f, familyRules)) && matches(f));
   }, [library.families, filter, q, familyRules]);
 
@@ -457,7 +457,7 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
               );
             }
             const face = row.face;
-            const from = face.primary.family !== row.family.name ? face.primary.family : null;
+            const from = face.name !== row.family.name ? face.name : null;
             const how = face.groupedBy === "choice" ? "moved by you" : face.groupedBy === "rule" ? "by your rule" : from ? "grouped by name" : "";
             const kept = yours(face) && face.kept;
             return (

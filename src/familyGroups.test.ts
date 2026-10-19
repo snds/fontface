@@ -541,7 +541,7 @@ test("name analysis: whole words from the end, longest first, case steps", () =>
   const a = analyzeName("Foo ExtraBlack");
   assert.deepEqual([a.base, a.words.map((w) => w.word.canon)], ["Foo", ["ExtraBlack"]], "ExtraBlack before Black");
   assert.deepEqual(widen(analyzeName("FooSemiCondensed").base).word, "SemiCondensed");
-  assert.deepEqual(widen(analyzeName("Univers 45 Light").base), { base: "Univers", key: "univers", word: "45", kind: "number" });
+  assert.deepEqual(widen(analyzeName("Univers 45 Light").base), { base: "Univers", key: "univers", word: "45", kind: "number", steps: [{ base: "Univers", key: "univers" }] });
   assert.equal(analyzeName("Foo Extra Light Italic").base, "Foo");
   assert.equal(analyzeName("078MKSDMedium").base, "078MKSD", "an all-capitals run gives way to a word");
   assert.equal(analyzeName("Highlight").base, "Highlight");
@@ -768,4 +768,195 @@ test("a plain style shows the family and comes before its variants (R2)", () => 
   assert.deepEqual(names(families), ["Proxima Nova"]);
   assert.equal(families[0].representative.style, "Regular");
   assert.deepEqual(styles(families[0]), ["Regular", "Alt"]);
+});
+
+// ------------------------------------------------------ fixes after the second M3 review
+
+/** One font in two files that name it differently: a family folder's copy and a per-style one. */
+const copies = (ps: string, perStyle: [family: string, style: string], inFamily: [family: string, style: string], more: Partial<FontSummary> = {}) => [
+  font(perStyle[0], perStyle[1], { postscriptName: ps, path: `/Drive/${ps}/${ps}.otf`, ...more }),
+  font(inFamily[0], inFamily[1], { postscriptName: ps, path: `/Drive/${inFamily[0]}/${ps}.otf`, ...more }),
+];
+const shape = (families: Family[]) => families.map((f) => `${f.name}: ${styles(f).join(", ")}`);
+/** The same fonts in other orders, in other folders (every path changed), with another copy on. */
+const variants = (fonts: FontSummary[]) => [
+  [...fonts].reverse(),
+  fonts.map((f, i) => ({ ...f, id: 9000 - i, path: f.path.replace("/Drive/", "/Moved/").split("/").reverse().join("/") })),
+  fonts.map((f, i) => ({ ...f, osActive: i % 2 === 1, activated: i % 2 === 1 })),
+];
+
+test("a per-style copy doesn't split a family its other copies share (M3-new-1: House-A-Rama)", () => {
+  const fonts = [
+    font("House-A-Rama", "Regular", { postscriptName: "House-A-Rama" }),
+    ...copies("House-A-Rama-Kingpin", ["House-A-Rama-Kingpin", "Regular"], ["House-A-Rama", "Medium"]),
+    ...copies("House-A-Rama-Tenpin", ["House-A-Rama-Tenpin", "Regular"], ["House-A-Rama", "Medium"]),
+    ...copies("House-A-RamaHigh-Roller", ["House-A-RamaHigh-Roller", "Regular"], ["House-A-Rama", "High-Roller"]),
+  ];
+  for (const options of [ON, OFF]) {
+    const families = groupFamilies(fonts, options);
+    assert.deepEqual(shape(families), ["House-A-Rama: High Roller, Kingpin, Regular, Tenpin"], "one family; styles from the names that agree with the PostScript name");
+    for (const other of variants(fonts)) assert.deepEqual(shape(groupFamilies(other, options)), shape(families), "whatever the order, folders or copy on");
+  }
+  // The style still shows its own copy, and says which name placed it.
+  const kingpin = groupFamilies(fonts, ON)[0].faces.find((f) => f.key === keyOf("House-A-Rama-Kingpin"))!;
+  assert.deepEqual([kingpin.primary.family, kingpin.name, kingpin.groupedBy], ["House-A-Rama-Kingpin", "House-A-Rama", "own"]);
+  // Barcode and MorganAvec: no style of the family's own, every style a per-style copy too.
+  const barcode = ["One", "Two", "Three"].flatMap((n) => copies(`Barcode-${n}`, [`Barcode-${n}`, "Regular"], ["Barcode", "Medium"]));
+  assert.deepEqual(shape(groupFamilies(barcode, ON)), ["Barcode: One, Three, Two"]);
+  const morgan = [
+    font("MorganAvec", "Regular", { postscriptName: "MorganAvec-Regular" }),
+    font("MorganAvec", "Bold", { postscriptName: "MorganAvec-Bold", weight: 700 }),
+    ...copies("MorganAvec-RegularPi", ["MorganAvec-RegularPi", "Regular"], ["MorganAvec", "Regular"]),
+    ...copies("MorganAvec-BoldFigures", ["MorganAvec-BoldFigures", "Regular"], ["MorganAvec", "Bold"], { weight: 700 }),
+  ];
+  assert.deepEqual(shape(groupFamilies(morgan, ON)), ["MorganAvec: Regular, Regular Pi, Bold, Bold Figures"]);
+  // Names that group with each other (OneBack and its Expert), all with the family's copy too.
+  const readout = [
+    ...copies("Readout-OneBack", ["Readout-OneBack", "Regular"], ["Readout", "Medium"]),
+    ...copies("Readout-OneBackExpert", ["Readout-OneBackExpert", "Regular"], ["Readout", "Medium"]),
+    ...copies("Readout-TwoFront", ["Readout-TwoFront", "Regular"], ["Readout", "Medium"]),
+  ];
+  assert.deepEqual(shape(groupFamilies(readout, ON)), ["Readout: One Back, Two Front, One Back Expert"]);
+});
+
+test("a family only some of whose styles have another copy's name stays whole; a lone pair keeps its own (M3-new-1)", () => {
+  // LTUnivers-Cond groups by name; half its styles also have an "LTUnivers" copy. It stays one
+  // family (a width word is only suggested), and so does LTUnivers.
+  const fonts = [
+    font("LTUnivers", "Normal", { postscriptName: "LTUnivers-Normal" }),
+    font("LTUnivers", "Bold", { postscriptName: "LTUnivers-Bold", weight: 700 }),
+    ...copies("LTUnivers-CondThin", ["LTUnivers-CondThin", "Regular"], ["LTUnivers", "Normal"], { weight: 100 }),
+    font("LTUnivers-CondBold", "Regular", { postscriptName: "LTUnivers-CondBold", weight: 700 }),
+  ];
+  const families = groupFamilies(fonts, ON);
+  assert.deepEqual(shape(families), ["LTUnivers: Normal, Bold", "LTUnivers-Cond: Thin, Bold"]);
+  assert.ok(suggestionsOf(fonts).some((s) => s.into === "LTUnivers" && s.sources[0].family.name === "LTUnivers-Cond"), "suggested, as a width");
+  // One font in two files and nothing else carrying either name: the name that agrees with its
+  // PostScript name.
+  assert.deepEqual(shape(groupFamilies(copies("House-A-Rama-Kingpin", ["House-A-Rama-Kingpin", "Regular"], ["House-A-Rama", "Medium"]), ON)), [
+    "House-A-Rama-Kingpin: Regular",
+  ]);
+  // Unrelated fonts that share a PostScript name aren't one family's copies: the shown copy's name.
+  const clash = [font("Apex", "Bold", { postscriptName: "ø", mtime: 2 }), font("ø", "ø", { postscriptName: "ø" }), font("Apex", "Light", { postscriptName: "Apex-Light" })];
+  assert.deepEqual(names(groupFamilies(clash, ON)), ["Apex"]);
+});
+
+test("the name a face is grouped by doesn't depend on its file's path (M3-new-2)", () => {
+  const pairs: [string, [string, string], [string, string], string][] = [
+    ["BlindfishDemi", ["BlindfishDemi", "Regular"], ["Blindfish", "Demi"], "Blindfish: Demi"],
+    ["Bull-Double", ["Bull-Double", "Regular"], ["Bull", "Double"], "Bull: Double"],
+    ["CQN-Molecular-Xtra-Regular", ["CQN-Molecular-Xtra-Regular", "Regular"], ["CQN-Molecular-Xtra", "Regular"], "CQN-Molecular-Xtra: Regular"],
+    ["Aardvark-Regular", ["Aardvark-Regular", "Regular"], ["Aardvark", "Regular"], "Aardvark: Regular"],
+  ];
+  for (const [ps, a, b, expected] of pairs) {
+    // Names that agree with the PostScript name equally: the more general one, wherever the files are.
+    const fonts = copies(ps, a, b);
+    for (const options of [ON, OFF]) {
+      assert.deepEqual(shape(groupFamilies(fonts, options)), [expected], ps);
+      for (const other of variants(fonts)) assert.deepEqual(shape(groupFamilies(other, options)), [expected], `${ps}, moved`);
+      const swapped = [{ ...fonts[0], path: fonts[1].path }, { ...fonts[1], path: fonts[0].path }];
+      assert.deepEqual(shape(groupFamilies(swapped, options)), [expected], `${ps}, paths swapped`);
+    }
+  }
+});
+
+test("a shared weight word stays in a new family's name only when it's part of the name (M3-new-3)", () => {
+  // No Gotham family: the two names reduce to it, and Bold is their style (stored at 700).
+  const gotham = [
+    font("Gotham Bold", "Regular", { postscriptName: "Gotham-Bold", weight: 700 }),
+    font("Gotham Bold Italic", "Italic", { postscriptName: "Gotham-BoldItalic", weight: 700, italic: true }),
+  ];
+  assert.deepEqual(shape(groupFamilies(gotham, ON)), ["Gotham: Bold, Bold Italic"]);
+  // Heavy stored as 400 (as many fonts store whatever their weight) or 800: a style either way.
+  for (const weight of [400, 800]) {
+    const dynasty = [
+      font("Dynasty Heavy", "Regular", { postscriptName: "Dynasty-Heavy", weight }),
+      font("Dynasty Heavy Italic", "Regular", { postscriptName: "Dynasty-HeavyItalic", weight, italic: true }),
+    ];
+    assert.deepEqual(shape(groupFamilies(dynasty, ON)), ["Dynasty: Heavy, Heavy Italic"], `stored ${weight}`);
+  }
+  const helvetica = [
+    font("Helvetica Light", "Regular", { postscriptName: "Helvetica-Light", weight: 300 }),
+    font("Helvetica Light Oblique", "Regular", { postscriptName: "Helvetica-LightOblique", weight: 300, italic: true }),
+  ];
+  assert.deepEqual(shape(groupFamilies(helvetica, ON)), ["Helvetica: Light, Light Oblique"]);
+  // Part of the name: a plain word, a weight the fonts' numbers contradict, or one the PostScript
+  // name's family part spells.
+  assert.deepEqual(
+    shape(groupFamilies([font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT" }), font("Times New Roman Italic", "Regular", { postscriptName: "TimesNewRomanPSMT-Italic", italic: true })], ON)),
+    ["Times New Roman: Regular, Italic"],
+  );
+  assert.deepEqual(
+    shape(groupFamilies([font("Shadows Into Light", "Regular", { postscriptName: "ShadowsIntoLight" }), font("Shadows Into Light Bold", "Regular", { postscriptName: "ShadowsIntoLight-Bold", weight: 700 })], ON)),
+    ["Shadows Into Light: Regular, Bold"],
+  );
+  assert.deepEqual(
+    shape(groupFamilies([font("Shadows Into Light", "Regular", { postscriptName: "ShadowsIntoLight" }), font("Shadows Into Light Italic", "Regular", { postscriptName: "ShadowsIntoLight-Italic", italic: true })], ON)),
+    ["Shadows Into Light: Regular, Italic"],
+  );
+  // A third name without the word: the family is Gotham anyway.
+  assert.deepEqual(names(groupFamilies([...gotham, font("Gotham Light", "Regular", { postscriptName: "Gotham-Light", weight: 300 })], ON)), ["Gotham"]);
+});
+
+test("a rule found through another copy keeps the style its own names give it (M3-new-4: Engine-LightLF)", () => {
+  const fonts = [
+    font("Engine", "Regular", { postscriptName: "Engine-Regular" }),
+    font("Engine", "Bold", { postscriptName: "Engine-Bold", weight: 700 }),
+    ...copies("Engine-LightLF", ["Engine-LightLF", "Regular"], ["Engine", "Medium"]),
+  ];
+  const rules = new Map<string, NameRule>([["engine", { nameKey: "engine", name: "Engine", decision: "separate", into: null }]]);
+  for (const grouping of [ON, { byName: true, rules }]) {
+    const families = groupFamilies(fonts, grouping);
+    assert.deepEqual(shape(families), ["Engine: Light LF, Regular, Bold"], "Light LF, not the other copy's Medium, and it sorts as a Light");
+  }
+  const face = groupFamilies(fonts, { byName: true, rules })[0].faces.find((f) => f.key === keyOf("Engine-LightLF"))!;
+  assert.deepEqual([face.groupedBy, face.kept, face.ruleKey, face.name], ["rule", true, "engine", "Engine"], "the copy's name: only the rule and the Info tab's words");
+  // Whichever copy is shown.
+  for (const other of variants(fonts)) assert.deepEqual(shape(groupFamilies(other, { byName: true, rules })), ["Engine: Light LF, Regular, Bold"]);
+});
+
+test("spellings that differ only in case show the one that isn't all capitals (M3-new-5)", () => {
+  const fonts = [font("GOTHAM", "Bold", { postscriptName: "Gotham-Bold", manufacturer: "H&FJ" }), font("Gotham", "Regular", { postscriptName: "Gotham-Regular", manufacturer: "H&FJ" })];
+  for (const order of [fonts, [...fonts].reverse()]) assert.deepEqual(shape(groupFamilies(order, ON)), ["Gotham: Regular, Bold"]);
+  // More styles that spell it in capitals still win (the spelling most fonts use).
+  const more = [...fonts, font("GOTHAM", "Black", { postscriptName: "Gotham-Black", manufacturer: "H&FJ", weight: 900 })];
+  assert.deepEqual(names(groupFamilies(more, ON)), ["GOTHAM"]);
+});
+
+test("a width or size suggestion joins the longest name left that's a family (F1: Times New Roman, not Times New)", () => {
+  const times = font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT" });
+  const condensed = font("Times New Roman Condensed", "Regular", { postscriptName: "TimesNewRomanPS-Condensed" });
+  const narrow = font("Times New Roman Narrow", "Regular", { postscriptName: "TimesNewRomanPS-Narrow" });
+  const into = (fonts: FontSummary[]) => suggestionsOf(fonts).map((s) => `${s.into} <- ${s.sources.map((src) => src.family.name).join(", ")}`);
+  assert.deepEqual(into([times, condensed, narrow]), ["Times New Roman <- Times New Roman Condensed, Times New Roman Narrow"]);
+  assert.deepEqual(into([times, condensed]), ["Times New Roman <- Times New Roman Condensed"], "a single variant is suggested too");
+  assert.deepEqual(into([condensed, narrow]), ["Times New Roman <- Times New Roman Condensed, Times New Roman Narrow"], "no family yet: Roman is part of the name");
+  const shadows = font("Shadows Into Light", "Regular", { postscriptName: "ShadowsIntoLight" });
+  const display = font("Shadows Into Light Display", "Regular", { postscriptName: "ShadowsIntoLight-Display" });
+  const text = font("Shadows Into Light Text", "Regular", { postscriptName: "ShadowsIntoLight-Text" });
+  assert.deepEqual(into([shadows, display, text]), ["Shadows Into Light <- Shadows Into Light Display, Shadows Into Light Text"]);
+  // A weight word all the names share and that isn't part of the name goes: Gotham, not Gotham Bold.
+  const gotham = [
+    font("Gotham Bold Condensed", "Regular", { postscriptName: "Gotham-BoldCondensed", weight: 700 }),
+    font("Gotham Bold Narrow", "Regular", { postscriptName: "Gotham-BoldNarrow", weight: 700 }),
+  ];
+  assert.deepEqual(into(gotham), ["Gotham <- Gotham Bold Condensed, Gotham Bold Narrow"]);
+  // Still never merged automatically.
+  assert.equal(groupFamilies([times, condensed, narrow], ON).length, 3);
+});
+
+test("merging writes the rule for the name a style was placed by (Face.name)", () => {
+  const fonts = [
+    font("House-A-Rama", "Regular", { postscriptName: "House-A-Rama" }),
+    ...copies("House-A-Rama-Kingpin", ["House-A-Rama-Kingpin", "Regular"], ["House-A-Rama", "Medium"]),
+    ...copies("House-A-Rama-Tenpin", ["House-A-Rama-Tenpin", "Regular"], ["House-A-Rama", "Medium"]),
+  ];
+  const families = groupFamilies(fonts, ON);
+  assert.deepEqual(families[0].faces.map((f) => f.name), ["House-A-Rama", "House-A-Rama", "House-A-Rama"]);
+  // A rule for that name holds for every style, whichever copy is shown.
+  const rules = new Map<string, NameRule>([["housearama", { nameKey: "housearama", name: "House-A-Rama", decision: "merge", into: "Bowling" }]]);
+  assert.deepEqual(shape(groupFamilies(fonts, { byName: true, rules })), ["Bowling: House-A-Rama, House-A-Rama-Kingpin, House-A-Rama-Tenpin"], "an unrelated family: their names first");
+  // Keeping one style under its own name takes it out (the shown copy's own name).
+  const choices = new Map<string, FaceChoice>([[keyOf("House-A-Rama-Kingpin"), { faceKey: keyOf("House-A-Rama-Kingpin"), family: null, style: null }]]);
+  assert.deepEqual(shape(groupFamilies(fonts, { byName: true, choices })), ["House-A-Rama: Regular, Tenpin", "House-A-Rama-Kingpin: Regular"]);
 });

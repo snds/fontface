@@ -127,7 +127,8 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
 function FamilyGroupNote({ face }: { face: Face }) {
   const openFamilyGroups = useOpenFamilyGroups();
   const { rules } = useFamilyChoices();
-  const raw = face.primary.family;
+  // The name it was placed by: its own, or the copy's your rule or grouping went by.
+  const raw = face.name;
   const familyKey = squash(face.family);
   // Your rule for the family's own name, other than the one that placed this style.
   const familyKept = face.ruleKey !== familyKey && rules.get(familyKey)?.decision === "separate";

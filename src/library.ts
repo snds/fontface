@@ -15,11 +15,12 @@ import {
 } from "./familyFacts.ts";
 import {
   compareNames,
-  familyWeightSource,
+  familyTraits,
+  NameIndex,
+  namedCopy,
+  namesAgree,
   planByName,
   placeFace,
-  squash,
-  traitsOf,
   type GroupedBy,
   type GroupingOptions,
   type GroupPlan,
@@ -36,6 +37,16 @@ export interface Face {
   /** The copy used for previews: an active copy if any, else the preferred file. */
   primary: FontSummary;
   copies: FontSummary[];
+  /** The copy whose family name it's grouped by, when its copies carry different ones and it
+   *  isn't the primary (familyGroups.namedCopy, then planByName's step 3): "House-A-Rama",
+   *  style Medium, for the House-A-Rama-Kingpin a per-style folder also holds. */
+  named?: FontSummary;
+  /** Its copies carry different family or style names (familyGroups.labelFor reads them all). */
+  varied: boolean;
+  /** The family name it was placed by (familyGroups.Placement.name): usually `primary.family`;
+   *  another copy's when that one is grouped by, or your rule is for it. The Info tab's and the
+   *  Family groups page's "from" text, and the name merging writes a rule for. */
+  name: string;
   installed: boolean;
   active: boolean;
   /** The family it's listed under: its own name (`primary.family`), or the one grouping by
@@ -184,40 +195,25 @@ const regularness = ({ traits: t }: Face) => (t.italic ? 1000 : 0) + Math.abs(t.
 
 const isCollection = (f: FontSummary) => f.format.endsWith("Collection");
 
-const plainStyle = new Set(["regular", "roman", "plain", "normal", "book", ""]);
-
-/**
- * How well a copy's family and style names agree with its PostScript name: 2 when they spell it
- * ("Engine-LightLF" for family Engine-LightLF, style Regular; "Blindfish" + "Demi" for
- * BlindfishDemi), 1 when the family starts it, 0 otherwise. Copies of one font sometimes carry
- * different names ("Engine", style "Medium", for the same Engine-LightLF): the one whose names
- * agree is the better one to group by.
- */
-function namesAgree(f: FontSummary): number {
-  if (!f.postscriptName) return 0;
-  const ps = squash(f.postscriptName);
-  const family = squash(f.family);
-  if (!ps.startsWith(family)) return 0;
-  const rest = ps.slice(family.length);
-  const style = squash(f.subfamily);
-  return rest === style || (!rest && plainStyle.has(style)) ? 2 : 1;
-}
-
 /**
  * Which copy to show or turn on: one already on, installed, a single-font file, CFF, newest, one
  * whose names agree with its PostScript name, one that names its own family (name ID 16), then
- * by path. Never by the order the list sends rows in: a copy's id changes when its folder is
- * removed and added again, and the copy shown decides the family name a face is grouped by.
+ * by its names A to Z, and only for copies named alike by path. Never by the order the list
+ * sends rows in: a copy's id changes when its folder is removed and added again. Which family a
+ * face is in, and its style there, don't depend on this choice (familyGroups.namedCopy and
+ * labelFor read every copy's names), only what "keep it under its own name" keeps.
  */
 function preferred(a: FontSummary, b: FontSummary): number {
+  const alike = a.family === b.family && a.subfamily === b.subfamily;
   return (
     Number(b.osActive) - Number(a.osActive) ||
     Number(b.installed) - Number(a.installed) ||
     Number(isCollection(a)) - Number(isCollection(b)) ||
     Number(b.format.startsWith("OpenType CFF")) - Number(a.format.startsWith("OpenType CFF")) ||
     b.mtime - a.mtime ||
-    (a.family === b.family && a.subfamily === b.subfamily ? 0 : namesAgree(b) - namesAgree(a)) ||
+    (alike ? 0 : namesAgree(b) - namesAgree(a)) ||
     Number(b.hasTypoFamily === true) - Number(a.hasTypoFamily === true) ||
+    (alike ? 0 : compareNames(a.family, b.family) || compareNames(a.subfamily, b.subfamily)) ||
     (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) ||
     a.faceIndex - b.faceIndex
   );
@@ -234,30 +230,80 @@ const faceKey = (f: FontSummary) =>
     ? `ps:${f.postscriptName}|${f.variable ? "var" : "static"}|${f.italic ? "i" : "r"}`
     : `file:${f.path}#${f.faceIndex}`;
 
-function groupFaces(fonts: FontSummary[]): Face[] {
-  const map = new Map<string, FontSummary[]>();
+/** Every face's traits until `groupLibrary` works them out (it always does). */
+const NO_TRAITS: Traits = Object.freeze({ weight: 400, width: 5, italic: false, variant: false });
+
+/** Variable or static, upright or italic: the face key's other parts. */
+const kindOf = (f: FontSummary) => (f.variable ? 2 : 0) + (f.italic ? 1 : 0);
+
+function groupFaces(fonts: FontSummary[], index: NameIndex): Face[] {
+  // By PostScript name (a string the list already has), then by kind and slant (`faceKey`),
+  // without making and hashing a key for every row.
+  const byName = new Map<string, FontSummary[]>();
+  const lists: FontSummary[][] = [];
   for (const f of fonts) {
-    const key = faceKey(f);
-    const list = map.get(key);
+    if (!f.postscriptName) {
+      lists.push([f]);
+      continue;
+    }
+    const list = byName.get(f.postscriptName);
     if (list) list.push(f);
-    else map.set(key, [f]);
+    else {
+      const fresh = [f];
+      byName.set(f.postscriptName, fresh);
+      lists.push(fresh);
+    }
   }
-  return [...map.entries()].map(([key, copies]) => {
-    copies.sort(preferred);
-    const primary = copies[0];
-    return {
+  // Seldom, one PostScript name is both kinds or slants: those are faces of their own.
+  for (let i = 0, n = lists.length; i < n; i++) {
+    const list = lists[i];
+    if (list.length < 2) continue;
+    const first = kindOf(list[0]);
+    if (list.every((f) => kindOf(f) === first)) continue;
+    const parts = new Map<number, FontSummary[]>();
+    for (const f of list) {
+      const part = parts.get(kindOf(f));
+      if (part) part.push(f);
+      else parts.set(kindOf(f), [f]);
+    }
+    const [head, ...rest] = parts.values();
+    lists[i] = head;
+    lists.push(...rest);
+  }
+  const faces: Face[] = [];
+  for (const copies of lists) {
+    const key = faceKey(copies[0]);
+    const primary = copies.length > 1 ? copies.sort(preferred)[0] : copies[0];
+    let installed = primary.installed;
+    let active = primary.osActive;
+    let varied = false;
+    for (let i = 1; i < copies.length; i++) {
+      const c = copies[i];
+      installed ||= c.installed;
+      active ||= c.osActive;
+      varied ||= c.family !== primary.family || c.subfamily !== primary.subfamily;
+    }
+    // Every field there from the start (one shape for every face).
+    const face: Face = {
       key,
       primary,
       copies,
-      installed: copies.some((c) => c.installed),
-      active: copies.some((c) => c.osActive),
+      named: varied ? namedCopy(copies) : undefined,
+      varied,
+      installed,
+      active,
       family: primary.family,
       style: primary.subfamily,
+      name: primary.family,
       groupedBy: "own",
       kept: false,
-      traits: { weight: primary.weight, width: primary.width, italic: primary.italic, variant: false },
+      ruleKey: undefined,
+      traits: NO_TRAITS,
     };
-  });
+    faces.push(face);
+    index.add(face);
+  }
+  return faces;
 }
 
 /** A family's styles: upright before italic, narrow to wide, light to heavy (by what the style's
@@ -287,15 +333,16 @@ const betterRepresentative = (a: Face, b: Face) =>
 export const familyId = (name: string) => `n:${name}`;
 
 function makeFamily(id: string, name: string, faces: Face[]): Family {
-  const switchable = faces.filter((face) => !face.installed);
-  return {
-    id,
-    name,
-    faces,
-    representative: faces.reduce((best, face) => (betterRepresentative(face, best) ? face : best)),
-    switchable,
-    activeCount: switchable.filter((face) => face.active).length,
-  };
+  const switchable: Face[] = [];
+  let representative = faces[0];
+  let activeCount = 0;
+  for (const face of faces) {
+    if (face !== representative && betterRepresentative(face, representative)) representative = face;
+    if (face.installed) continue;
+    switchable.push(face);
+    if (face.active) activeCount++;
+  }
+  return { id, name, faces, representative, switchable, activeCount };
 }
 
 /** Grouping by name on, and none of your choices: what tests and one-off groupings use. */
@@ -312,31 +359,37 @@ export interface Library {
  * Groups the whole library. Views filter the result, so every Face always holds all its copies.
  * Copies are matched across family names too ("Abaddon" vs "Abaddon™" in different downloads).
  * Each face goes under a family by familyGroups.ts's rules: your choice for it, your rule for its
- * name, grouping by name (while that's on), else its preferred copy's own family name. Folders
- * play no part. Families are sorted A to Z, their styles light to heavy (sortFaces).
+ * name, grouping by name (while that's on), else its own family name (when its copies carry
+ * different names of one family, the better one, or the one more of the library's fonts carry
+ * when that keeps a family whole: familyGroups.namedCopy and planByName). Folders play no
+ * part. Families are sorted A to Z, their styles light to heavy (sortFaces).
  */
 export function groupLibrary(fonts: FontSummary[], grouping: GroupingOptions = BY_NAME): Library {
-  const faces = groupFaces(fonts);
-  const plan = planByName(faces, grouping.rules, grouping.choices);
+  const index = new NameIndex(grouping.choices);
+  const faces = groupFaces(fonts, index);
+  const plan = planByName(faces, grouping.rules, grouping.choices, index);
   const byFamily = new Map<string, Face[]>();
+  // Faces come mostly A to Z: a face's family is mostly the one before's, so no lookup for those.
+  let lastFamily: string | undefined;
+  let lastList: Face[] = [];
   for (const face of faces) {
-    const placed = placeFace(face, plan, grouping);
-    face.family = placed.family;
-    face.style = placed.style;
-    face.groupedBy = placed.by;
-    face.kept = placed.kept ?? false;
-    face.ruleKey = placed.ruleKey;
-    const list = byFamily.get(face.family);
-    if (list) list.push(face);
-    else byFamily.set(face.family, [face]);
+    // Its family, style, how it got them, and the name it went by, written into the face.
+    placeFace(face, plan, grouping, face);
+    if (face.family !== lastFamily) {
+      lastFamily = face.family;
+      const list = byFamily.get(lastFamily);
+      if (list) lastList = list;
+      else byFamily.set(lastFamily, (lastList = []));
+    }
+    lastList.push(face);
   }
   const families: Family[] = [];
   for (const [name, list] of byFamily) {
     // A family whose own weight numbers tell its styles apart keeps them (BB Strata Pro's 250
     // Semi Regular); one whose numbers are shown wrong (all 400) goes by its styles' names.
-    const source = familyWeightSource(list);
-    for (const face of list) face.traits = traitsOf(face.style, face.primary, source);
-    families.push(makeFamily(familyId(name), name, sortFaces(list)));
+    const traits = familyTraits(list);
+    for (let i = 0; i < list.length; i++) list[i].traits = traits[i];
+    families.push(makeFamily(familyId(name), name, list.length > 1 ? sortFaces(list) : list));
   }
   families.sort((a, b) => compareNames(a.name, b.name));
   return { families, plan };
@@ -345,43 +398,76 @@ export function groupLibrary(fonts: FontSummary[], grouping: GroupingOptions = B
 let warmed = false;
 
 /**
- * Groups a few made-up fonts once, so that the first real grouping (about 12,000 fonts, at
- * launch) runs already-compiled code: about 4 ms less on the first list in WebKit's engine.
- * App calls it while the first list is still on its way from the library. Nothing it makes is
- * kept, beyond a few hundred entries in the name caches.
+ * Groups a made-up library once, so that the first real grouping (about 12,000 fonts, at launch)
+ * runs code that's already compiled and has seen every kind of name: families whose names carry
+ * styles, PostScript names, foundries, spellings, "SC", numbered and width names, and fonts with
+ * copies in a family folder and a per-style one. App calls it while the first list is still on
+ * its way from the library (about 6 ms in JavaScriptCore, 7 in Node). Nothing it makes is kept,
+ * beyond about two thousand entries in the name caches. On a copy of Sean's library the first
+ * grouping then takes about 20 ms in JavaScriptCore instead of 24, and 28 in Node instead of 32.
  */
 export function warmUpGrouping(): void {
   if (warmed) return;
   warmed = true;
-  const words = ["Thin", "Light", "Regular", "Medium", "Bold", "Black", "Italic", "Bold Italic", "Condensed", "Display", "SC", "OSF"];
   const fonts: FontSummary[] = [];
-  for (let i = 0; i < 300; i++) {
-    const family = `Warm${String.fromCharCode(65 + (i % 26))}${i % 7}`;
-    const word = words[i % words.length];
+  const add = (family: string, subfamily: string, postscriptName: string | null, more: Partial<FontSummary> = {}) =>
     fonts.push({
-      id: -1 - i,
+      id: -1 - fonts.length,
       folderId: 0,
-      path: `/warm-up/${i}.otf`,
+      path: `/warm-up/${fonts.length % 7}/${fonts.length}.otf`,
       faceIndex: 0,
-      family: i % 3 ? `${family} ${word}` : family,
-      subfamily: i % 2 ? "Regular" : "Italic",
+      family,
+      subfamily,
       fullName: null,
-      postscriptName: `${family}-${word.replace(/ /g, "")}${i}`,
-      weight: 100 + (i % 9) * 100,
+      postscriptName,
+      weight: 400,
       width: 5,
-      italic: i % 2 === 0,
+      italic: false,
       monospace: false,
       variable: false,
-      format: "OpenType CFF",
+      format: fonts.length % 5 ? "OpenType CFF" : "TrueType",
       activated: false,
       installed: false,
-      mtime: 0,
+      mtime: fonts.length % 3,
       fileSize: 0,
       osActive: false,
-      glyphCount: 100,
-      manufacturer: i % 5 ? "Warm Type" : undefined,
+      glyphCount: 200,
+      manufacturer: ["Warm Type Foundry", "The Warm Type Corporation", undefined, "Cold Fonts Inc."][fonts.length % 4],
+      designer: fonts.length % 6 ? undefined : "Warm Designer",
       preview: null,
+      ...more,
     });
+  const weights: [string, number][] = [
+    ["Thin", 100], ["ExtraLight", 200], ["Light", 300], ["Book", 380], ["Regular", 400], ["Medium", 500],
+    ["SemiBold", 600], ["Demi", 600], ["Bold", 700], ["ExtraBold", 800], ["Heavy", 800], ["Black", 900],
+  ];
+  const ends = ["", " Italic", "Italic", "-Oblique", " OSF", "LF", " SC", " Expert", "Alt", " Swash", " It", "Obl"];
+  const sep = [" ", "", "-", "_"];
+  for (let i = 0; i < 24; i++) {
+    const base = `Warm${String.fromCharCode(65 + (i % 26))}${String.fromCharCode(97 + ((i * 7) % 26))}${["", " Pro", " Sans", "Serif", " Text"][i % 5]}${i}`;
+    const ps = base.replace(/ /g, "");
+    // A family with its own name (some), and names that carry styles in every way.
+    if (i % 3) add(base, "Regular", `${ps}-Regular`);
+    if (i % 4) add(base, "Bold Italic", `${ps}-BoldItalic`, { weight: 700, italic: true });
+    for (let j = 0; j < 9; j++) {
+      const [w, n] = weights[(i + j * 5) % weights.length];
+      const end = ends[(i * 3 + j) % ends.length];
+      const style = j % 3 ? "Regular" : ["Italic", "Medium", "Roman"][i % 3];
+      add(`${base}${sep[(i + j) % 4]}${w}${end}`, style, `${ps}-${w}${end.replace(/[ -]/g, "")}`, { weight: (i + j) % 4 ? n : 400, italic: /It|Obl/.test(end) });
+    }
+    // Spellings, numbers, widths and sizes, names nothing else shares.
+    add(`${base.slice(0, 5)} ${base.slice(5)}`, "Medium", `${ps}-Medium`, { weight: 500 });
+    add(`${base} ${45 + (i % 4) * 10} Light`, "Regular", `${ps}-${45 + (i % 4) * 10}Light`, { weight: 300 });
+    add(`${base} ${["Condensed", "Narrow", "Display", "Caption"][i % 4]}`, "Bold", `${ps}${["Cond", "Nar", "Disp", "Cap"][i % 4]}-Bold`, { weight: 700 });
+    add(`Warm${i}Solo${["Ink", "Stamp", "Moonlight"][i % 3]}`, "Regular", `Warm${i}Solo`);
+    add(`${base} Display`, "Regular", null);
+    // Copies in a family folder and in a per-style one.
+    for (const cut of ["Kingpin", "Tenpin"]) {
+      add(`${base}-${cut}`, "Regular", `${ps}-${cut}`);
+      add(base, i % 2 ? "Medium" : cut, `${ps}-${cut}`);
+    }
+    add(base, "Light", `${ps}-Light`, { weight: 300 });
+    add(`${base} VF`, "Regular", `${ps}VF`, { variable: true });
   }
   groupLibrary(fonts, BY_NAME);
 }
