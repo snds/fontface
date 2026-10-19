@@ -265,6 +265,9 @@ pub struct AppSettings {
     /// draws each family in its own font from a tiny file with its name, downloaded from Google
     /// (services/google/previews.rs). On by default. Off, nothing at all is sent to Google.
     pub google_previews: bool,
+    /// "Yours first" on a font service's catalog page (Google Fonts): families you have,
+    /// downloaded or already in your library, come before the rest. On by default.
+    pub catalog_yours_first: bool,
 }
 
 impl Default for AppSettings {
@@ -293,6 +296,7 @@ impl Default for AppSettings {
             table_density: TableDensity::Regular,
             preview: PreviewOptions::default(),
             google_previews: true,
+            catalog_yours_first: true,
         }
     }
 }
@@ -395,6 +399,7 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
         }
         "preview" => s.preview = preview_options(&s.preview, value)?,
         "googlePreviews" => s.google_previews = flag(value, "Show previews of Google Fonts you haven't downloaded")?,
+        "catalogYoursFirst" => s.catalog_yours_first = flag(value, "Yours first")?,
         // A setting from a newer Fontface, or a typo: ignored.
         _ => {}
     }

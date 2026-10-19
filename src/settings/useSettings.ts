@@ -39,6 +39,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tableDensity: "regular",
   preview: DEFAULT_PREVIEW,
   googlePreviews: true,
+  catalogYoursFirst: true,
 };
 
 export interface Settings {

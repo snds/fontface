@@ -1714,6 +1714,8 @@ export default function App() {
                               fonts={fonts}
                               previewText={previewText}
                               onlinePreviews={settings?.googlePreviews ?? false}
+                              yoursFirst={settings?.catalogYoursFirst ?? DEFAULT_SETTINGS.catalogYoursFirst}
+                              onYoursFirst={(on) => updateSettings({ catalogYoursFirst: on })}
                               onOpenSettings={() => {
                                 setSettingsSection("general");
                                 openSettings();

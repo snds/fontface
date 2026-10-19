@@ -573,6 +573,9 @@ export interface AppSettings {
    *  Off: nothing is sent to Google for previews, and those families show their names in the
    *  interface font. */
   googlePreviews: boolean;
+  /** "Yours first" on a font service's catalog page: families you have (downloaded, or already
+   *  in your library) come before the rest. On by default. */
+  catalogYoursFirst: boolean;
 }
 
 /** Only the keys given change; `sidebar` and `preview` may be partial too. */

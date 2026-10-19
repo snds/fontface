@@ -120,7 +120,8 @@ fn serializes_in_the_shape_the_ui_expects() {
                 "align": "left", "case": "asTyped", "outline": false, "underline": false,
                 "ink": null, "paper": null, "features": []
             },
-            "googlePreviews": true
+            "googlePreviews": true,
+            "catalogYoursFirst": true
         })
     );
 }
@@ -296,6 +297,9 @@ fn view_options_change_by_patch_and_refuse_bad_values() {
         "“Show previews of Google Fonts you haven't downloaded” must be on or off"
     );
     assert!(!settings::apply_patch(&d, &json!({ "googlePreviews": false })).unwrap().google_previews);
+    assert!(d.catalog_yours_first, "catalog pages list your families first by default");
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "catalogYoursFirst": "on" }))), "“Yours first” must be on or off");
+    assert!(!settings::apply_patch(&d, &json!({ "catalogYoursFirst": false })).unwrap().catalog_yours_first);
     assert!(!settings::apply_patch(&d, &json!({ "groupByName": false })).unwrap().group_by_name);
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "tableDensity": "airy" }))), "Table density must be “compact” or “regular”");
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "sort": "name" }))), "The sort must say what to sort by");
@@ -492,6 +496,7 @@ fn every_setting_can_be_changed_by_a_patch() {
             features: vec!["smallCaps".into(), "caseForms".into()],
         },
         google_previews: false,
+        catalog_yours_first: false,
     };
     let patch = serde_json::to_value(&custom).unwrap();
     assert_eq!(settings::apply_patch(&AppSettings::default(), &patch).unwrap(), custom);

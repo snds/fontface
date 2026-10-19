@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { api, type FontSummary, type GoogleCatalog, type GoogleFamily, type GoogleInstallResult, type PreviewInfo } from "@/api";
@@ -31,11 +31,13 @@ import { MissingHint, SampleBadge } from "./FacePreview";
 import { usePreviewStyle } from "./PreviewStyle";
 import { PreviewText } from "./PreviewText";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { catalogItems } from "@/catalogOrder";
 import { ChoiceGroup } from "./ChoiceGroup";
 import { IS_MAC, PageHeader, type PageBack } from "./TitleBar";
 
@@ -48,6 +50,9 @@ interface Props {
   onlinePreviews: boolean;
   /** Opens Settings at that switch (the page's note links to it). */
   onOpenSettings?: () => void;
+  /** "Yours first": families you have (downloaded, or already in your library) come first. */
+  yoursFirst: boolean;
+  onYoursFirst: (on: boolean) => void;
   /** Families with a download or removal in progress (owned by the app, so it survives leaving this page). */
   busy: Set<string>;
   /** Changes after each download or removal; the catalog reloads. */
@@ -73,6 +78,12 @@ const CATEGORIES: { value: string; label: string }[] = [
 ];
 
 type Show = "all" | "installed" | "updates";
+
+/** What "Yours first" does, for its tooltip and screen readers. */
+const YOURS_FIRST_HINT = "Families you have, downloaded here or already in your library, come first. Turn it off for A to Z.";
+
+/** How tall a group's heading is in the list ("Yours first"). */
+const HEADING_HEIGHT = 32;
 
 const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
 
@@ -314,6 +325,8 @@ export function GoogleFontsPanel({
   previewText,
   onlinePreviews,
   onOpenSettings,
+  yoursFirst,
+  onYoursFirst,
   busy,
   version,
   updatingAll,
@@ -329,6 +342,7 @@ export function GoogleFontsPanel({
   const [category, setCategory] = useState("");
   const [show, setShow] = useState<Show>("all");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const yoursFirstHintId = useId();
 
   const load = async (refresh = false) => {
     setLoading(true);
@@ -366,22 +380,32 @@ export function GoogleFontsPanel({
     );
   }, [catalog, query, category, show]);
 
+  // Yours: downloaded here, or a copy already in your library (the same families "Your copy"
+  // marks). Each group keeps the catalog's order.
+  const items = useMemo(
+    () => catalogItems(visible, (f) => !!f.installed || matches.has(f.id), yoursFirst),
+    [visible, matches, yoursFirst],
+  );
+
   const installedCount = catalog?.families.filter((f) => f.installed).length ?? 0;
   const updates = catalog?.families.filter((f) => f.updateAvailable && !f.unavailable) ?? [];
 
   const virtualizer = useVirtualizer({
-    count: visible.length,
+    count: items.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 72,
-    getItemKey: (i) => visible[i].id,
+    estimateSize: (i) => (items[i].kind === "heading" ? HEADING_HEIGHT : 72),
+    getItemKey: (i) => {
+      const item = items[i];
+      return item.kind === "heading" ? item.id : item.family.id;
+    },
     overscan: 8,
   });
 
-  // New filters or search start at the top.
+  // New filters, search or order start at the top.
   useLayoutEffect(() => {
     virtualizer.scrollToOffset(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, category, show]);
+  }, [query, category, show, yoursFirst]);
 
   /** Runs an action on a family and shows the message it resolves with, or its error. */
   const run = async (fam: GoogleFamily, action: () => Promise<string>) => {
@@ -456,6 +480,22 @@ export function GoogleFontsPanel({
               { value: "updates", label: `Updates · ${updates.length}` },
             ]}
           />
+          <span className="mx-1 h-5 w-px bg-border" />
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <label className="flex cursor-default items-center gap-2 text-xs text-muted-foreground has-[button:focus-visible]:text-foreground" />
+              }
+            >
+              <Switch checked={yoursFirst} onCheckedChange={(on) => onYoursFirst(on)} aria-describedby={yoursFirstHintId} />
+              Yours first
+              {/* The tooltip shows on hover; keyboard and screen-reader users get the same words here. */}
+              <span id={yoursFirstHintId} className="sr-only">
+                {YOURS_FIRST_HINT}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">{YOURS_FIRST_HINT}</TooltipContent>
+          </Tooltip>
           {updates.length > 0 && (
             <Button size="sm" variant="outline" onClick={() => onUpdateAll(updates)} disabled={updatingAll}>
               {updatingAll ? "Updating…" : "Update all"}
@@ -494,7 +534,24 @@ export function GoogleFontsPanel({
         >
           <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
-              const fam = visible[item.index];
+              const row = items[item.index];
+              if (row.kind === "heading") {
+                return (
+                  <div
+                    key={item.key}
+                    data-index={item.index}
+                    ref={virtualizer.measureElement}
+                    role="listitem"
+                    className="absolute top-0 left-0 flex w-full items-end border-b bg-muted/40 px-4 pb-1.5"
+                    style={{ transform: `translateY(${item.start}px)`, height: HEADING_HEIGHT }}
+                  >
+                    <h3 className="text-xs font-medium text-muted-foreground">
+                      {row.label} · {row.count.toLocaleString()}
+                    </h3>
+                  </div>
+                );
+              }
+              const fam = row.family;
               const isBusy = busy.has(fam.id);
               return (
                 <div
