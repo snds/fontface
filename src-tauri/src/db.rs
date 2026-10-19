@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -533,6 +533,11 @@ pub fn get_font(conn: &Connection, id: i64) -> AppResult<Option<FontDetail>> {
 /// in the background, on its own connection. Every row it dates stops being null, so later
 /// launches find nothing to do (one quick query).
 ///
+/// Fonts whose library folder can't be reached right now (a drive that isn't mounted, a moved
+/// folder waiting for Locate…) are left for a later launch, rather than settled on the folder's
+/// date before their files can be looked at; the folder's date is only for a file that's
+/// missing, or has no date, in a folder that's there.
+///
 /// The lookups happen before any writing, so a slow disk never holds a lock. Then the dates are
 /// saved in short transactions, each in the scan write turn and after any waiting UI write,
 /// like the preview backfill. Returns how many files it dated.
@@ -543,23 +548,31 @@ pub fn backfill_added_at(db_path: &Path) -> AppResult<usize> {
 /// `backfill_added_at`, reading each file's date with `date_of` (tests pass their own).
 pub(crate) fn backfill_added_at_with(db_path: &Path, date_of: impl Fn(&Path) -> Option<i64>) -> AppResult<usize> {
     let mut conn = open(db_path)?;
-    let undated: Vec<(String, i64)> = {
+    let undated: Vec<(String, i64, String)> = {
+        // Folders never overlap, so each file has one folder; MIN only picks it out.
         let mut stmt = conn.prepare(
-            "SELECT fonts.path, MIN(folders.added_at) FROM fonts JOIN folders ON folders.id = fonts.folder_id \
+            "SELECT fonts.path, MIN(folders.added_at), MIN(folders.path) FROM fonts JOIN folders ON folders.id = fonts.folder_id \
              WHERE fonts.added_at IS NULL GROUP BY fonts.path",
         )?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         rows.collect::<Result<_, _>>()?
     };
     if undated.is_empty() {
         return Ok(0);
     }
     let latest = now();
+    // Whether each library folder is there, looked up once per folder.
+    let mut reachable: HashMap<String, bool> = HashMap::new();
     let dated: Vec<(String, i64)> = undated
         .into_iter()
-        .map(|(path, folder_added)| {
+        .filter_map(|(path, folder_added, root)| {
+            let there = *reachable.entry(root).or_insert_with_key(|root| Path::new(root).is_dir());
+            if !there {
+                // Not now: a later launch dates it from the file.
+                return None;
+            }
             let at = date_of(Path::new(&path)).filter(|&t| t > 0).map_or(folder_added, |t| t.min(latest));
-            (path, at)
+            Some((path, at))
         })
         .collect();
     for chunk in dated.chunks(ADDED_AT_CHUNK) {

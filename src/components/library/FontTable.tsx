@@ -1,16 +1,18 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FontSummary, SortKey } from "@/api";
 import {
   addedAt,
   designerOf,
   faceAddedAt,
+  familySources,
   fileNameOf,
   fileSizeOf,
   formatBytes,
   formatsOf,
   foundryOf,
   shortVersion,
+  sourcesOf,
   weightText,
 } from "@/familyFacts";
 import { activationIds, type Face } from "@/library";
@@ -24,8 +26,11 @@ import { LocationDots, TagChips } from "@/tags/TagChips";
 import { ActivationSwitch, InstalledBadge } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge, stateWords } from "../FacePreview";
 import {
+  clampWidth,
+  columnDef,
   gridTemplate,
   HEADER_HEIGHT,
+  MAX_WIDTH,
   pinnedOffsets,
   resolveColumns,
   setShown,
@@ -37,7 +42,7 @@ import {
   type Column,
   type ColumnId,
 } from "./columns";
-import { activeInSight, describedBy, rowKey, type DisplayProps, type ListView, type Row, type TableOptions } from "./LibraryPane";
+import { activeInSight, rowKey, useKeepFocus, type DisplayProps, type ListView, type Row, type TableOptions } from "./LibraryPane";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 const formatDate = (seconds: number | undefined) => (seconds === undefined ? "" : dateFormat.format(new Date(seconds * 1000)));
@@ -53,10 +58,15 @@ const RESIZE_STEP = 16;
  * while the table scrolls sideways.
  *
  * It's a treegrid: the grid keeps focus and points at the active row (aria-activedescendant);
- * Right and Left expand and collapse. The header row is one Tab stop: Left and Right move between
- * headers, Return or Space sorts (announced), Shift+Left and Shift+Right change the width. Its
- * right-click menu, and the View options, show and hide columns. The Preview column draws at
- * 12–32px following the size slider; turned off, the table loads no font files at all.
+ * Right and Left expand and collapse. A row's name is short (name, styles, on/off); what its
+ * other columns show is its description ("Foundry: Rasmus Andersson."), since the arrow keys
+ * move by row, not into cells. The header row is one Tab stop: Left and Right move between
+ * headers, Return or Space sorts (announced), Shift+Left and Shift+Right change the width (also
+ * announced). Its right-click menu, and the View options, show and hide columns. The Preview
+ * column draws at 12–32px following the size slider; turned off, the table loads no font files.
+ *
+ * Rows are keyed by family (or style), so a row's controls stay with it when a reload or a new
+ * order moves it, and the row at the top stays in place while a scan adds rows above it.
  */
 export function FontTable({ view, sort, onSort, columns: saved, onColumns, density, ...display }: DisplayProps & TableOptions & { view: ListView }) {
   const { rows, actions, activeIndex, reveal, focused, optionId, adapter } = view;
@@ -77,21 +87,31 @@ export function FontTable({ view, sort, onSort, columns: saved, onColumns, densi
   const previewSize = tablePreviewSize(size);
   const rowHeight = tableRowHeight(density, previewShown, previewSize);
 
+  // Changes only with the rows, so the virtualizer works out positions only then.
+  const itemKey = useCallback((i: number) => rowKey(rows[i]), [rows]);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => rowHeight,
+    // Each row's DOM moves with its family, so a focused switch or chevron keeps acting on the
+    // family it names after a reload or a re-sort.
+    getItemKey: itemKey,
+    // Keep the row at the top of the view in place when rows are added above it, so the table
+    // doesn't move under the pointer while a scan fills it in (as Rows does).
+    anchorTo: "end",
     // The header sits above the rows inside the scroll area, and covers the top of the view.
     scrollMargin: HEADER_HEIGHT,
     scrollPaddingStart: HEADER_HEIGHT,
     overscan: 8,
   });
+  useKeepFocus(view);
   useLayoutEffect(() => {
     virtualizer.measure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowHeight]);
 
-  // A new view or search starts at the top.
+  // A new view or search starts at the top. (Declared after the virtualizer so this runs after
+  // its scroll anchoring, and wins.)
   useLayoutEffect(() => {
     virtualizer.scrollToOffset(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,13 +144,21 @@ export function FontTable({ view, sort, onSort, columns: saved, onColumns, densi
   const sortBy = (key: SortKey) => onSort(nextSort(sort, key));
   const hintId = useId();
   const pinStyle = (id: ColumnId): React.CSSProperties | undefined => (offsets.has(id) ? { position: "sticky", left: offsets.get(id), zIndex: 1 } : undefined);
+  // A column's new width after Shift+Left or Shift+Right, said aloud.
+  const [resized, setResized] = useState("");
 
   return (
     <>
     {/* What the column headers' keys do (their description); outside the grid, which holds only rows. */}
-    <span id={hintId} hidden>
+    <span id={`${hintId}-sorts`} hidden>
       Return sorts by this column. Shift with the Left or Right arrow changes its width. Right-click to show or hide columns.
     </span>
+    <span id={`${hintId}-fixed`} hidden>
+      This column doesn&rsquo;t sort. Shift with the Left or Right arrow changes its width. Right-click to show or hide columns.
+    </span>
+    <div className="sr-only" aria-live="polite">
+      {resized}
+    </div>
     <ContextMenuTrigger
       render={
         <div
@@ -158,9 +186,11 @@ export function FontTable({ view, sort, onSort, columns: saved, onColumns, densi
         onSort={sortBy}
         onToggle={(id, on) => onColumns(setShown(saved, id, on))}
         onDrag={(id, w) => setDragging({ id, width: w })}
-        onResized={(id, w) => {
+        onResized={(id, w, byKey) => {
           setDragging(null);
           onColumns(setWidth(saved, id, w));
+          // The same words again (another press at the narrowest) still change the region, so they're read.
+          if (byKey) setResized((said) => (said === widthWords(id, w) ? `${said}\u00A0` : widthWords(id, w)));
         }}
       />
       <div className="relative" style={{ height: virtualizer.getTotalSize(), width, minWidth: "100%" }}>
@@ -199,7 +229,17 @@ interface HeaderProps {
   onSort: (key: SortKey) => void;
   onToggle: (id: ColumnId, shown: boolean) => void;
   onDrag: (id: ColumnId, width: number) => void;
-  onResized: (id: ColumnId, width: number) => void;
+  /** `byKey`: Shift+Left or Shift+Right, so the new width is announced. */
+  onResized: (id: ColumnId, width: number, byKey?: boolean) => void;
+}
+
+/** "Foundry column, 176 pixels wide", after a keyboard resize (at either end, it says so). */
+function widthWords(id: ColumnId, asked: number): string {
+  const def = columnDef(id);
+  if (!def) return "";
+  const width = clampWidth(def, asked);
+  const end = width === def.min ? ", as narrow as it goes" : width === MAX_WIDTH ? ", as wide as it goes" : "";
+  return `${def.label || def.srLabel} column, ${width} pixels wide${end}`;
 }
 
 /** The header row: sort buttons, resize edges, and a right-click menu to show or hide columns. */
@@ -217,7 +257,7 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
       e.preventDefault();
       e.stopPropagation();
       if (e.shiftKey) {
-        onResized(column.def.id, column.width + (e.key === "ArrowLeft" ? -RESIZE_STEP : RESIZE_STEP));
+        onResized(column.def.id, column.width + (e.key === "ArrowLeft" ? -RESIZE_STEP : RESIZE_STEP), true);
         return;
       }
       const all = headers();
@@ -260,7 +300,7 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
                 type="button"
                 data-header
                 tabIndex={def.id === tabStop ? 0 : -1}
-                aria-describedby={hintId}
+                aria-describedby={def.sort ? `${hintId}-sorts` : `${hintId}-fixed`}
                 aria-label={def.label ? undefined : def.srLabel}
                 onFocus={() => setRoving(def.id)}
                 onClick={() => def.sort && onSort(def.sort)}
@@ -349,13 +389,15 @@ function TableRow(props: RowProps) {
   const faces = face ? [face] : family.faces;
   const key = rowKey(row);
   const selected = actions.selection.keys.has(key);
+  const several = selected && actions.selection.keys.size > 1;
   const active = actions.selection.focus === key;
   const single = !!family.ungroupedFrom;
   const expandable = !face && !single;
   const font = face ? face.primary : family.representative.primary;
+  const variable = family.faces.some((f) => f.primary.variable);
   const label = face
     ? `${font.subfamily}${font.variable ? " (Variable)" : ""}, ${font.family}, ${face.installed ? "always on (installed)" : face.active ? "on" : "off"}`
-    : `${family.name}${single ? "" : `, ${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`}, ${stateWords(family.activeCount, family.switchable.length, family.faces.length)}`;
+    : `${family.name}${single ? "" : `, ${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`}${variable ? ", variable" : ""}, ${stateWords(family.activeCount, family.switchable.length, family.faces.length)}`;
   return (
     <div
       id={id}
@@ -365,34 +407,76 @@ function TableRow(props: RowProps) {
       aria-expanded={expandable ? expanded.has(family.id) : undefined}
       aria-selected={selected}
       aria-label={label}
-      aria-describedby={describedBy(id, [])}
+      aria-describedby={describedIds(id, columns)}
       data-row-key={key}
       onClick={(e) => actions.onRowClick(e, key)}
       onDoubleClick={(e) => actions.onRowDoubleClick(e, row)}
-      className={cn(
-        "group/row absolute left-0 grid cursor-default border-b text-sm",
-        selected ? "bg-accent" : "bg-background hover:bg-muted",
-        selected && actions.selection.keys.size > 1 && "shadow-[inset_3px_0_0_var(--primary)]",
-        active && actions.ring && "outline-2 -outline-offset-2 outline-ring/60",
-      )}
+      className={cn("group/row absolute left-0 grid cursor-default border-b text-sm", selected ? "bg-accent" : "bg-background hover:bg-muted")}
       style={{ transform: `translateY(${top}px)`, height, gridTemplateColumns: template, width: "100%" }}
     >
       {columns.map((c) => (
         <div
           key={c.def.id}
           role="gridcell"
-          className={cn("flex min-w-0 items-center overflow-hidden px-2", c.def.numeric && "justify-end font-mono text-xs tabular-nums", offsetsBg(c))}
+          className={cn(
+            "flex min-w-0 items-center overflow-hidden px-2",
+            c.def.numeric && "justify-end font-mono text-xs tabular-nums",
+            // Pinned cells cover what scrolls under them, in the row's own color.
+            c.def.pinned && "bg-inherit",
+            // Several rows selected: a bar at the left edge, on the on/off cell, which stays at
+            // the left while the table scrolls sideways (and would cover a bar on the row).
+            several && c.def.id === "state" && "shadow-[inset_3px_0_0_var(--primary)]",
+          )}
           style={pinStyle(c.def.id)}
         >
           <Cell column={c.def.id} {...props} faces={faces} face={face} font={font} expandable={expandable} active={active} />
         </div>
       ))}
+      {/* The keyboard ring, drawn over the pinned cells (which would cover a ring on the row). */}
+      {active && actions.ring && <div aria-hidden className="pointer-events-none absolute inset-0 z-2 outline-2 -outline-offset-2 outline-ring/60" />}
     </div>
   );
 }
 
-/** Pinned cells cover what scrolls under them, in the row's own color. */
-const offsetsBg = (c: Column) => (c.def.pinned ? "bg-inherit" : "");
+/**
+ * What a row's shown columns say to a screen reader, as ids for its description, in column
+ * order: each column's text ("Foundry: Rasmus Andersson."), where its files are, the preview's
+ * sample badge and missing characters, and its tags. On or off, Name and Styles are already in
+ * the row's name.
+ */
+function describedIds(id: string, columns: readonly Column[]): string {
+  return columns
+    .flatMap((c) => {
+      switch (c.def.id) {
+        case "state":
+        case "name":
+        case "styles":
+          return [];
+        case "preview":
+          return [`${id}-sample`, `${id}-missing`];
+        case "source":
+          return [`${id}-places`];
+        case "tags":
+          return [`${id}-tags`];
+        default:
+          return [`${id}-${c.def.id}`];
+      }
+    })
+    .join(" ");
+}
+
+/** A column's text, with its column's name for screen readers (read as part of the row's
+ *  description: "Foundry: Rasmus Andersson."). Nothing when there's no text. */
+function Fact({ id, column, text, className, title }: { id: string; column: ColumnId; text: string; className?: string; title?: string }) {
+  if (!text) return null;
+  return (
+    <span id={`${id}-${column}`} className={className} title={title}>
+      <span className="sr-only">{columnDef(column)?.label}: </span>
+      {text}
+      <span className="sr-only">.</span>
+    </span>
+  );
+}
 
 type CellProps = RowProps & { column: ColumnId; faces: Face[]; face: Face | undefined; font: FontSummary; expandable: boolean; active: boolean };
 
@@ -400,6 +484,7 @@ function Cell({ column, row, faces, face, font, expandable, active, actions, id,
   const family = row.family;
   const tab = active ? 0 : -1;
   const muted = "truncate text-xs text-muted-foreground";
+  const fact = { id, column };
   switch (column) {
     case "state": {
       const switchable = face ? (face.installed ? [] : [face]) : family.switchable;
@@ -448,16 +533,17 @@ function Cell({ column, row, faces, face, font, expandable, active, actions, id,
     case "styles":
       return face || family.ungroupedFrom ? null : <span>{family.faces.length}</span>;
     case "weights":
-      return <span className="truncate font-mono text-xs">{weightText(faces)}</span>;
+      return <Fact {...fact} text={weightText(faces)} className="truncate font-mono text-xs" />;
     case "foundry": {
       const text = face ? (font.manufacturer ?? "") : foundryOf(family);
-      return <span className={muted} title={text}>{text}</span>;
+      return <Fact {...fact} text={text} className={muted} title={text} />;
     }
     case "format":
-      return <span className={muted}>{formatsOf(faces)}</span>;
+      return <Fact {...fact} text={formatsOf(faces)} className={muted} />;
     case "source": {
       const copies = faces.flatMap((f) => f.copies);
-      const names = [...new Set(copies.map(locations.sourceOf).filter(Boolean))];
+      // The same places, in the same order, as the Source sort goes by (familySources).
+      const names = face ? sourcesOf([face], locations.sourceOf) : familySources(family, locations.sourceOf);
       return (
         <span className="flex min-w-0 items-center gap-1.5">
           <LocationDots copies={copies} locations={locations} max={2} srId={`${id}-places`} />
@@ -469,23 +555,23 @@ function Cell({ column, row, faces, face, font, expandable, active, actions, id,
       );
     }
     case "added":
-      return <span className={muted}>{formatDate(face ? faceAddedAt(face) : addedAt(family.faces))}</span>;
+      return <Fact {...fact} text={formatDate(face ? faceAddedAt(face) : addedAt(family.faces))} className={muted} />;
     case "tags":
       return <TagChips faces={faces} index={actions.index} max={2} srId={`${id}-tags`} />;
     case "version": {
       const full = font.version ?? "";
-      return <span className={cn(muted, "font-mono")} title={full}>{shortVersion(full)}</span>;
+      return <Fact {...fact} text={shortVersion(full)} className={cn(muted, "font-mono")} title={full} />;
     }
     case "designer": {
       const text = face ? (font.designer ?? "") : designerOf(family);
-      return <span className={muted} title={text}>{text}</span>;
+      return <Fact {...fact} text={text} className={muted} title={text} />;
     }
     case "file":
-      return <span className={cn(muted, "font-mono")} title={font.path}>{fileNameOf(font)}</span>;
+      return <Fact {...fact} text={fileNameOf(font)} className={cn(muted, "font-mono")} title={font.path} />;
     case "size":
-      return <span>{formatBytes(fileSizeOf(faces))}</span>;
+      return <Fact {...fact} text={formatBytes(fileSizeOf(faces))} />;
     case "glyphs":
-      return <span>{font.glyphCount.toLocaleString()}</span>;
+      return <Fact {...fact} text={font.glyphCount.toLocaleString()} />;
   }
 }
 

@@ -28,10 +28,13 @@ export function FacePreview({ font, preview, typed, own, size }: { font: FontSum
   const waited = useProfileWait(pending, face);
   const unavailable = UNAVAILABLE[state];
   if (unavailable) {
+    // One line, cut short with "…" where it doesn't fit (a card in Tiles, a Table cell) rather
+    // than wrapping out of a fixed-height preview area; the whole sentence shows on hover and is
+    // still all there for screen readers.
     return (
-      <div className="flex items-center gap-1.5 py-1 text-xs text-muted-foreground italic">
+      <div className="flex min-w-0 items-center gap-1.5 py-1 text-xs text-muted-foreground italic" title={unavailable.text}>
         <Icon name={unavailable.icon} size={14} />
-        {unavailable.text}
+        <span className="min-w-0 truncate">{unavailable.text}</span>
       </div>
     );
   }

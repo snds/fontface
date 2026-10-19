@@ -26,8 +26,11 @@ test("the size steps through 12, 16, 24, 32, 48, 64, 96 and 128, from wherever i
   assert.equal(stepSize(40, -1), 32);
   assert.equal(stepSize(128, 1), 128, "the ends stay");
   assert.equal(stepSize(12, -1), 12);
-  assert.equal(stepSize(10, -1), 12, "below the first step");
+  assert.equal(stepSize(10, -1), 10, "below the first step, smaller stays where it is");
+  assert.equal(stepSize(11, -1), 11);
   assert.equal(stepSize(10, 1), 12);
+  assert.equal(stepSize(130, 1), 130, "past the last step, bigger stays too");
+  assert.equal(stepSize(130, -1), 128);
   let s = 12;
   const up: number[] = [];
   for (let i = 0; i < 8; i++) up.push((s = stepSize(s, 1)));

@@ -1,4 +1,4 @@
-import { useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LibraryLayout, SortOrder, TableColumnSetting, TableDensity } from "@/api";
 import type { Face, Family } from "@/library";
 import { listKeyCommand, type Selection } from "@/selection";
@@ -114,6 +114,14 @@ export interface ListView {
   resetKey: string;
   /** Bumped when the order changed (sort, grouping) with no active item: back to the top. */
   top: number;
+  /** Call after every render of the layout (useKeepFocus): if an item's own control had
+   *  keyboard focus and went away with its row, focus goes back to the list. */
+  keepFocus: () => void;
+}
+
+/** Runs `view.keepFocus` after every render of a layout, once its rows are in the page. */
+export function useKeepFocus(view: ListView) {
+  useLayoutEffect(() => view.keepFocus());
 }
 
 /** The parts of the Table the pane passes through. */
@@ -171,7 +179,8 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
   const familyRowOfFace = useMemo(() => new Map(families.flatMap((f) => f.faces.map((face) => [face.key, `f:${f.id}`] as const))), [families]);
   const parentOf = (key: string) => (key.startsWith("s:") ? familyRowOfFace.get(key.slice(2)) : undefined);
 
-  const sel = useSelection(order, resetKey, parentOf);
+  // Tiles list no styles: a selected style (and the anchor) becomes its family there.
+  const sel = useSelection(order, resetKey, parentOf, { toParent: tiles });
   const { selection } = sel;
   // The fonts the right-click menu works on, fixed when it opens (a tag view can lose the row
   // while the menu is still open).
@@ -188,6 +197,48 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
    *  even when it's scrolled away and the event lands on the list. */
   const menuOnActive = useRef(false);
   const adapter = useRef<LayoutAdapter>(NO_ADAPTER);
+
+  // An item's own control (a switch, the expand button) with keyboard focus. Virtualized rows
+  // come and go: one scrolled out of the drawn ones takes its control with it, and a reload can
+  // draw a card again elsewhere. Focus would fall to the page; keepFocus (run after each of the
+  // layout's renders) puts it back on the list, whose active item then speaks for it, or on the
+  // same control if it's still there.
+  const innerFocus = useRef<HTMLElement | null>(null);
+  /** Set while keepFocus moves focus, so the list's focus handler leaves the scroll alone. */
+  const recovering = useRef(false);
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent) => {
+      const list = adapter.current.element;
+      const target = e.target;
+      innerFocus.current = list && target instanceof HTMLElement && target !== list && list.contains(target) ? target : null;
+    };
+    // A press outside the list moves focus on purpose (to the page, if it's on nothing that
+    // takes focus). One inside either focuses something there or is on the scroll bar.
+    const onPointerDown = (e: PointerEvent) => {
+      if (!adapter.current.element?.contains(e.target as Node)) innerFocus.current = null;
+    };
+    document.addEventListener("focusin", onFocusIn, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, []);
+  const keepFocus = () => {
+    const was = innerFocus.current;
+    if (!was) return;
+    const now = document.activeElement;
+    if (now !== null && now !== document.body) return;
+    innerFocus.current = null;
+    const list = adapter.current.element;
+    if (!list?.isConnected) return;
+    recovering.current = true;
+    try {
+      (was.isConnected && list.contains(was) ? was : list).focus({ preventScroll: true });
+    } finally {
+      recovering.current = false;
+    }
+  };
 
   const fullFamily = useMemo(() => new Map(allFamilies.map((f) => [f.id, f])), [allFamilies]);
   const facesOf = (keys: Iterable<string>): Face[] => {
@@ -354,6 +405,13 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
     },
     onFocus: (e) => {
       if (e.target !== e.currentTarget) return;
+      if (recovering.current) {
+        // Back from an item's control that went away (see keepFocus): the ring and the scroll
+        // stay as they were.
+        setFocused(true);
+        sel.ensureFocus(adapter.current.firstOnScreen());
+        return;
+      }
       const fromKeyboard = performance.now() - pressedAt.current > 300;
       setFocused(true);
       setKeyboard(fromKeyboard);
@@ -388,7 +446,7 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
     },
   };
 
-  const view: ListView = { rows, actions, activeIndex, reveal, focused, optionId, container, adapter, resetKey, top };
+  const view: ListView = { rows, actions, activeIndex, reveal, focused, optionId, container, adapter, resetKey, top, keepFocus };
   const count = selection.keys.size;
 
   return (

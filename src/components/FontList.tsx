@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
 import { ActivationSwitch, InstalledBadge } from "./ActivationSwitch";
 import { CopiesBadge, FacePreview, MissingHint, SampleBadge, stateWords } from "./FacePreview";
-import { activeInSight, describedBy, rowKey, RowTagButton, type DisplayProps, type ListView, type Row } from "./library/LibraryPane";
+import { activeInSight, describedBy, rowKey, RowTagButton, useKeepFocus, type DisplayProps, type ListView, type Row } from "./library/LibraryPane";
 
 /**
  * The Rows layout: families, with the styles of expanded families under them. Only rows on
@@ -37,6 +37,8 @@ export function FontList({ view, ...display }: DisplayProps & { view: ListView }
     anchorTo: "end",
     overscan: 6,
   });
+  // A focused switch or button whose row scrolls out of the drawn ones hands focus back to the list.
+  useKeepFocus(view);
 
   // A new view or search, or a new order with nothing active, starts at the top. (Declared
   // after the virtualizer so this runs after its scroll anchoring, and wins.)

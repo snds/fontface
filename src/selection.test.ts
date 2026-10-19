@@ -19,6 +19,7 @@ import {
 
 const ORDER = ["a", "b", "c", "d", "e", "f"];
 const plain = { toggle: false, range: false };
+const cmd = { toggle: true, range: false };
 const keys = (s: Selection) => [...s.keys].sort();
 
 const key = (k: string, mods: Partial<ListKey> = {}): ListKey => ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
@@ -159,6 +160,31 @@ test("when a family is collapsed, focus on one of its styles goes to the family 
   // The family itself left too: on to the row that took its place.
   assert.equal(focusAfterRemoval("s:A2", new Set(["f:B"]), { before, parentOf }), "f:B");
   assert.equal(focusAfterRemoval("s:A2", new Set(["f:B"]), {}), null);
+});
+
+test("going to Tiles, selected styles become their families; a collapse in Rows still drops them", () => {
+  const before = ["f:Arial", "f:Inter", "s:inter-bold", "s:inter-italic", "f:Lora", "s:lora-regular"];
+  const parentOf = (k: string) => (k.startsWith("s:inter") ? "f:Inter" : k.startsWith("s:lora") ? "f:Lora" : null);
+  const tiles = new Set(["f:Arial", "f:Inter", "f:Lora"]);
+  // Inter Bold, then Cmd-click Inter Italic.
+  const two = clickRow(clickRow(NO_SELECTION, before, "s:inter-bold", plain), before, "s:inter-italic", cmd);
+  const inTiles = prune(two, tiles, { before, parentOf, toParent: true });
+  assert.deepEqual(keys(inTiles), ["f:Inter"], "both styles are one family: listed once");
+  assert.equal(inTiles.anchor, "f:Inter");
+  assert.equal(inTiles.focus, "f:Inter");
+  // Back in Rows, the family is still selected.
+  assert.deepEqual(keys(prune(inTiles, new Set(before), { before: [...tiles], parentOf })), ["f:Inter"]);
+
+  // A family and another family's style: both families.
+  const mixed = clickRow(clickRow(NO_SELECTION, before, "f:Arial", plain), before, "s:lora-regular", cmd);
+  assert.deepEqual(keys(prune(mixed, tiles, { before, parentOf, toParent: true })), ["f:Arial", "f:Lora"]);
+  // A style whose family left too is dropped.
+  assert.deepEqual(keys(prune(mixed, new Set(["f:Arial"]), { before, parentOf, toParent: true })), ["f:Arial"]);
+
+  // Without toParent (Inter collapsed in Rows), the styles leave the selection as before.
+  const collapsed = prune(two, new Set(["f:Arial", "f:Inter", "f:Lora", "s:lora-regular"]), { before, parentOf });
+  assert.deepEqual(keys(collapsed), []);
+  assert.equal(collapsed.focus, "f:Inter");
 });
 
 test("focus arrives on the first selected row, else the first row on screen, else the first row", () => {

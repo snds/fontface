@@ -9,7 +9,8 @@
  *   extend the selection from the anchor instead. Space adds or removes the focused row. In a
  *   grid (Tiles), Left and Right go to the previous and next item and Up and Down a whole line.
  * - Rows are remembered by key, so a reload or an expanded family doesn't shift the selection.
- *   Rows that leave the list leave the selection for good; focus moves to a neighbor.
+ *   Rows that leave the list leave the selection for good; focus moves to a neighbor. When the
+ *   list stops showing style rows at all (Tiles), a selected style becomes its family instead.
  * - Opening (double-click or Return) isn't part of the selection: the list does that.
  */
 
@@ -76,6 +77,10 @@ export interface PruneOptions {
   before?: readonly string[];
   /** A row's parent row (a style row's family row), tried first when the row leaves. */
   parentOf?: (key: string) => string | null | undefined;
+  /** Selected rows that leave become their parent row, when it's listed, instead of leaving the
+   *  selection (the anchor too). For a list that stops showing style rows (Tiles), so a selected
+   *  style becomes its family; a family collapsed in Rows still lets its styles go. */
+  toParent?: boolean;
 }
 
 /**
@@ -99,11 +104,20 @@ export function focusAfterRemoval(key: string, present: ReadonlySet<string>, { b
  * Drops rows that are no longer listed. The same object comes back when nothing changed.
  *
  * A focused row that leaves hands focus to a neighbor (see focusAfterRemoval). If it was the
- * only selected row, the neighbor is selected too, so a row stays selected, as in Mail.
+ * only selected row, the neighbor is selected too, so a row stays selected, as in Mail. With
+ * `toParent`, selected rows that leave become their parent row (each parent once).
  */
 export function prune(sel: Selection, present: ReadonlySet<string>, options: PruneOptions = {}): Selection {
-  const keys = [...sel.keys].filter((k) => present.has(k));
-  let anchor = sel.anchor !== null && present.has(sel.anchor) ? sel.anchor : null;
+  const { parentOf, toParent = false } = options;
+  /** What a row stays as: itself if listed, else (with toParent) its parent if that's listed. */
+  const kept = (k: string): string | null => {
+    if (present.has(k)) return k;
+    if (!toParent) return null;
+    const parent = parentOf?.(k);
+    return parent != null && present.has(parent) ? parent : null;
+  };
+  const keys = [...new Set([...sel.keys].map(kept).filter((k): k is string => k !== null))];
+  let anchor = sel.anchor === null ? null : kept(sel.anchor);
   let focus = sel.focus;
   if (focus !== null && !present.has(focus)) {
     const wasOnlySelected = sel.keys.size === 1 && sel.keys.has(focus);

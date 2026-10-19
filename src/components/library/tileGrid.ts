@@ -46,5 +46,24 @@ export function firstVisibleIndex(scrollTop: number, columns: number, stride: nu
  *  family in place when the column count or the card size changes. */
 export const offsetFor = (index: number, columns: number, stride: number) => (index > 0 ? GRID_PADDING + rowOf(index, columns) * stride : 0);
 
+/** The grid's full height: its rows of cards, with the padding above and below (no gap under
+ *  the last row). The same as the virtualizer's total, but known before it's measured again. */
+export const gridHeight = (count: number, columns: number, stride: number) => GRID_PADDING + rowCount(count, columns) * stride + GRID_PADDING - TILE_GAP;
+
+/**
+ * The card kept at the top as the grid scrolls: `anchor` stays while its row is still the top
+ * one, else the first card of the new top row. So a column change that keeps card 2000 at the
+ * top (on a row that starts at 1998) doesn't make it 1998 for the next change, and resizing back
+ * and forth doesn't creep.
+ */
+export function scrolledAnchor(anchor: number, scrollTop: number, columns: number, stride: number): number {
+  const first = firstVisibleIndex(scrollTop, columns, stride);
+  return rowOf(anchor, columns) === rowOf(first, columns) ? anchor : first;
+}
+
+/** After a reload moved the card at the top from index `from` to `to` (cards added or removed
+ *  above it), how far to scroll so it stays where it was, px: whole rows, 0 on the same row. */
+export const reloadShift = (from: number, to: number, columns: number, stride: number) => (rowOf(to, columns) - rowOf(from, columns)) * stride;
+
 /** Items one Page Up or Page Down moves: the whole rows that fit, at least one row. */
 export const pageItems = (viewHeight: number, columns: number, stride: number) => Math.max(1, Math.floor(viewHeight / stride)) * columns;

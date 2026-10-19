@@ -8,14 +8,30 @@ import { cn } from "@/lib/utils";
 import { LocationDots, TagDots } from "@/tags/TagChips";
 import { ActivationSwitch, InstalledBadge } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge, stateWords } from "../FacePreview";
-import { activeInSight, describedBy, rowKey, type DisplayProps, type ListView, type Row } from "./LibraryPane";
-import { firstVisibleIndex, GRID_PADDING, offsetFor, pageItems, rowCount, rowOf, rowStride, TILE_GAP, tileColumns, tileHeight } from "./tileGrid";
+import { activeInSight, describedBy, rowKey, useKeepFocus, type DisplayProps, type ListView, type Row } from "./LibraryPane";
+import {
+  firstVisibleIndex,
+  GRID_PADDING,
+  gridHeight,
+  offsetFor,
+  pageItems,
+  reloadShift,
+  rowCount,
+  rowOf,
+  rowStride,
+  scrolledAnchor,
+  TILE_GAP,
+  tileColumns,
+  tileHeight,
+} from "./tileGrid";
 
 /**
  * The Tiles layout: a grid of cards, one per family (or per style, with grouping off). Rows of
  * cards are virtualized with a fixed height for the preview size (tileGrid.ts), so nothing is
  * measured; two extra rows are drawn above and below. The column count follows the width, and
- * when it changes (or the size does) the first family showing stays at the top.
+ * when it changes (or the size does) the first family showing stays at the top. When a reload
+ * adds or removes cards above it (a scan filling the library in), the grid scrolls by whole rows
+ * so it stays where it was, as Rows and Table do.
  *
  * It's a grid (role="grid", one Tab stop): the grid keeps focus and points at the active card
  * with aria-activedescendant. Left and Right go card by card, Up and Down by line; everything
@@ -48,23 +64,42 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
     paddingEnd: GRID_PADDING - TILE_GAP,
     overscan: 2,
   });
+  useKeepFocus(view);
 
-  // The first card on the top row, kept up to date as the grid scrolls: it stays at the top
-  // when the column count or the card size changes.
-  const anchor = useRef(0);
-  const geometry = useRef({ columns, stride });
+  // The card at the top, by index and by key, kept up to date as the grid scrolls (see
+  // scrolledAnchor). It stays at the top when the column count or the card size changes, and
+  // where it was when a reload adds or removes cards above it.
+  const anchor = useRef<{ index: number; key: string | undefined }>({ index: 0, key: undefined });
+  const keyAt = (i: number) => (rows[i] ? rowKey(rows[i]) : undefined);
+  const reset = `${view.resetKey}\u0000${view.top}`;
+  const shown = useRef({ rows, columns, stride, reset });
   useLayoutEffect(() => {
-    const before = geometry.current;
-    geometry.current = { columns, stride };
-    if (before.columns === columns && before.stride === stride) return;
-    virtualizer.measure();
-    virtualizer.scrollToOffset(offsetFor(anchor.current, columns, stride));
+    const before = shown.current;
+    shown.current = { rows, columns, stride, reset };
+    const resized = before.columns !== columns || before.stride !== stride;
+    // Cards have a new height: positions from now on use it.
+    if (resized) virtualizer.measure();
+    // A new view, search or order goes to the top instead (below).
+    if (before.reset !== reset) return;
+    const was = anchor.current.index;
+    if (before.rows !== rows) {
+      const { key } = anchor.current;
+      const at = key === undefined ? -1 : rows.findIndex((r) => rowKey(r) === key);
+      // Gone: whichever card took its place.
+      const index = at >= 0 ? at : Math.min(was, Math.max(0, rows.length - 1));
+      anchor.current = { index, key: keyAt(index) };
+    }
+    if (resized) virtualizer.scrollToOffset(offsetFor(anchor.current.index, columns, stride));
+    else if (before.rows !== rows) {
+      const shift = reloadShift(was, anchor.current.index, columns, stride);
+      if (shift) virtualizer.scrollToOffset((scrollRef.current?.scrollTop ?? 0) + shift);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columns, stride]);
+  }, [rows, columns, stride, reset]);
 
-  // A new view or search starts at the top.
+  // A new view or search starts at the top. (Declared after the effect above, so it wins.)
   useLayoutEffect(() => {
-    anchor.current = 0;
+    anchor.current = { index: 0, key: keyAt(0) };
     virtualizer.scrollToOffset(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.resetKey, view.top]);
@@ -106,7 +141,9 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
           }}
           {...view.container}
           onScroll={(e) => {
-            anchor.current = firstVisibleIndex(e.currentTarget.scrollTop, columns, stride);
+            // Also the scroll a column change makes: the anchor stays while its row is the top one.
+            const index = scrolledAnchor(anchor.current.index, e.currentTarget.scrollTop, columns, stride);
+            if (index !== anchor.current.index) anchor.current = { index, key: keyAt(index) };
           }}
           className={cn("min-h-0 flex-1 overflow-y-auto", actions.ring && !activeOnScreen ? "outline-2 -outline-offset-2 outline-ring/60" : "outline-none")}
           role="grid"
@@ -117,7 +154,10 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
         />
       }
     >
-      <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+      {/* The height is worked out here rather than asked of the virtualizer, which only learns a
+          new card height after this render: a scroll to keep the top card in place would stop
+          short at the old height. */}
+      <div className="relative" style={{ height: gridHeight(rows.length, columns, stride) }}>
         {measured &&
           virtualizer.getVirtualItems().map((item) => {
             const start = item.index * columns;

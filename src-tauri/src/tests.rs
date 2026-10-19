@@ -423,6 +423,33 @@ mod library {
         assert!(real > 1_600_000_000 && real <= crate::db::now(), "{real}");
     }
 
+    /// A library folder that can't be reached when the backfill runs (a drive that isn't mounted)
+    /// keeps its fonts undated, so a later launch dates them from their own files, not the
+    /// folder's date for good.
+    #[test]
+    fn fonts_in_an_unreachable_folder_wait_for_their_file_dates() {
+        let sb = Sandbox::new("added-unreachable");
+        let andale = sb.copy(ANDALE_MONO, "Andale.ttf");
+        let folder = sb.add_folder();
+        sb.scan(folder);
+        {
+            let conn = sb.conn();
+            conn.execute("UPDATE folders SET added_at = 777", []).unwrap();
+            conn.execute("UPDATE fonts SET added_at = NULL", []).unwrap();
+        }
+        // The drive goes away: its files can't be looked at, the folder is gone too.
+        let away = sb.dir.join("unmounted");
+        std::fs::rename(sb.fonts(), &away).unwrap();
+        assert_eq!(crate::db::backfill_added_at_with(&sb.db(), |_| None).unwrap(), 0, "nothing settled while the folder is gone");
+        let conn = sb.conn();
+        assert!(added_at(&conn, &andale).is_none(), "still undated");
+
+        // Back again: the file's own date, not the folder's.
+        std::fs::rename(&away, sb.fonts()).unwrap();
+        assert_eq!(crate::db::backfill_added_at_with(&sb.db(), |_| Some(1_500_000_000)).unwrap(), 1);
+        assert_eq!(added_at(&conn, &andale), Some(1_500_000_000));
+    }
+
     /// The list carries what the Table shows: version, designer, foundry, glyphs, a variable
     /// font's weights and the added date. Unknown ones are left out of the JSON.
     #[test]

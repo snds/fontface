@@ -148,7 +148,7 @@ test("sort by the Table's other columns", () => {
     font("Aaa", "Regular", { version: "Version 1.10", glyphCount: 50, fileSize: 9000, format: "TrueType", path: "/x/zz.ttf" }),
     font("Bbb", "Regular", { version: "Version 1.9", glyphCount: 900, fileSize: 100, format: "OpenType CFF", path: "/x/aa.otf", designer: "Someone" }),
   ]);
-  assert.deepEqual(names(sortFamilies(all, { key: "version", desc: false })), ["Bbb", "Aaa"], "1.9 before 1.10");
+  assert.deepEqual(names(sortFamilies(all, { key: "version", desc: false })), ["Aaa", "Bbb"], "1.10 (1.100) before 1.9: versions are decimals");
   assert.deepEqual(names(sortFamilies(all, { key: "glyphs", desc: true })), ["Bbb", "Aaa"]);
   assert.deepEqual(names(sortFamilies(all, { key: "size", desc: true })), ["Aaa", "Bbb"]);
   assert.deepEqual(names(sortFamilies(all, { key: "format", desc: false })), ["Bbb", "Aaa"]);
@@ -157,6 +157,18 @@ test("sort by the Table's other columns", () => {
   const sources: Record<string, string> = { Aaa: "Google Fonts", Bbb: "Downloads" };
   assert.deepEqual(names(sortFamilies(all, { key: "source", desc: false }, { sourceOf: (f) => sources[f.name] })), ["Bbb", "Aaa"]);
   assert.deepEqual(names(sortFamilies(all, { key: "source", desc: false })), ["Aaa", "Bbb"], "without a way to tell, by name");
+});
+
+test("versions sort as decimals; ones with no number, then unknown ones, go last either way", () => {
+  const all = groupFamilies([
+    font("Aaa", "Regular", { version: "Version 1.1" }),
+    font("Bbb", "Regular", { version: "Version 1.009;PS 001.000" }),
+    font("Ccc", "Regular", { version: "Beta" }),
+    font("Ddd", "Regular"),
+    font("Eee", "Regular", { version: "Version 2.040" }),
+  ]);
+  assert.deepEqual(names(sortFamilies(all, { key: "version", desc: false })), ["Bbb", "Aaa", "Eee", "Ccc", "Ddd"]);
+  assert.deepEqual(names(sortFamilies(all, { key: "version", desc: true })), ["Eee", "Aaa", "Bbb", "Ccc", "Ddd"]);
 });
 
 test("sorting 3,500 families stays quick", () => {

@@ -4,11 +4,14 @@ import assert from "node:assert/strict";
 import {
   firstVisibleIndex,
   GRID_PADDING,
+  gridHeight,
   offsetFor,
   pageItems,
+  reloadShift,
   rowCount,
   rowOf,
   rowStride,
+  scrolledAnchor,
   TILE_GAP,
   tileColumns,
   tileHeight,
@@ -54,6 +57,35 @@ test("the first visible card stays at the top when the column count changes", ()
   // Partway down a row still counts that row (until half of the gap below it).
   assert.equal(firstVisibleIndex(top + stride / 2, 5, stride), 200);
   assert.equal(firstVisibleIndex(0, 5, stride), 0);
+});
+
+test("resizing back and forth keeps the same card at the top, without creeping", () => {
+  const stride = rowStride(32);
+  let anchor = 2000;
+  for (const columns of [6, 5, 6, 5, 6, 5, 7, 4, 5]) {
+    // The geometry change scrolls to the anchor's row; that scroll reports back as a scroll.
+    const top = offsetFor(anchor, columns, stride);
+    anchor = scrolledAnchor(anchor, top, columns, stride);
+    assert.equal(anchor, 2000, `${columns} across`);
+    assert.equal(rowOf(firstVisibleIndex(top, columns, stride), columns), rowOf(2000, columns), "on the top row");
+  }
+  // Scrolling within the top row keeps it; scrolling to another row takes that row's first card.
+  assert.equal(scrolledAnchor(2000, offsetFor(2000, 6, stride) + stride / 3, 6, stride), 2000);
+  assert.equal(scrolledAnchor(2000, offsetFor(2000, 6, stride) + stride, 6, stride), 2004);
+});
+
+test("a reload that adds cards above the top one scrolls by whole rows to keep it in place", () => {
+  const stride = rowStride(32);
+  assert.equal(reloadShift(200, 200, 5, stride), 0, "nothing moved");
+  assert.equal(reloadShift(200, 203, 5, stride), 0, "still on the same row");
+  assert.equal(reloadShift(200, 212, 5, stride), 2 * stride, "two rows down");
+  assert.equal(reloadShift(200, 190, 5, stride), -2 * stride, "cards removed above: up");
+});
+
+test("the grid's height is known before it's measured again", () => {
+  const stride = rowStride(32);
+  assert.equal(gridHeight(0, 5, stride), GRID_PADDING * 2 - TILE_GAP);
+  assert.equal(gridHeight(11, 5, stride), GRID_PADDING + 3 * stride + GRID_PADDING - TILE_GAP);
 });
 
 test("Page Up and Page Down move whole rows", () => {

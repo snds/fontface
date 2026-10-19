@@ -45,10 +45,12 @@ export function layoutShortcut(e: ShortcutKey, mac: boolean): LibraryLayout | nu
 /** The preview sizes Cmd+= and Cmd+- step through. */
 export const SIZE_STEPS = [12, 16, 24, 32, 48, 64, 96, 128] as const;
 
-/** The next size up (+1) or down (-1) from `size`, which may sit between steps; the ends stay. */
+/** The next size up (+1) or down (-1) from `size`, which may sit between steps or past either
+ *  end (the slider goes down to 10). Past the last step it stays: smaller never makes it bigger,
+ *  and bigger never smaller. */
 export function stepSize(size: number, direction: 1 | -1): number {
-  if (direction > 0) return SIZE_STEPS.find((s) => s > size) ?? SIZE_STEPS[SIZE_STEPS.length - 1];
-  return [...SIZE_STEPS].reverse().find((s) => s < size) ?? SIZE_STEPS[0];
+  if (direction > 0) return SIZE_STEPS.find((s) => s > size) ?? Math.max(size, SIZE_STEPS[SIZE_STEPS.length - 1]);
+  return [...SIZE_STEPS].reverse().find((s) => s < size) ?? Math.min(size, SIZE_STEPS[0]);
 }
 
 /** Cmd+= (or Cmd++) and Cmd+- (Ctrl on Windows): +1, -1, or null. */

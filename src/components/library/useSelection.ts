@@ -34,21 +34,29 @@ export interface SelectionApi {
 /**
  * The selection of a library list (see selection.ts), kept by row key. `order` is the rows in
  * list order. Rows that leave it leave the selection, and focus on one moves to a neighbor
- * (`parentOf` names a row's parent, such as a style row's family row); a new `resetKey`
- * (another view or search) starts with nothing selected.
+ * (`parentOf` names a row's parent, such as a style row's family row); with `toParent`, a
+ * selected row that leaves becomes its parent instead (Tiles, which has no style rows). A new
+ * `resetKey` (another view or search) starts with nothing selected.
  */
-export function useSelection(order: readonly string[], resetKey: string, parentOf?: (key: string) => string | null | undefined): SelectionApi {
+export function useSelection(
+  order: readonly string[],
+  resetKey: string,
+  parentOf?: (key: string) => string | null | undefined,
+  { toParent = false }: { toParent?: boolean } = {},
+): SelectionApi {
   const [selection, setSelection] = useState<Selection>(NO_SELECTION);
   const orderRef = useRef(order);
   orderRef.current = order;
   const parentRef = useRef(parentOf);
   parentRef.current = parentOf;
+  const toParentRef = useRef(toParent);
+  toParentRef.current = toParent;
   const present = useMemo(() => new Set(order), [order]);
   /** The order the selection was last pruned against: where a row that left used to be. */
   const before = useRef(order);
 
   useEffect(() => {
-    const options = { before: before.current, parentOf: parentRef.current };
+    const options = { before: before.current, parentOf: parentRef.current, toParent: toParentRef.current };
     before.current = order;
     setSelection((s) => prune(s, present, options));
     // `present` changes exactly when `order` does.

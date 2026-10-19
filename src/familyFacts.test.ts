@@ -2,7 +2,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FontSummary } from "./api.ts";
-import { activeRank, addedAt, designerOf, fileNameOf, fileSizeOf, formatBytes, formatsOf, foundryOf, shortVersion, weightSpan, weightText } from "./familyFacts.ts";
+import {
+  activeRank,
+  addedAt,
+  compareVersions,
+  designerOf,
+  familySources,
+  fileNameOf,
+  fileSizeOf,
+  formatBytes,
+  formatsOf,
+  foundryOf,
+  shortVersion,
+  sourcesOf,
+  weightSpan,
+  weightText,
+} from "./familyFacts.ts";
 import { groupFamilies } from "./library.ts";
 
 let nextId = 1;
@@ -95,6 +110,28 @@ test("version strings shorten to their number", () => {
   assert.equal(shortVersion("Beta; for testing"), "Beta");
   assert.equal(shortVersion(undefined), "");
   assert.equal(shortVersion(""), "");
+});
+
+test("versions compare as decimals, as font versions are meant", () => {
+  const sorted = (...v: string[]) => [...v].sort(compareVersions);
+  assert.deepEqual(sorted("1.1", "1.009"), ["1.009", "1.1"], "1.009 is less than 1.1");
+  assert.deepEqual(sorted("1.9", "1.10"), ["1.10", "1.9"], "1.10 is 1.100");
+  assert.deepEqual(sorted("2.1", "2.040", "10.0", "2"), ["2", "2.040", "2.1", "10.0"]);
+  assert.deepEqual(sorted("1.0.38", "1.0.4", "1.0"), ["1.0", "1.0.4", "1.0.38"], "equal numbers: by the rest, numbers as numbers");
+  assert.deepEqual(sorted("Beta", "0.5", "Alpha"), ["0.5", "Alpha", "Beta"], "no number in front: after the numbered ones");
+  assert.equal(compareVersions("1.10", "1.1") > 0, true, "the same number written two ways still has an order");
+});
+
+test("a family's places: its representative's first, each once", () => {
+  const sources: Record<number, string> = { 1: "Downloads", 2: "Google Fonts" };
+  const sourceOf = (f: FontSummary) => sources[f.folderId] ?? "";
+  // Thin in Downloads, Regular (the representative) in Google Fonts.
+  const f = family(font("Inter", "Thin", { weight: 100, folderId: 1 }), font("Inter", "Regular", { folderId: 2 }), font("Inter", "Bold", { weight: 700, folderId: 1 }));
+  assert.equal(f.representative.primary.subfamily, "Regular");
+  assert.deepEqual(sourcesOf(f.faces, sourceOf), ["Downloads", "Google Fonts"], "in style order: lightest first");
+  assert.deepEqual(familySources(f, sourceOf), ["Google Fonts", "Downloads"], "what the Source column names and sorts by");
+  assert.deepEqual(sourcesOf([], sourceOf), []);
+  assert.deepEqual(familySources(family(font("X", "Regular", { folderId: 9 })), sourceOf), [], "no place known");
 });
 
 test("on/off rank: all on (or always on), some, none", () => {

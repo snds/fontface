@@ -32,6 +32,7 @@ import {
   type StatusFilter,
 } from "@/library";
 import { describeSort, layoutInfo, layoutShortcut, sizeShortcut, stepSize } from "@/viewOptions";
+import { familySources } from "@/familyFacts";
 import { newestWins } from "@/newestWins";
 import { listenForProfiles } from "@/previewProfiles";
 import {
@@ -861,7 +862,8 @@ export default function App() {
   // The View options (settings): layout, grouping, sort and the Table's columns. Grouping off
   // lists every style on its own; the sort runs after filtering.
   const { layout, groupStyles, sort, tableColumns, tableDensity } = settings ?? DEFAULT_SETTINGS;
-  const sortContext = useMemo(() => ({ sourceOf: (f: Family) => locations.sourceOf(f.representative.primary) }), [locations]);
+  // The Source sort goes by the place the Table's Source column names first.
+  const sortContext = useMemo(() => ({ sourceOf: (f: Family) => familySources(f, locations.sourceOf)[0] ?? "" }), [locations]);
   const families = useMemo(
     () => sortFamilies(groupStyles ? filtered : ungroup(filtered), sort, sortContext),
     // Only the Source sort reads where fonts are, so a location color change doesn't re-sort.
@@ -885,21 +887,27 @@ export default function App() {
     announce(on ? "Styles grouped into families" : "Every style listed on its own");
   };
   // Cmd+1/2/3 pick the layout and Cmd+= / Cmd+- step the preview size (Ctrl on Windows), while
-  // the library list is showing (not under settings, a page or a service's own page).
+  // the library list is showing (not under settings, a page or a service's own page). Like Cmd+F
+  // and Back, they wait while a menu, dialog or popover is open (the list it hands focus back to
+  // would be gone) and during a drag (the rows being dragged would change under it).
   const listShowing = !settingsOpen && !pageOpen && view.kind !== "service";
   useEffect(() => {
     if (!listShowing) return;
     const onKey = (e: KeyboardEvent) => {
+      if (popupOpen() || isDragging()) return;
       const next = layoutShortcut(e, IS_MAC);
       if (next) {
         e.preventDefault();
-        chooseLayout(next);
+        // Holding the keys down picks it once.
+        if (!e.repeat) chooseLayout(next);
         return;
       }
       const step = sizeShortcut(e, IS_MAC);
       if (step) {
         e.preventDefault();
         const to = stepSize(sizeRef.current, step);
+        // Already at the end: nothing changes, so nothing to say.
+        if (to === sizeRef.current) return;
         sizeRef.current = to;
         setSize(to);
         announce(`Preview size ${to} pixels`);

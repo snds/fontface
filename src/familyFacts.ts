@@ -101,6 +101,49 @@ export function shortVersion(version: string | undefined): string {
   return inside ? inside[0] : text.split(";")[0].trim();
 }
 
+const VERSION_NUMBER = /^(\d+)(?:\.(\d+))?/;
+const versionText = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+/** The digits after the point as a decimal fraction: "009" is 0.009, "1" and "10" are 0.1. */
+const fraction = (digits: string | undefined) => (digits ? Number(`0.${digits}`) : 0);
+
+/** A short version (shortVersion) that starts with a number, as most do: it sorts as one. */
+export const hasVersionNumber = (version: string) => VERSION_NUMBER.test(version);
+
+/**
+ * Compares two short versions the way font versions are meant: a whole number, then the part
+ * after the point as a decimal fraction (a font's version is a decimal, like the revision in its
+ * head table). So 1.009 comes before 1.1, and 1.10 (1.100) before 1.9. Equal numbers, and the
+ * rest of the text ("1.0.38"), go by the text with numbers inside it compared as numbers; text
+ * with no leading number goes after every numbered version.
+ */
+export function compareVersions(a: string, b: string): number {
+  const x = VERSION_NUMBER.exec(a);
+  const y = VERSION_NUMBER.exec(b);
+  if (!x || !y) return x ? -1 : y ? 1 : versionText.compare(a, b);
+  return Number(x[1]) - Number(y[1]) || fraction(x[2]) - fraction(y[2]) || versionText.compare(a, b);
+}
+
+/**
+ * Where some faces' files are, in words (a folder's name, or a service such as Google Fonts),
+ * each place once and in order: every copy of each face, its preferred copy first. The Table's
+ * Source column names the first and counts the rest.
+ */
+export function sourcesOf(faces: readonly Face[], sourceOf: (copy: FontSummary) => string): string[] {
+  const out = new Set<string>();
+  for (const face of faces)
+    for (const copy of face.copies) {
+      const place = sourceOf(copy);
+      if (place) out.add(place);
+    }
+  return [...out];
+}
+
+/** A family's places (sourcesOf), its representative's first: the style its row previews, so
+ *  the place the Source column names, and the Source sort goes by, is that style's. */
+export function familySources(family: Pick<Family, "faces" | "representative">, sourceOf: (copy: FontSummary) => string): string[] {
+  return sourcesOf([family.representative, ...family.faces.filter((f) => f !== family.representative)], sourceOf);
+}
+
 /** 0 when every style that can be is on (or the family is always on), 1 when some are, 2 when none. */
 export function activeRank(family: Pick<Family, "switchable" | "activeCount">): number {
   const total = family.switchable.length;

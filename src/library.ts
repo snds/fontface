@@ -2,11 +2,13 @@ import type { FontSummary, SortOrder } from "./api";
 import {
   activeRank,
   addedAt,
+  compareVersions,
   designerOf,
   fileNameOf,
   fileSizeOf,
   formatsOf,
   foundryOf,
+  hasVersionNumber,
   shortVersion,
   weightSpan,
 } from "./familyFacts.ts";
@@ -218,8 +220,8 @@ export function ungroup(families: readonly Family[]): Family[] {
   return out;
 }
 
-/** Where a family's fonts come from, in words (the Table's Source column). Only the "source"
- *  sort needs it. */
+/** Where a family's fonts come from, in words: the place the Table's Source column names first
+ *  (familySources). Only the "source" sort needs it. */
 export interface SortContext {
   sourceOf?: (family: Family) => string;
 }
@@ -268,23 +270,34 @@ function sortValue(f: Family, key: SortOrder["key"], ctx: SortContext): SortValu
 const compareValues = (a: string | number, b: string | number) =>
   typeof a === "number" && typeof b === "number" ? a - b : collator.compare(String(a), String(b));
 
+/** Where an item goes whichever way the sort runs: 0 for most, 1 for a version with no number
+ *  in front (after the numbered ones), 2 for an unknown value (last). */
+function rankOf(value: SortValue, key: SortOrder["key"]): number {
+  if (value === undefined) return 2;
+  return key === "version" && !hasVersionNumber(String(value)) ? 1 : 0;
+}
+
 /**
  * The library's sort, run after filtering (and `ungroup`). `desc` turns the key's order round;
- * unknown values (no foundry, no added date yet) always go last. Ties go by name A to Z, then
- * keep the order they came in, so a family's styles stay lightest first. Name A to Z on a list
- * that's already in that order (as `groupFamilies` leaves it) comes back as the same array.
+ * unknown values (no foundry, no added date yet) always go last. Versions compare as decimals
+ * (compareVersions). Ties go by name A to Z, then keep the order they came in, so a family's
+ * styles stay lightest first. Name A to Z on a list that's already in that order (as
+ * `groupFamilies` leaves it) comes back as the same array.
  */
 export function sortFamilies(families: Family[], sort: SortOrder, ctx: SortContext = {}): Family[] {
   if (sort.key === "name" && !sort.desc && families.every((f, i) => i === 0 || collator.compare(nameKey(families[i - 1]), nameKey(f)) <= 0)) {
     return families;
   }
   const sign = sort.desc ? -1 : 1;
-  const items = families.map((family, at) => ({ family, at, value: sortValue(family, sort.key, ctx), name: nameKey(family) }));
+  const compare = sort.key === "version" ? (a: string | number, b: string | number) => compareVersions(String(a), String(b)) : compareValues;
+  const items = families.map((family, at) => {
+    const value = sortValue(family, sort.key, ctx);
+    return { family, at, value, rank: rankOf(value, sort.key), name: nameKey(family) };
+  });
   items.sort((a, b) => {
-    if (a.value !== b.value) {
-      if (a.value === undefined) return 1;
-      if (b.value === undefined) return -1;
-      const by = compareValues(a.value, b.value);
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    if (a.value !== undefined && b.value !== undefined && a.value !== b.value) {
+      const by = compare(a.value, b.value);
       if (by !== 0) return sign * by;
     }
     return (sort.key === "name" ? 0 : collator.compare(a.name, b.name)) || a.at - b.at;

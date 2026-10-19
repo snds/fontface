@@ -100,7 +100,8 @@ export function resolveColumns(saved: readonly TableColumnSetting[] = []): Colum
   return [...pinned, ...order];
 }
 
-const clampWidth = (def: ColumnDef, width: number) => Math.round(Math.min(MAX_WIDTH, Math.max(def.min, width)));
+/** A width kept between the column's smallest and MAX_WIDTH, in whole pixels. */
+export const clampWidth = (def: ColumnDef, width: number) => Math.round(Math.min(MAX_WIDTH, Math.max(def.min, width)));
 
 /** The setting for these columns: every known column, in order, with its width once changed. */
 export function toSetting(columns: readonly Column[], saved: readonly TableColumnSetting[] = []): TableColumnSetting[] {
