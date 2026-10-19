@@ -76,7 +76,15 @@ pub fn remove_folder(state: State<'_, AppState>, folder_id: i64) -> AppResult<Ve
     let mut failures = Vec::new();
     for path in active {
         if let Err(e) = turn_off_file(&path, temporary.contains(&path)) {
-            failures.push(ActivationOutcome { path, ids: vec![], active: true, temporary: false, error: Some(e.to_string()) });
+            failures.push(ActivationOutcome {
+                path,
+                ids: vec![],
+                active: true,
+                // Its rows go with the folder, so nothing stays recorded.
+                activated: false,
+                temporary: false,
+                error: Some(e.to_string()),
+            });
         }
     }
     state.write(|conn| {
@@ -412,22 +420,23 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
     let mut outcomes = Vec::with_capacity(files.len());
     let mut to_verify = Vec::new();
     for (path, installed, ids) in files {
-        if installed {
-            let error = (!active).then(|| "Installed in a macOS font folder, so it's always on".to_string());
-            outcomes.push(ActivationOutcome { path, ids, active: true, temporary: false, error });
-            continue;
-        }
         // Its folder may have been removed while this request waited for the lock.
         let (still_listed, recorded_on): (bool, bool) = state.conn()?.query_row(
             "SELECT EXISTS(SELECT 1 FROM fonts WHERE path = ?1), COALESCE((SELECT MAX(activated) FROM fonts WHERE path = ?1), 0)",
             [&path],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
+        if installed {
+            let error = (!active).then(|| "Installed in a macOS font folder, so it's always on".to_string());
+            outcomes.push(ActivationOutcome { path, ids, active: true, activated: recorded_on, temporary: false, error });
+            continue;
+        }
         if !still_listed {
             outcomes.push(ActivationOutcome {
                 path,
                 ids,
                 active: false,
+                activated: false,
                 temporary: false,
                 error: Some("Its folder was removed from the library".into()),
             });
@@ -455,10 +464,19 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
                 })?;
                 to_verify.push(outcomes.len());
                 let temporary = activation::temporary_after(active, scope, is_temporary);
-                outcomes.push(ActivationOutcome { path, ids, active, temporary, error: None });
+                // Recorded as asked. `verify_with_os` may still find the OS disagrees: another
+                // app keeps it on, or macOS didn't load it (then it's set to turn on, but not on).
+                outcomes.push(ActivationOutcome { path, ids, active, activated: active, temporary, error: None });
             }
-            // Nothing changed: it's as it was, on until logout or not.
-            Err(e) => outcomes.push(ActivationOutcome { path, ids, active: !active, temporary: is_temporary, error: Some(e.to_string()) }),
+            // Nothing changed: it's as it was, on until logout or not, and recorded as before.
+            Err(e) => outcomes.push(ActivationOutcome {
+                path,
+                ids,
+                active: !active,
+                activated: recorded_on,
+                temporary: is_temporary,
+                error: Some(e.to_string()),
+            }),
         }
     }
 
@@ -488,8 +506,10 @@ fn turn_off_file(path: &str, temporary: bool) -> AppResult<()> {
 }
 
 /// "Already registered" and "not registered" count as success, but don't prove the OS state
-/// changed. Check what's actually loaded, and explain any difference. Runs under the caller's
-/// activation lock.
+/// changed. Check what's actually loaded, and explain any difference. Only `active` (and the
+/// error) change: what Fontface recorded (`activated`) stays, so a font macOS didn't load stays
+/// set to turn on (its registration is still there, and it loads if macOS lets it later).
+/// Runs under the caller's activation lock.
 fn verify_with_os(outcomes: &mut [ActivationOutcome], indexes: &[usize], active: bool) {
     let Some(loaded) = activation::available_paths() else { return };
     let mut still_on = Vec::new();
@@ -497,7 +517,11 @@ fn verify_with_os(outcomes: &mut [ActivationOutcome], indexes: &[usize], active:
         let on = loaded.contains(&outcomes[i].path);
         if active && !on {
             outcomes[i].active = false;
-            outcomes[i].error = Some("macOS didn't load this font. It may be turned off in Font Book.".into());
+            // Still recorded as on (the list shows it as set to turn on), so say so, and how to stop it.
+            outcomes[i].error = Some(
+                "macOS didn't load this font. It may be turned off in Font Book. It stays set to turn on until you switch it off."
+                    .into(),
+            );
         } else if !active && on {
             // Another app (often with session scope) has it on too. Try removing that as well.
             let _ = activation::deactivate_elsewhere(Path::new(&outcomes[i].path));

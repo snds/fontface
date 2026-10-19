@@ -10,6 +10,7 @@ import {
   setShown,
   setWidth,
   shownColumns,
+  STATE_CONTENT_WIDTH,
   tablePreviewSize,
   tableRowHeight,
   totalWidth,
@@ -22,6 +23,16 @@ test("with nothing saved: the default columns, Preview on, the optional ones off
   assert.deepEqual(ids(cols), COLUMNS.map((c) => c.id));
   assert.deepEqual(ids(shownColumns(cols)), ["state", "name", "preview", "styles", "weights", "foundry", "format", "source", "added", "tags"]);
   assert.ok(!shownColumns(cols).some((c) => ["version", "designer", "file", "size", "glyphs"].includes(c.def.id)));
+});
+
+test("the on/off column always fits a mark (or the spinner) and the small switch", () => {
+  const state = COLUMNS.find((c) => c.id === "state")!;
+  assert.equal(STATE_CONTENT_WIDTH, 44, "14px mark, 6px gap, 24px switch");
+  // The cell's padding is 8px each side (px-2 in FontTable.tsx).
+  assert.ok(state.min >= STATE_CONTENT_WIDTH + 16, `min ${state.min}`);
+  assert.ok(state.width >= state.min);
+  // A width saved before (52 was the old default) comes back wide enough.
+  assert.equal(resolveColumns([{ id: "state", shown: true, width: 52 }])[0].width, state.min);
 });
 
 test("on/off and Name are pinned first and always shown", () => {

@@ -1,4 +1,5 @@
-import { LOCK_LABELS, MARK_ICONS, markOf, stateDetails, switchLook, type LockKind, type StateMark as Mark, type StateSummary } from "@/fontState";
+import { createContext, useContext } from "react";
+import { LOCK_LABELS, MARK_ICONS, markOf, stateDetails, switchLook, type LockKind, type StateMark as Mark, type StateSummary, type StateWording } from "@/fontState";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
@@ -10,6 +11,10 @@ import { cn } from "@/lib/utils";
 // say is also screen-reader text (on `srId`, which the item's description points at), so color
 // is never the only sign.
 
+/** How the state words put "on until logout" (App provides it, from settings). */
+export const StateWordingContext = createContext<StateWording>({});
+export const useStateWording = () => useContext(StateWordingContext);
+
 interface SwitchProps {
   /** The item's states, counted (`summarize`). */
   state: StateSummary;
@@ -18,7 +23,7 @@ interface SwitchProps {
   busy?: boolean;
   /** -1 keeps it out of the Tab order (a list row that isn't the active one). */
   tabIndex?: number;
-  /** Tiles and Table: the small switch, with "n/total" only in its tooltip. */
+  /** Tiles and Table: the small switch, with no "n/total" (StateControl shows a mark instead). */
   compact?: boolean;
   /** The text that says more about the state, as the switch's description. */
   describedBy?: string;
@@ -27,25 +32,23 @@ interface SwitchProps {
 
 /**
  * The on/off switch. It's on when every style is on or set to turn on; with only some, it reads
- * as off with an "n/total" count beside it, and switching it turns them all on. Set to turn on
- * but not on yet (its files aren't available), it's on and paler.
+ * as off with an "n/total" count of the styles that are on beside it (in Rows and on the font
+ * page), and switching it turns them all on. Set to turn on but not on yet, it's on and paler.
  */
 export function ActivationSwitch({ state, label, busy = false, tabIndex, compact = false, describedBy, onChange }: SwitchProps) {
   const { checked, partial, dim } = switchLook(state);
   const counted = `${state.on} of ${state.total} styles on${state.waiting ? `, ${state.waiting} more set to turn on` : ""}`;
   return (
     // Rows are clickable (they select); keep switch clicks from also selecting.
-    <span
-      className="flex items-center gap-1.5"
-      onClick={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      title={compact && partial ? counted : undefined}
-    >
+    <span className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
       {busy && <Icon name="progress_activity" size={14} className="animate-spin text-muted-foreground" aria-hidden />}
       {partial && !busy && !compact && (
-        <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={counted}>
-          {state.wanted}/{state.total}
-        </span>
+        // The same count the item's name says ("3 of 12 on"); styles set to turn on have their own mark.
+        <MarkTip text={`${counted}.`}>
+          <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+            {state.on}/{state.total}
+          </span>
+        </MarkTip>
       )}
       <Switch
         checked={checked}
@@ -97,7 +100,8 @@ export function LockBadge({ kind, details, compact = false }: { kind: LockKind; 
   );
 }
 
-/** The small mark beside a switch: on until logout, set to turn on but not on, or turned on by another app. */
+/** The small mark beside a switch: on until logout, set to turn on but not on, turned on by
+ *  another app, or (in Tiles and Table) partly on. */
 export function StateMark({ mark, details }: { mark: Mark; details: string[] }) {
   return (
     <MarkTip text={details.join(" ")}>
@@ -120,10 +124,11 @@ interface ControlProps {
   onSwitch: (on: boolean) => void;
 }
 
-/** A font's state wherever it shows: the lock (with why), or the switch with its mark. */
+/** A font's state wherever it shows: the lock (with why), or the switch with its mark. While a
+ *  request runs, its spinner takes the mark's place, so the Table's on/off column always fits. */
 export function StateControl({ state, single, label, busy, tabIndex, compact, srId, onSwitch }: ControlProps) {
-  const details = stateDetails(state, single);
-  const mark = markOf(state);
+  const details = stateDetails(state, single, useStateWording());
+  const mark = busy ? null : markOf(state, { compact });
   const said = details.length > 0 && (
     <span id={srId} className="sr-only">
       {details.join(" ")}

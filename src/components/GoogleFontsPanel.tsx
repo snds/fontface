@@ -79,6 +79,9 @@ function FamilyPreview({ family, font, text }: { family: GoogleFamily; font: Fon
   );
 }
 
+/** The catalog's search field: Cmd+F comes here while the catalog is open (see nav.findIntent). */
+export const GOOGLE_SEARCH_ID = "google-fonts-search";
+
 export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAll, onInstall, onRemove, onUpdateAll, back }: Props) {
   const [catalog, setCatalog] = useState<GoogleCatalog | null>(null);
   const [loading, setLoading] = useState(false);
@@ -175,6 +178,7 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
           <div className="relative w-56">
             <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />
             <Input
+              id={GOOGLE_SEARCH_ID}
               type="search"
               placeholder="Search Google Fonts"
               aria-label="Search Google Fonts"

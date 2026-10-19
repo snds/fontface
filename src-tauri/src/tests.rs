@@ -542,6 +542,52 @@ mod library {
         assert_eq!(ours, sql);
     }
 
+    /// Each on/off outcome says what Fontface has recorded for the file afterwards, as well as
+    /// what the OS has, so the UI can tell "turned on by another app" and "set to turn on, not
+    /// on" apart straight away. Uses only files that don't exist and a macOS-folder font, so it
+    /// never registers anything with the OS (turning off a file that was never on changes nothing).
+    #[test]
+    fn switch_outcomes_carry_what_was_recorded() {
+        let sb = Sandbox::new("outcome-intent");
+        let mut conn = sb.conn();
+        crate::activation::ensure_schema(&conn).unwrap();
+        let user = db::insert_folder(&mut conn, &sb.fonts(), "user").unwrap();
+        let system = db::insert_folder(&mut conn, &sb.dir.join("system"), "system").unwrap();
+        let mine = sb.fonts().join("Gone.ttf").to_string_lossy().into_owned();
+        let macos = sb.dir.join("system/Built In.ttf").to_string_lossy().into_owned();
+        for (folder, path) in [(user, &mine), (system, &macos)] {
+            conn.execute(
+                "INSERT INTO fonts (folder_id, path, file_size, mtime, family, subfamily, weight, width, italic,
+                 monospace, variable, glyph_count, format, activated)
+                 VALUES (?1, ?2, 1, 1, 'Family', 'Regular', 400, 5, 0, 0, 0, 1, 'TrueType', 1)",
+                rusqlite::params![folder, path],
+            )
+            .unwrap();
+        }
+        let id = |path: &str| -> i64 { conn.query_row("SELECT id FROM fonts WHERE path = ?1", [path], |r| r.get(0)).unwrap() };
+        let (mine_id, macos_id) = (id(&mine), id(&macos));
+        drop(conn);
+
+        let state = crate::AppState::for_tests(&sb.db(), &sb.dir).unwrap();
+        let recorded = |path: &str| -> bool {
+            state.conn().unwrap().query_row("SELECT MAX(activated) FROM fonts WHERE path = ?1", [path], |r| r.get(0)).unwrap()
+        };
+        let outcomes = crate::commands::switch(&state, &[mine_id, macos_id], false, None).unwrap();
+        assert_eq!(outcomes.len(), 2);
+        for o in &outcomes {
+            assert_eq!(o.activated, recorded(&o.path), "{}: the outcome says what's recorded now", o.path);
+        }
+        let built_in = outcomes.iter().find(|o| o.path == macos).unwrap();
+        assert!(built_in.active && built_in.activated && built_in.error.is_some(), "a macOS-folder font stays on, as recorded");
+        let json = serde_json::to_value(built_in).unwrap();
+        assert_eq!(json["activated"], serde_json::json!(true), "the UI reads `activated`");
+
+        // Turning on a macOS-folder font that was never asked for: on, and still not recorded.
+        state.conn().unwrap().execute("UPDATE fonts SET activated = 0 WHERE path = ?1", [&macos]).unwrap();
+        let on = crate::commands::switch(&state, &[macos_id], true, None).unwrap();
+        assert!(on[0].active && !on[0].activated && on[0].error.is_none());
+    }
+
     #[test]
     fn private_system_families_are_not_listed() {
         let sb = Sandbox::new("private");

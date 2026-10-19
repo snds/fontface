@@ -130,7 +130,12 @@ pub struct ScanReport {
 pub struct ActivationOutcome {
     pub path: String,
     pub ids: Vec<i64>,
+    /// What the OS has now (after `verify_with_os`).
     pub active: bool,
+    /// What Fontface has recorded for the file now (its `activated`): the state asked for once
+    /// that's written, else what was recorded before. It differs from `active` when another app
+    /// keeps the font on, or macOS didn't load it, so the UI can show those states at once.
+    pub activated: bool,
     /// On until logout or restart: the file's scope after the request (see
     /// `activation::temporary_after`). The UI shows it without reloading the list.
     pub temporary: bool,

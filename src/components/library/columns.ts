@@ -46,8 +46,13 @@ export interface ColumnDef {
   numeric?: boolean;
 }
 
+/** The widest the on/off cell's content gets, px: one mark (or the spinner, which takes its
+ *  place while a request runs; 14) and a gap (6) before the small switch (24). */
+export const STATE_CONTENT_WIDTH = 14 + 6 + 24;
+
 export const COLUMNS: readonly ColumnDef[] = [
-  { id: "state", label: "", srLabel: "On or off", width: 64, min: 56, sort: "active", shown: true, pinned: true },
+  // At least the content and the cell's padding (px-2), so the switch is never cut off.
+  { id: "state", label: "", srLabel: "On or off", width: 64, min: STATE_CONTENT_WIDTH + 16, sort: "active", shown: true, pinned: true },
   { id: "name", label: "Name", width: 240, min: 120, sort: "name", shown: true, pinned: true },
   { id: "preview", label: "Preview", width: 280, min: 120, shown: true },
   { id: "styles", label: "Styles", width: 72, min: 56, sort: "styles", shown: true, numeric: true },

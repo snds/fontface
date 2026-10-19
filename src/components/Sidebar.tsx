@@ -111,16 +111,25 @@ interface RowProps {
   selected: boolean;
   hint: string;
   onOpen: () => void;
-  /** Shown in place of the count on hover or focus (your folders: Rescan or Stop, Remove). */
+  /** Shown in place of the count on hover or focus: Rescan or Stop (and Remove, for your folders). */
   actions?: React.ReactNode;
 }
 
-/** A row in SOURCES. No chevrons: a source's folders are picked in the toolbar instead. */
+/**
+ * A row in SOURCES. No chevrons: a source's folders are picked in the toolbar instead. The
+ * button covers the whole row (its ::after), so a click on the count, the "n new" badge or the
+ * padding opens the source too, like the rest of the row; the hover actions sit above it.
+ */
 function SourceRow({ label, icon, color, missing, scan, count, badge, selected, hint, onOpen, actions }: RowProps) {
   const progress = scan && scan.phase === "reading" ? `${Math.floor((scan.done / Math.max(1, scan.found)) * 100)}%` : null;
   return (
-    <div className={itemClass(selected)}>
-      <button className="flex min-w-0 flex-1 items-center gap-2" aria-current={selected ? "page" : undefined} title={hint} onClick={onOpen}>
+    <div className={cn(itemClass(selected), "relative")}>
+      <button
+        className="flex min-w-0 flex-1 items-center gap-2 after:absolute after:inset-0 after:rounded-md"
+        aria-current={selected ? "page" : undefined}
+        title={hint}
+        onClick={onOpen}
+      >
         {scan ? (
           <Icon name="progress_activity" size={18} className="animate-spin text-muted-foreground" />
         ) : (
@@ -152,7 +161,7 @@ function SourceRow({ label, icon, color, missing, scan, count, badge, selected, 
       >
         {progress ?? (count !== null ? n(count) : "")}
       </span>
-      {actions && <span className="hidden items-center group-focus-within/item:flex group-hover/item:flex">{actions}</span>}
+      {actions && <span className="relative z-10 hidden items-center group-focus-within/item:flex group-hover/item:flex">{actions}</span>}
     </div>
   );
 }
@@ -165,7 +174,7 @@ export const SETTINGS_BUTTON_ID = "open-settings";
  * Google Fonts, Adobe Fonts, Purchases, then your folders A to Z, one row each), then TAGS.
  * Every source row's commands are on its right-click menu, which Shift-F10 opens too: Rescan or
  * Stop, Show in Finder, Locate… (a folder that moved), its color, and for your folders Remove
- * from Library…. Your folders also show Rescan and Remove on hover.
+ * from Library…. Rows with folders also show Rescan (or Stop) on hover, and your folders Remove.
  */
 export function Sidebar(props: Props) {
   const { folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, show, onView, onFallback, onAddFolder } = props;
@@ -186,6 +195,17 @@ export function Sidebar(props: Props) {
       : [{ icon: "refresh", label: "Rescan", onClick: () => reachable.forEach(props.onRescan) }];
     if (list.length === 1 && !list[0].missing) out.push({ icon: "folder_open", label: `Show in ${FILE_BROWSER}`, onClick: () => props.onRevealFolder(list[0]) });
     return out;
+  };
+
+  /** The same Rescan (or Stop), as the hover button your folders have too. `name`: the source's. */
+  const scanButton = (list: Folder[], scanning: boolean, name: string) => {
+    const reachable = list.filter((f) => !f.missing);
+    if (!reachable.length) return undefined;
+    return scanning ? (
+      <IconAction icon="stop_circle" label={`Stop scanning ${name}`} onClick={() => list.filter((f) => scans.has(f.id)).forEach(props.onCancelScan)} />
+    ) : (
+      <IconAction icon="refresh" label={`Rescan ${name}`} onClick={() => reachable.forEach(props.onRescan)} />
+    );
   };
 
   const row = (source: SourceKey) => {
@@ -211,6 +231,7 @@ export function Sidebar(props: Props) {
             selected={selected}
             hint={`Fonts installed in ${IS_MAC ? "macOS" : "Windows"}'s own font folders. Pick one of the folders in the toolbar.`}
             onOpen={open}
+            actions={scanButton(list, !!scan, INSTALLED_LABEL)}
           />
         </LocationMenu>
       );
@@ -253,6 +274,7 @@ export function Sidebar(props: Props) {
             selected={selected}
             hint={google ? "Google Fonts in your library. Browse to download more." : "Fonts you bought, added from your downloads. Browse to review new downloads."}
             onOpen={open}
+            actions={scanButton(list, !!scan, google ? "Google Fonts" : "Purchases")}
           />
         </LocationMenu>
       );

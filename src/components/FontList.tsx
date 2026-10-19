@@ -10,7 +10,7 @@ import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
-import { StateControl } from "./ActivationSwitch";
+import { StateControl, useStateWording } from "./ActivationSwitch";
 import { CopiesBadge, FacePreview, MissingHint, SampleBadge } from "./FacePreview";
 import { activeInSight, describedBy, rowKey, RowTagButton, useKeepFocus, type DisplayProps, type ListView, type Row } from "./library/LibraryPane";
 
@@ -164,7 +164,8 @@ function FamilyRow(props: RowProps & { family: Family }) {
   const styles = `${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`;
   const mono = family.faces.some((f) => f.primary.monospace);
   const state = summarize(family.faces);
-  const label = `${family.name}${single ? "" : `, ${styles}`}${variable ? ", variable" : ""}, ${stateWords(state)}`;
+  const wording = useStateWording();
+  const label = `${family.name}${single ? "" : `, ${styles}`}${variable ? ", variable" : ""}, ${stateWords(state, wording)}`;
   const added = showAdded ? addedDateText(addedAt(family.faces)) : "";
   const marks = [mono && "Monospaced", duplicates && "Has duplicate files", added && `Added ${added}`].filter(Boolean).join(". ");
   const { active, attrs } = optionProps(props, label, describedBy(props.id, ["state", "marks"]));
@@ -243,7 +244,8 @@ function FaceRow(props: RowProps & { face: Face }) {
   const key = rowKey(row);
   const style = `${font.subfamily}${font.variable ? " (Variable)" : ""}`;
   const state = summarize([face]);
-  const label = `${style}, ${font.family}, ${stateWords(state)}`;
+  const wording = useStateWording();
+  const label = `${style}, ${font.family}, ${stateWords(state, wording)}`;
   const added = showAdded ? addedDateText(faceAddedAt(face)) : "";
   const { active, attrs } = optionProps(props, label, describedBy(props.id, ["state", "copies", "added"]));
   const tab = active ? 0 : -1;

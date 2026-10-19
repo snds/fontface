@@ -148,3 +148,16 @@ export function backKeyIntent(e: KeyLike, ctx: BackContext): "back" | "leave-fie
 
 /** The mouse's back button (MouseEvent.button 3), where the system passes it on to the page. */
 export const MOUSE_BACK_BUTTON = 3;
+
+/**
+ * What Cmd+F (Ctrl+F on Windows) does, by the page on top: "list" goes to the library's Search
+ * (no page is open); "leave" closes the pages, then goes there (a font page, which has no search
+ * of its own); "page" goes to the page's own search field (the Google Fonts catalog), keeping
+ * what's typed and picked there; null does nothing (the Purchases page has no search field, and
+ * leaving it would lose its place).
+ */
+export function findIntent(top: Page | undefined): "list" | "leave" | "page" | null {
+  if (!top) return "list";
+  if (top.kind === "font") return "leave";
+  return top.service === "google" ? "page" : null;
+}

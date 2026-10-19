@@ -1,7 +1,7 @@
 // Run with `npm run test:ui`. The page stack over the library list and its Back keys (nav.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { backKeyIntent, EMPTY_NAV, isBackShortcut, navReducer, topPage as top, type FontPageEntry, type KeyLike, type NavState, type NewPage, type Page } from "./nav.ts";
+import { backKeyIntent, EMPTY_NAV, findIntent, isBackShortcut, navReducer, topPage as top, type FontPageEntry, type KeyLike, type NavState, type NewPage, type Page } from "./nav.ts";
 
 /** The top page, as a font page (these tests open font pages unless they say otherwise). */
 const topPage = (state: NavState) => top(state) as FontPageEntry | undefined;
@@ -109,4 +109,18 @@ test("a service's page opens over its list once, and Back closes it like any pag
   assert.equal(top(navReducer(font, { type: "back" }))?.kind, "catalog");
   // Font-page changes never touch a catalog page.
   assert.equal(navReducer(one, { type: "update", id: top(one)!.id, patch: { tab: "info" } }), one);
+});
+
+test("Cmd+F: the list's Search, leaving a font page, or the Google catalog's own search", () => {
+  assert.equal(findIntent(top(EMPTY_NAV)), "list");
+  const font = open(EMPTY_NAV, page("ps:Inter-Regular"));
+  assert.equal(findIntent(top(font)), "leave");
+  // The catalog keeps its query, filters and scroll: Cmd+F searches it instead.
+  const google = open(EMPTY_NAV, { kind: "catalog", service: "google", returnTo: "browse" });
+  assert.equal(findIntent(top(google)), "page");
+  // The Purchases page has no search field: Cmd+F leaves it as it is.
+  const purchases = open(EMPTY_NAV, { kind: "catalog", service: "purchases", returnTo: "browse" });
+  assert.equal(findIntent(top(purchases)), null);
+  // A font page opened over the catalog goes back to the list's Search.
+  assert.equal(findIntent(top(open(google, page("ps:Inter-Regular")))), "leave");
 });

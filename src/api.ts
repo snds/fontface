@@ -26,7 +26,7 @@ export interface FontSummary {
   monospace: boolean;
   variable: boolean;
   format: string;
-  /** What Fontface was asked to do. */
+  /** What Fontface was asked to do (and keeps asking for: "set to turn on" while it isn't on). */
   activated: boolean;
   /** In a macOS font folder: always on, can't be switched off here. */
   installed: boolean;
@@ -170,7 +170,11 @@ export interface ScanReport {
 export interface ActivationOutcome {
   path: string;
   ids: number[];
+  /** What the OS has now. */
   active: boolean;
+  /** What Fontface has recorded now (the fonts' `activated`). It differs from `active` when
+   *  another app keeps the font on, or macOS didn't load it. */
+  activated: boolean;
   /** The file is on until logout or restart (its scope after this request). */
   temporary: boolean;
   error: string | null;

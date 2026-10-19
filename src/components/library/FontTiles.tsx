@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagDots } from "@/tags/TagChips";
-import { StateControl } from "../ActivationSwitch";
+import { StateControl, useStateWording } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
 import { activeInSight, describedBy, rowKey, useKeepFocus, type DisplayProps, type ListView, type Row } from "./LibraryPane";
 import {
@@ -205,7 +205,8 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
   const count = family.faces.length;
   const styles = `${count} ${count === 1 ? "style" : "styles"}`;
   const state = summarize(family.faces);
-  const label = `${family.name}${single ? "" : `, ${styles}`}${variable ? ", variable" : ""}, ${stateWords(state)}`;
+  const wording = useStateWording();
+  const label = `${family.name}${single ? "" : `, ${styles}`}${variable ? ", variable" : ""}, ${stateWords(state, wording)}`;
   const added = showAdded ? addedDateText(addedAt(family.faces)) : "";
   const marks = [mono && "Monospaced", family.faces.some((f) => f.copies.length > 1) && "Has duplicate files", added && `Added ${added}`].filter(Boolean).join(". ");
   return (

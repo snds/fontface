@@ -25,7 +25,7 @@ import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuGr
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
-import { StateControl } from "../ActivationSwitch";
+import { StateControl, useStateWording } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
 import {
   clampWidth,
@@ -395,9 +395,11 @@ function TableRow(props: RowProps) {
   const font = face ? face.primary : family.representative.primary;
   const variable = family.faces.some((f) => f.primary.variable);
   const state = summarize(faces);
+  const wording = useStateWording();
+  const words = stateWords(state, wording);
   const label = face
-    ? `${font.subfamily}${font.variable ? " (Variable)" : ""}, ${font.family}, ${stateWords(state)}`
-    : `${family.name}${single ? "" : `, ${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`}${variable ? ", variable" : ""}, ${stateWords(state)}`;
+    ? `${font.subfamily}${font.variable ? " (Variable)" : ""}, ${font.family}, ${words}`
+    : `${family.name}${single ? "" : `, ${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`}${variable ? ", variable" : ""}, ${words}`;
   return (
     <div
       id={id}

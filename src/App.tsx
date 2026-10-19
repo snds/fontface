@@ -37,6 +37,7 @@ import { hiddenBySidebar, placeLabel, SERVICE_LABELS, sourceFolders, sourceOf, s
 import { hasSubfolders } from "@/subfolders";
 import { describeSort, layoutInfo, layoutShortcut, sizeShortcut, stepSize } from "@/viewOptions";
 import { familySources } from "@/familyFacts";
+import { applyOutcomes, type StateWording } from "@/fontState";
 import { newestWins } from "@/newestWins";
 import { listenForProfiles } from "@/previewProfiles";
 import {
@@ -61,7 +62,8 @@ import { ViewOptions } from "@/components/ViewOptions";
 import { FontPage } from "@/components/fontPage/FontPage";
 import { BackButton } from "@/components/fontPage/PageHeader";
 import { SubfolderPicker } from "@/components/SubfolderPicker";
-import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
+import { StateWordingContext } from "@/components/ActivationSwitch";
+import { GOOGLE_SEARCH_ID, GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
 import { IS_MAC, type PageBack } from "@/components/TitleBar";
@@ -78,7 +80,7 @@ import { applyTheme, useDarkTheme } from "@/settings/theme";
 import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/useSettings";
 import { useSyncEvents } from "@/sync/store";
 import { popupOpen, useNav } from "@/useNav";
-import type { CatalogPageEntry } from "@/nav";
+import { findIntent, type CatalogPageEntry } from "@/nav";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
@@ -224,9 +226,15 @@ export default function App() {
     cancelDrag();
     openSettings();
   }, [openSettings]);
-  const closeSettings = useCallback(() => {
+  /** `restoreFocus: false`: the same action opens a page, whose heading takes focus (focus going
+   *  back to the Settings button a frame later would pull it off the page). */
+  const closeSettings = useCallback(({ restoreFocus = true }: { restoreFocus?: boolean } = {}) => {
     if (!settingsOpenRef.current) return;
     setSettingsOpen(false);
+    if (!restoreFocus) {
+      focusBack.current = null;
+      return;
+    }
     requestAnimationFrame(() => {
       const back = focusBack.current;
       const target = back instanceof HTMLElement && back.isConnected && back !== document.body ? back : document.getElementById(SETTINGS_BUTTON_ID);
@@ -237,7 +245,7 @@ export default function App() {
   // ------------------------------------------------------------------ pages and Back
 
   // Pages (the font page) open over the list, which stays as it was underneath (see nav.ts).
-  // Back puts focus on the row that opened the page; ⌘F leaves the page for Search.
+  // Back puts focus on the row that opened the page; ⌘F leaves a font page for Search.
   const listRef = useRef<ListHandle>(null);
   const pendingFocus = useRef<{ row: string | null } | { element: string | null } | "search" | null>(null);
   const placeNameRef = useRef("All Fonts");
@@ -293,20 +301,39 @@ export default function App() {
     },
     [openPage, announce],
   );
-  // ⌘F (Ctrl+F on Windows) goes to Search, leaving a font page if one is open.
+  // ⌘F (Ctrl+F on Windows) goes to Search, leaving a font page if one is open. On the Google
+  // Fonts catalog it goes to the catalog's own search, and on Purchases (no search) it does
+  // nothing, so neither page closes and loses its place (nav.findIntent).
+  const onTop = nav.pages[nav.pages.length - 1];
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "f" || !(IS_MAC ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey) return;
       if (settingsOpenRef.current || popupOpen()) return;
-      if (pageOpen) {
-        e.preventDefault();
-        pendingFocus.current = "search";
-        clearPages();
-      } else if (focusSearch()) e.preventDefault();
+      switch (findIntent(onTop)) {
+        case "list":
+          if (focusSearch()) e.preventDefault();
+          break;
+        case "leave":
+          e.preventDefault();
+          pendingFocus.current = "search";
+          clearPages();
+          break;
+        case "page": {
+          e.preventDefault();
+          const field = document.getElementById(GOOGLE_SEARCH_ID);
+          if (field instanceof HTMLInputElement) {
+            field.focus();
+            field.select();
+          }
+          break;
+        }
+        case null:
+          e.preventDefault();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pageOpen, clearPages]);
+  }, [onTop, clearPages]);
 
   // Another app (Typeface, Font Book) may have turned fonts on or off while this window was in
   // the background. Re-read the OS state when it comes back to the front.
@@ -435,8 +462,9 @@ export default function App() {
           onClick: () => {
             goToPlace({ kind: "service", id: "purchases" });
             openCatalog("purchases");
-            // The page opens in the library, so leave settings if they're open.
-            closeSettings();
+            // The page opens in the library, so leave settings if they're open. Its heading
+            // takes focus, so focus doesn't go back to the Settings button.
+            closeSettings({ restoreFocus: false });
           },
         },
       });
@@ -581,18 +609,13 @@ export default function App() {
       const on = new Set<string>();
       try {
         const outcomes = await api.setActivation(ids, active, scope, origin);
-        const state = new Map<number, { active: boolean; temporary: boolean }>();
         for (const o of outcomes) {
           if (o.active) on.add(o.path);
-          for (const id of o.ids) state.set(id, { active: o.active, temporary: o.temporary });
           if (o.error) toast.error(fileName(o.path), { description: o.error });
         }
-        setFonts((list) =>
-          list.map((f) => {
-            const now = state.get(f.id);
-            return now ? { ...f, activated: now.active, osActive: now.active, temporary: now.temporary } : f;
-          }),
-        );
+        // What the OS has and what Fontface recorded, which differ when another app keeps a font
+        // on or macOS didn't load it: those states show now, not after the next reload.
+        setFonts((list) => applyOutcomes(list, outcomes));
       } catch (e) {
         toast.error(String(e));
       } finally {
@@ -931,6 +954,9 @@ export default function App() {
     [filtered, groupStyles, sort.key, sort.desc, sort.key === "source" ? sortContext : null],
   );
   const { update: updateSettings } = settingsStore;
+  // "On until logout" says "until you quit Fontface" when quitting turns those fonts off.
+  const untilQuit = settings?.clearTemporaryOnQuit ?? false;
+  const stateWording = useMemo<StateWording>(() => ({ untilQuit }), [untilQuit]);
   const chooseLayout = useCallback(
     (next: LibraryLayout) => {
       updateSettings({ layout: next });
@@ -998,7 +1024,10 @@ export default function App() {
   const sourceRoots = useMemo(() => (source ? sourceFolders(source, folders, services) : []), [sourceKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const offerSubfolders = useMemo(() => sourceRoots.length > 0 && (view.kind === "location" || hasSubfolders(sourceRoots, allFamilies)), [sourceRoots, allFamilies, view.kind]);
   const browseService = source === "google" || source === "purchases" ? source : null;
-  const viewScan = sourceRoots.length ? sourceRoots.map((f) => scans.get(f.id)).find(Boolean) : [...scans.values()][0];
+  // A source's view shows only its own folders' scans: Google Fonts or Purchases with nothing in
+  // the library yet (no folder) keeps offering Browse while another folder is scanned. Other
+  // places can gain fonts from any scan.
+  const viewScan = source ? sourceRoots.map((f) => scans.get(f.id)).find(Boolean) : [...scans.values()][0];
   const resetKey = `${viewKey(view)}:${listStatus}:${variableOnly}:${query}`;
   // Empty list with filters on: say which fonts were asked for, e.g. "No active variable fonts here."
   const filtersOn = !!query || listStatus !== "any" || variableOnly;
@@ -1038,6 +1067,7 @@ export default function App() {
 
   return (
     <SettingsContext.Provider value={settingsStore}>
+      <StateWordingContext.Provider value={stateWording}>
       <TooltipProvider>
         <div className="relative h-full">
           {/* While settings are open, the library stays as it was, hidden and out of reach underneath. */}
@@ -1236,7 +1266,8 @@ export default function App() {
               onOpenPurchases={() => {
                 goToPlace({ kind: "service", id: "purchases" });
                 openCatalog("purchases");
-                closeSettings();
+                // The page's heading takes focus (not the Settings button).
+                closeSettings({ restoreFocus: false });
               }}
             />
           )}
@@ -1277,6 +1308,7 @@ export default function App() {
           {announcement}
         </div>
       </TooltipProvider>
+      </StateWordingContext.Provider>
     </SettingsContext.Provider>
   );
 }

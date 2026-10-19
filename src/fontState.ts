@@ -1,8 +1,10 @@
+import type { ActivationOutcome, FontSummary } from "./api";
 import type { Face } from "./library";
 
 /**
  * On, off and everything in between, for a style or a family. Pure (no React, no DOM), so `npm
- * run test:ui` covers it; components/StateMark.tsx draws it. In display order:
+ * run test:ui` covers it; components/ActivationSwitch.tsx draws it (`StateControl`). In display
+ * order:
  *
  * - Part of macOS (a copy in /System/Library/Fonts): locked, always on.
  * - Installed (a copy in /Library/Fonts or ~/Library/Fonts): locked, always on while it's there.
@@ -10,13 +12,20 @@ import type { Face } from "./library";
  * - On.
  * - Partly on (a family): some of its styles are on.
  * - Set to turn on, but not on: Fontface was asked to turn it on (`activated`), and the system
- *   doesn't have it (its file is on a drive that isn't connected, or online-only).
+ *   doesn't have it. Its file may be on a drive that isn't connected, or online-only, or macOS
+ *   didn't load it (it may be turned off in Font Book, say).
  * - Turned on by another app: on, but not by Fontface.
  * - Off.
  *
- * A request in progress (busy) shows over all of these; that's the switch's own business.
+ * A request in progress (busy) shows over all of these: its spinner takes the mark's place.
  * Every state has a mark and words (`stateWords`, `stateDetails`), so color is never the only sign.
  */
+
+/** How the words put "on until logout". `untilQuit`: Fontface turns those fonts off when it
+ *  quits (the "Turn temporary fonts off when Fontface quits" setting), so they say so. */
+export interface StateWording {
+  untilQuit?: boolean;
+}
 
 export type LockKind = "macos" | "installed";
 
@@ -99,14 +108,16 @@ export function switchLook(s: StateSummary): { checked: boolean; partial: boolea
 }
 
 /** The one extra mark an item shows beside its switch (or instead of it, for a lock), by
- *  priority: the lock, on until logout, set to turn on but not on, turned on by another app. */
-export type StateMark = LockKind | "temporary" | "waiting" | "elsewhere";
+ *  priority: the lock, on until logout, set to turn on but not on, turned on by another app,
+ *  and in Tiles and Table (`compact`, where there's no room for "n/total"), partly on. */
+export type StateMark = LockKind | "temporary" | "waiting" | "elsewhere" | "partial";
 
-export function markOf(s: StateSummary): StateMark | null {
+export function markOf(s: StateSummary, { compact = false }: { compact?: boolean } = {}): StateMark | null {
   if (s.lock) return s.lock;
   if (s.temporary) return "temporary";
   if (s.waiting) return "waiting";
   if (s.elsewhere) return "elsewhere";
+  if (compact && switchLook(s).partial) return "partial";
   return null;
 }
 
@@ -117,6 +128,7 @@ export const MARK_ICONS: Record<StateMark, string> = {
   temporary: "timer",
   waiting: "link_off",
   elsewhere: "info",
+  partial: "radio_button_partial",
 };
 
 /** The lock's short name, on its badge. */
@@ -126,14 +138,14 @@ export const LOCK_LABELS: Record<LockKind, string> = { macos: "Part of macOS", i
  * Short words for an item's accessible name, after its name: "on", "off", "3 of 12 on", "on
  * until logout", "always on, part of macOS". `stateDetails` says the rest.
  */
-export function stateWords(s: StateSummary): string {
+export function stateWords(s: StateSummary, wording: StateWording = {}): string {
   if (s.lock === "macos") return "always on, part of macOS";
   if (s.lock === "installed") return "always on, installed";
   if (s.total === 0) return "off";
   const { checked } = switchLook(s);
   if (checked) {
     if (s.on === 0) return "set to turn on, not on yet";
-    if (s.temporary === s.total) return "on until logout";
+    if (s.temporary === s.total) return wording.untilQuit ? "on until Fontface quits" : "on until logout";
     if (s.elsewhere === s.total) return "on, turned on by another app";
     return "on";
   }
@@ -144,11 +156,21 @@ export function stateWords(s: StateSummary): string {
 const styles = (n: number) => `${n.toLocaleString()} ${n === 1 ? "style" : "styles"}`;
 const are = (n: number) => (n === 1 ? "is" : "are");
 
+/** When a font that's on until logout goes off. */
+const untilWhen = (wording: StateWording) => (wording.untilQuit ? "until you quit Fontface, log out or restart" : "until you log out or restart");
+
+/** Why a font that's set to turn on may not be on. It's only ever "may": Fontface can't tell a
+ *  file that isn't there yet from one macOS chose not to load. */
+const WAITING_WHY = {
+  one: "Its file may be on a drive that isn't connected, or online-only. Or macOS may not have loaded it, for example if it's turned off in Font Book.",
+  many: "Their files may be on a drive that isn't connected, or online-only. Or macOS may not have loaded them, for example if they're turned off in Font Book.",
+};
+
 /**
  * What a mark's tooltip says, and screen readers hear in the item's description: one sentence
  * per thing worth knowing. `single`: one style (else a family, which counts its styles).
  */
-export function stateDetails(s: StateSummary, single: boolean): string[] {
+export function stateDetails(s: StateSummary, single: boolean, wording: StateWording = {}): string[] {
   if (s.lock === "macos") return ["Part of macOS. Always on."];
   if (s.lock === "installed") {
     return [
@@ -158,14 +180,19 @@ export function stateDetails(s: StateSummary, single: boolean): string[] {
     ];
   }
   const out: string[] = [];
-  if (s.temporary) out.push(single ? "On until you log out or restart." : `${styles(s.temporary)} ${are(s.temporary)} on until you log out or restart.`);
+  // Partly on: how many, which the switch alone doesn't say (and Tiles and Table don't show).
+  if (switchLook(s).partial) {
+    out.push(s.on === 0 ? `None of its ${styles(s.total)} are on.` : `${s.on.toLocaleString()} of ${styles(s.total)} ${are(s.on)} on.`);
+  }
+  const until = untilWhen(wording);
+  if (s.temporary) out.push(single ? `On ${until}.` : `${styles(s.temporary)} ${are(s.temporary)} on ${until}.`);
   if (s.waiting) {
     out.push(
       single
-        ? "Set to turn on, but it isn't on right now. Its file may be on a drive that isn't connected, or online-only."
+        ? `Set to turn on, but it isn't on right now. ${WAITING_WHY.one}`
         : s.waiting === 1
-          ? "1 style is set to turn on, but it isn't on right now. Its file may be on a drive that isn't connected, or online-only."
-          : `${styles(s.waiting)} are set to turn on, but they aren't on right now. Their files may be on a drive that isn't connected, or online-only.`,
+          ? `1 style is set to turn on, but it isn't on right now. ${WAITING_WHY.one}`
+          : `${styles(s.waiting)} are set to turn on, but they aren't on right now. ${WAITING_WHY.many}`,
     );
   }
   if (s.elsewhere) {
@@ -179,11 +206,31 @@ export function stateDetails(s: StateSummary, single: boolean): string[] {
 }
 
 /** One copy's state in words, for the font page's list of copies. */
-export function copyWords(copy: { installed: boolean; osActive: boolean; activated: boolean; temporary?: boolean; path: string }): string {
+export function copyWords(
+  copy: { installed: boolean; osActive: boolean; activated: boolean; temporary?: boolean; path: string },
+  wording: StateWording = {},
+): string {
   if (copy.installed) return copy.path.startsWith(MACOS_FONTS) ? "Always on (part of macOS)" : "Always on (installed)";
   if (copy.osActive) {
     if (!copy.activated) return "On (another app)";
-    return copy.temporary ? "On until logout" : "On";
+    if (!copy.temporary) return "On";
+    return wording.untilQuit ? "On until Fontface quits" : "On until logout";
   }
   return copy.activated ? "Set to turn on" : "Off";
+}
+
+/**
+ * The list after an on/off request, without reading it again: every font in a file the request
+ * reached takes what the OS has now (`osActive`), what Fontface has recorded (`activated`) and
+ * whether it's on until logout. The two differ when another app keeps a font on, or macOS
+ * didn't load it, so "turned on by another app" and "set to turn on, not on" show at once.
+ */
+export function applyOutcomes(fonts: FontSummary[], outcomes: readonly ActivationOutcome[]): FontSummary[] {
+  const now = new Map<number, ActivationOutcome>();
+  for (const o of outcomes) for (const id of o.ids) now.set(id, o);
+  if (!now.size) return fonts;
+  return fonts.map((f) => {
+    const o = now.get(f.id);
+    return o ? { ...f, activated: o.activated, osActive: o.active, temporary: o.temporary } : f;
+  });
 }

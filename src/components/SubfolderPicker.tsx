@@ -176,6 +176,8 @@ function PickerBody({ sourceLabel, roots, families, selected, locations, onPick 
           placeholder="Find a folder"
           aria-label={`Find a folder in ${sourceLabel}`}
           role="combobox"
+          // The popup is a tree, not the listbox a combobox has by default.
+          aria-haspopup="tree"
           aria-expanded
           aria-controls={`${id}-tree`}
           aria-autocomplete="list"

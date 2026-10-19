@@ -62,15 +62,18 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 
 ## Location colors
 
-Right-click a location in the sidebar (or focus it and press Shift-F10) to pick its color.
-Picking the color marked "(default)", or "Use default color", goes back to the default, so the
-location follows its parent folder or Font Book again. The color tints the location's icon, and
-each font row shows a small dot in the color of the places its copies live (hover for the list;
-screen readers hear the places, after the row's name, with its tags).
+Sources are colored from their row in the sidebar: right-click the row (or focus it and press
+Shift-F10) and pick a color. Folders inside a source, Font Book's three macOS font folders
+among them, are colored from the toolbar's folder picker on that source's view: right-click a
+folder there, or press Shift-F10 on it. Picking the color marked "(default)", or "Use default
+color", goes back to the default, so the location follows its parent folder or Font Book again.
+The color tints the location's icon, and each font row shows a small dot in the color of the
+places its copies live (hover for the list; screen readers hear the places, after the row's
+name, with its tags).
 
 | Location | Default color | Notes |
 |---|---|---|
-| Font Book and the macOS font folders | Gray | The three folders follow Font Book's color unless you set their own |
+| Font Book and the macOS font folders | Gray | The three folders follow Font Book's color unless you set their own (in the folder picker) |
 | Google Fonts | Blue | Fontface's download folder |
 | Adobe Fonts | Red | |
 | Purchases | Orange | Fontface's folder for fonts imported from store downloads |
