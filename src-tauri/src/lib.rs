@@ -242,6 +242,7 @@ pub fn run() {
             commands::font_characters,
             commands::set_activation,
             commands::reveal_font,
+            commands::reveal_folder,
             commands::list_services,
             commands::google_catalog,
             commands::google_install,

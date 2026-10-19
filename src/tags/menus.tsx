@@ -282,9 +282,19 @@ function LocationItems({
   );
 }
 
+/** A command in a source row's menu (Rescan, Show in Finder, Remove from Library…). */
+export interface MenuAction {
+  icon: string;
+  label: string;
+  onClick: () => void;
+  destructive?: boolean;
+}
+
 /**
- * Right-click a location (a folder, Font Book, a service) to pick its color, or to locate a
- * folder that moved. Wraps the row in a plain block, so the row's own layout is untouched.
+ * Right-click a source (Font Book, a service, one of your folders), or press Shift-F10 on it, for
+ * its commands and its color: `before` (Rescan or Stop, Show in Finder), Locate… for a folder
+ * that moved, the color, then `after` (Remove from Library…). Wraps the row in a plain block, so
+ * the row's own layout is untouched.
  */
 export function LocationMenu({
   location,
@@ -292,32 +302,56 @@ export function LocationMenu({
   defaultColor,
   disabled,
   onLocate,
+  before = [],
+  after = [],
   children,
 }: {
   location: string;
   color: TagColor;
   defaultColor: TagColor;
-  /** No color for this row: just show it. */
+  /** No color for this row (nothing to color yet). */
   disabled?: boolean;
   /** The folder can't be found: offer "Locate…" to point it at where it moved. */
   onLocate?: () => void;
+  before?: MenuAction[];
+  after?: MenuAction[];
   children: React.ReactNode;
 }) {
-  if (disabled) return <>{children}</>;
+  if (disabled && !before.length && !after.length && !onLocate) return <>{children}</>;
+  const { Item, Separator } = CONTEXT;
+  const action = (a: MenuAction) => (
+    <Item key={a.label} variant={a.destructive ? "destructive" : undefined} onClick={a.onClick}>
+      <Icon name={a.icon} size={16} />
+      {a.label}
+    </Item>
+  );
   return (
     <ContextMenu>
       <ContextMenuTrigger className="block" onKeyDown={openMenuFromKeyboard}>
         {children}
       </ContextMenuTrigger>
-      <ContextMenuContent className="min-w-44">
-        <LocationItems location={location} color={color} defaultColor={defaultColor} onLocate={onLocate} />
+      <ContextMenuContent className="min-w-48">
+        {before.map(action)}
+        {before.length > 0 && (!disabled || onLocate) && <Separator />}
+        {disabled ? (
+          onLocate && (
+            <Item onClick={onLocate}>
+              <Icon name="folder_open" size={16} />
+              Locate…
+            </Item>
+          )
+        ) : (
+          <LocationItems location={location} color={color} defaultColor={defaultColor} onLocate={onLocate} />
+        )}
+        {after.length > 0 && <Separator />}
+        {after.map(action)}
       </ContextMenuContent>
     </ContextMenu>
   );
 }
 
 /**
- * One right-click menu for many location rows (a subfolder tree can have thousands). Each row
+ * One right-click menu for many location rows (a subfolder picker can list thousands). Each row
  * names its location in a `data-location` attribute.
  */
 export function LocationsMenu({ locations, children }: { locations: Locations; children: React.ReactNode }) {

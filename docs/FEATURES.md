@@ -10,7 +10,7 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Feature | macOS | Windows | Notes |
 |---|---|---|---|
 | Add / remove watched folders | ✅ | ⬜ | Nested folders are refused; parent folders absorb children |
-| macOS font folders added automatically | ✅ | ⬜ | ~/Library/Fonts, /Library/Fonts, /System/Library/Fonts; shown as "Installed", always on |
+| macOS font folders added automatically | ✅ | ⬜ | ~/Library/Fonts, /Library/Fonts, /System/Library/Fonts; always on, with a lock that says "Part of macOS" (/System/Library/Fonts) or "Installed" (the other two) |
 | Scan .ttf / .otf / .ttc / .otc | ✅ | ⬜ | Rescans skip unchanged files (size + modified time) |
 | Scan progress, per-folder spinner, Cancel | ✅ | ⬜ | Progress during discovery and reading; fonts appear while scanning |
 | Online-only cloud files (Google Drive, iCloud) | ✅ | ⬜ | Detected; read 8 at a time so downloads overlap; count shown |
@@ -40,12 +40,12 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Feature | macOS | Windows | Notes |
 |---|---|---|---|
 | All Fonts view | ✅ | ⬜ | Everything Fontface knows about |
-| Font Book view (Windows: "Windows Fonts") | ✅ | ⬜ | OS-installed fonts; the three macOS font folders nested under it |
-| Active / Inactive filter on any view | ✅ | ⬜ | Toolbar segments |
+| Font Book view (Windows: "Windows Fonts") | ✅ | ⬜ | OS-installed fonts. The three macOS font folders are one source; each is in the toolbar's folder picker |
+| Active / Inactive filter on any view | ✅ | ⬜ | Toolbar segments. Hidden in the Active entry, where it would add nothing |
 | Variable filter on any view | ✅ | ⬜ | Toolbar toggle: lists only variable styles, and only the families that have one; combines with All / Active / Inactive and search, and the counts follow it |
 | Seamless top bar | 🟡 | n/a | No separate title bar: the window buttons sit in the sidebar's top strip, and the 52px top row (toolbar, page headers, the font page's header) moves the window, also while a dialog is open. Double-click does what macOS's "Double-click a window's title bar" setting says (zoom, minimize or nothing). Full screen drops the strip. Windows keeps its native frame. Not yet checked in the running app |
 | Toolbar fits narrow windows | 🟡 | ⬜ | As the toolbar narrows (a small window), the count goes first, then Variable shows only its icon and the size slider shortens, then the preview text box and the slider go. Search always keeps room to type |
-| Google Fonts: browse, download, update, remove | ✅ | ⬜ | Keyless: Fontsource catalog + google/fonts repo files; downloads go to a managed folder and are turned on. An update downloads only the files that changed upstream (by each file's ETag); unchanged files are reused. If none changed, nothing is turned off or swapped and the page says it was already up to date |
+| Google Fonts: browse, download, update, remove | ✅ | ⬜ | The Google Fonts row lists the Google fonts in your library; Browse opens the catalog as a page with Back. Keyless: Fontsource catalog + google/fonts repo files; downloads go to a managed folder and are turned on. An update downloads only the files that changed upstream (by each file's ETag); unchanged files are reused. If none changed, nothing is turned off or swapped and the page says it was already up to date |
 | Google Fonts: icon fonts (Material Icons, Material Symbols) | 🟡 | ⬜ | The 5 Material Icons styles and the 3 variable Material Symbols come from google/material-design-icons with its Apache 2.0 license (LICENSE.txt), and download, update, remove and turn on like other families. Listed under Icons with Apache-2.0 (Fontsource says OFL). The static "Material Symbols" entry is hidden: it's the same icons as Material Symbols Outlined. Downloaded icon families preview as five icons on the Google Fonts page, and as icons in the library list; Two Tone, a color font drawn in black, draws light in the dark theme. Updates are offered when the files change upstream (asked about on each catalog refresh), not by Fontsource's date, which runs ahead of Google's weekly push. An update in which nothing changed leaves the fonts on and says "already up to date". Checked live (all 8 download and parse); not yet checked in the running app. INTEGRATIONS.md §3.1 |
 | Adobe Fonts: list fonts Creative Cloud turned on | ✅ | ⬜ | Read-only by design (Adobe's terms); links to Adobe; untested with CC installed |
 | Font Book: deactivated fonts, collections, Apple downloadable fonts | ⬜ | ⬜ | See INTEGRATIONS.md §2 |
@@ -86,6 +86,19 @@ running app.
 | When fonts were added | 🟡 | ⬜ | A font is dated when a scan first lists it. Fonts listed before this version get their file's creation date (its modified date where the disk keeps none, else the date their folder was added), once, in the background at the next launch; fonts on a drive that isn't connected wait for a launch when it is. That reads only file information, so online-only files aren't downloaded. Shown in the Table's Added column and used by Date added |
 | Loaded fonts stay bounded | 🟡 | ⬜ | Fonts that no row shows stay loaded up to 500; past that, the one unused longest leaves the page and loads again if it comes back on screen. Scrolling through 12,000 tiles keeps the page at about 540 loaded fonts |
 
+## Smart entries, Sources and font states (2026-10-18)
+
+The third stage of the library redesign. Checked with unit tests (`npm run test:ui`, `cargo
+test`) and in a browser against a stand-in back end; not yet checked in the running app.
+
+| Feature | macOS | Windows | Notes |
+|---|---|---|---|
+| Smart entries under Library, with counts | 🟡 | ⬜ | All Fonts; Your Fonts (fonts with a copy outside the OS's font folders: your folders, Google Fonts, Purchases); Recently Added (added in the last 30 days, newest first, each item saying when in Rows and Tiles; sorting it another way doesn't change the library's sort); Active (on now, leaving out the fonts macOS always keeps on; All / Active / Inactive is hidden there); Not Tagged (none of your own tags; built-in tags don't count). Each but All Fonts can be hidden in Settings › Sidebar |
+| One flat Sources section | 🟡 | ⬜ | Font Book (the three macOS font folders as one source), Google Fonts, Adobe Fonts, Purchases (with its "n new" badge), then your folders A to Z, one row each, with no chevrons; + adds a folder. Location colors show on each row. Right-click a row, or press Shift-F10 on it, for what applies to it: Rescan or Stop, Show in Finder (one folder), Locate… (a folder that moved), its color, and Remove from Library… (your folders). Your folders also show Rescan and Remove on hover |
+| Folder picker on a source's view | 🟡 | ⬜ | In the toolbar on Font Book (its three folders), Google Fonts, Purchases and your folders, when there are folders inside: narrows the list to one. A search field and a tree with each folder's style count and color; Up and Down move, Right and Left open and close, Return picks, Esc closes; right-click or Shift-F10 changes a folder's color. The source's row stays selected. Back from a font page says the folder's name |
+| Google Fonts and Purchases list your fonts from them | 🟡 | ⬜ | Their rows show the library's fonts from that source, in any layout with sort and filters. Browse (with the number of new downloads, for Purchases) opens the catalog or the Purchases page as a page with Back; Back puts focus on Browse again. "Review" on a new-download message and Settings › Purchases › Open Purchases go there too. With nothing from the source yet, the list offers Browse. Adobe Fonts still opens its own page |
+| Font states with a mark, a tooltip and screen-reader words | 🟡 | ⬜ | In Rows, Tiles, Table, the font page's header and its "All styles" lines: Part of macOS and Installed (a lock that says which); on until logout (a timer); on; partly on ("n/total"); set to turn on but not on (its file is on a drive that isn't connected, or online-only: a paler switch and a link_off mark); turned on by another app (an info mark); off. A family shows the first that applies and its tooltip counts the rest ("2 styles are on until you log out or restart."). Screen readers hear the short state in each item's name and the rest in its description. The Info tab says the chosen style's state and each copy's ("On until logout", "On (another app)", "Set to turn on") |
+
 ## Settings (2026-10-12)
 
 Settings open inside the main window, over the library (Fontface › Settings… in the menu bar,
@@ -98,12 +111,12 @@ search results from all of them, and every change saves at once. Not yet checked
 | Settings screen: sections, search, keyboard | 🟡 | ⬜ | General, Library, Sidebar, Activation, Purchases, Backups, About. Search matches labels, descriptions and extra words (including choice and button words, e.g. "log out" or "Finder"). The library stays as it was underneath. The last section opened is remembered while Fontface runs. In a text box, Esc first leaves the box (which saves it) |
 | Appearance: System / Light / Dark | 🟡 | ⬜ | Applies at once, to the window's own buttons too; System follows the OS live. The last choice is applied before the first paint (a small script in index.html), so launch doesn't flash |
 | Default preview text and size | 🟡 | ⬜ | Used at launch; changing them also changes the current preview |
-| Open where you left off | 🟡 | ⬜ | The view plus All / Active / Inactive and Variable; a folder, subfolder or hidden section that's gone opens All Fonts |
+| Open where you left off | 🟡 | ⬜ | The view plus All / Active / Inactive and Variable; a folder, subfolder or hidden section that's gone opens All Fonts. Views saved before the flat Sources still open: a macOS font folder opens as Font Book narrowed to it, a Google Fonts or Purchases folder as that source's row |
 | Open at login | 🟡 | n/a | A LaunchAgent; hidden on Windows for now |
 | Keep running when the window is closed | 🟡 | n/a | Click the Dock icon to bring the window back |
 | Check folders for changes when Fontface opens | 🟡 | ⬜ | When off, only folders with no fonts yet are scanned |
 | Show installed fonts in All Fonts | 🟡 | ⬜ | When off, All Fonts leaves out fonts that are only in the OS font folders (including ones the user installed); a font with a copy in one of their folders stays. Font Book still lists them; the All Fonts count follows |
-| Show or hide sidebar sections | 🟡 | ⬜ | Font Book (with its folders), Google Fonts, Adobe Fonts, Purchases, Tags, and Built-in tags (inside Tags; off while Tags is off). All Fonts and folders always show. A view whose section is hidden goes to All Fonts. Hidden built-in tags still exist, still show on fonts and still appear in tag menus |
+| Show or hide sidebar sections | 🟡 | ⬜ | In the sidebar's order: Your Fonts, Recently Added, Active and Not Tagged; Font Book, Google Fonts, Adobe Fonts and Purchases; Tags, and Built-in tags (inside Tags; off while Tags is off). All Fonts and your folders always show. A view whose entry or section is hidden (including the one you're in) goes to All Fonts. Hidden built-in tags still exist, still show on fonts and still appear in tag menus |
 | Turn fonts on until logout or restart (temporary) | 🟡 | ⬜ | Applies to fonts turned on afterwards; optional "turn them off when Fontface quits". Updating a Google family or replacing a purchase keeps each font on the way it was |
 | Fonts turned off while Fontface was closed: turn back on / ask / leave off | 🟡 | ⬜ | "Ask me" shows a toast at launch with "Turn back on" and "Keep off". Swiping it away asks again next launch |
 | Turn off all fonts Fontface turned on | 🟡 | ⬜ | Asks first, with the number of font files on now, and how many more are set to come back on (e.g. on a drive that isn't connected) |
@@ -139,7 +152,7 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Tag groups: My tags, and Built-in (Font Book's starter collections, Typeface's "Style" tags), each under a heading that opens and closes; move tags between them from the menu or by dragging onto a heading; groups kept in exports and backups. Not yet checked in the running app | 🟡 | ⬜ |
 | Search matches tag names | ✅ | ⬜ |
 | Location colors (Font Book, services, folders, subfolders), with defaults by source | ✅ | ⬜ |
-| Subfolder tree under each folder, each subfolder a view | ✅ | ⬜ |
+| Subfolders of a source in the toolbar's folder picker, each a view (replaced the sidebar trees) | 🟡 | ⬜ |
 | Collections (manual) | ⬜ | ⬜ |
 | Smart collections (rule-based) | ⬜ | ⬜ |
 | Activate / deactivate a whole collection | ⬜ | ⬜ |

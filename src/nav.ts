@@ -2,8 +2,9 @@ import type { FontPageTab } from "./api";
 
 /**
  * Pages over the library list (see docs/ARCHITECTURE.md, Front end). The sidebar picks a place
- * (App's `view` and filters), and pages are pushed on top of it: today the font page, later
- * Compare, Pair and Family groups. While a page shows, the list stays mounted underneath,
+ * (App's `view` and filters), and pages are pushed on top of it: the font page, and the Google
+ * Fonts and Purchases pages ("catalog" pages, opened with Browse from those sources' lists);
+ * later Compare, Pair and Family groups. While a page shows, the list stays mounted underneath,
  * hidden and inert, so it keeps its scroll position, selection and loaded previews.
  *
  * - Back (the header button, Cmd+[ or Alt+Left on Windows, the mouse's back button, Esc outside
@@ -29,10 +30,20 @@ export interface FontPageEntry {
   returnTo: string | null;
 }
 
-export type Page = FontPageEntry;
+/** A service's own page, opened over its list with Browse: the Google Fonts catalog, or the
+ *  Purchases page (new downloads, imports, watched folders). */
+export interface CatalogPageEntry {
+  kind: "catalog";
+  id: number;
+  service: "google" | "purchases";
+  /** The element (by id) that opened it, focused again on Back: the Browse button. */
+  returnTo: string | null;
+}
+
+export type Page = FontPageEntry | CatalogPageEntry;
 
 /** What a new page needs; the stack gives it its id. */
-export type NewPage = Omit<FontPageEntry, "id">;
+export type NewPage = Omit<FontPageEntry, "id"> | Omit<CatalogPageEntry, "id">;
 
 /** The parts of a page that change while it's open. */
 export type PagePatch = Partial<Pick<FontPageEntry, "styleKey" | "tab">>;
@@ -56,10 +67,10 @@ export const topPage = (state: NavState): Page | undefined => state.pages[state.
 export function navReducer(state: NavState, action: NavAction): NavState {
   switch (action.type) {
     case "open": {
-      // The same font already on top (a double-click and a Return, say): nothing new to show.
+      // The same page already on top (a double-click and a Return, say): nothing new to show.
       const top = topPage(state);
-      if (top && top.faceKey === action.page.faceKey && top.styleKey === action.page.styleKey) return state;
-      return { pages: [...state.pages, { ...action.page, id: state.nextId }], nextId: state.nextId + 1 };
+      if (top && samePage(top, action.page)) return state;
+      return { pages: [...state.pages, { ...action.page, id: state.nextId } as Page], nextId: state.nextId + 1 };
     }
     case "back":
       return state.pages.length ? { ...state, pages: state.pages.slice(0, -1) } : state;
@@ -68,7 +79,8 @@ export function navReducer(state: NavState, action: NavAction): NavState {
     case "update": {
       let changed = false;
       const pages = state.pages.map((p) => {
-        if (p.id !== action.id) return p;
+        // Only a font page has parts that change.
+        if (p.id !== action.id || p.kind !== "font") return p;
         const next = { ...p, ...action.patch };
         if (next.styleKey === p.styleKey && next.tab === p.tab) return p;
         changed = true;
@@ -77,6 +89,13 @@ export function navReducer(state: NavState, action: NavAction): NavState {
       return changed ? { ...state, pages } : state;
     }
   }
+}
+
+/** The same font on the same style, or the same service's page. */
+function samePage(a: Page, b: NewPage): boolean {
+  if (a.kind === "font" && b.kind === "font") return a.faceKey === b.faceKey && a.styleKey === b.styleKey;
+  if (a.kind === "catalog" && b.kind === "catalog") return a.service === b.service;
+  return false;
 }
 
 // ------------------------------------------------------------------------------- Back keys

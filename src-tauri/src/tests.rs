@@ -487,6 +487,17 @@ mod library {
             let [low, high] = sf.weight_range.expect("a variable font's weights");
             assert!(low < high && low >= 1 && high <= 1000, "{low}–{high}");
         }
+        // Files Fontface turned on until logout are marked; the rest leave the field out.
+        let mut marked = fonts.clone();
+        db::mark_temporary(&mut marked, &std::collections::HashSet::from([andale.path.clone()]));
+        let andale_marked = marked.iter().find(|f| f.id == andale.id).unwrap();
+        assert!(andale_marked.temporary);
+        assert_eq!(serde_json::to_value(andale_marked).unwrap()["temporary"], serde_json::json!(true));
+        assert!(marked.iter().filter(|f| f.path != andale.path).all(|f| !f.temporary));
+        assert!(serde_json::to_value(andale).unwrap().get("temporary").is_none(), "left out when false");
+        db::mark_temporary(&mut marked, &std::collections::HashSet::new());
+        assert!(marked.iter().all(|f| !f.temporary), "marked afresh each time");
+
         // get_font still has everything, the list's fields included.
         let detail = db::get_font(&conn, andale.id).unwrap().unwrap();
         assert_eq!(detail.summary.version, andale.version);

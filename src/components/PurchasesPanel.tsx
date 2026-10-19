@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { PageHeader } from "./TitleBar";
+import { PageHeader, type PageBack } from "./TitleBar";
 
 interface Props {
   /** Changes when the watcher finds something or an import/removal finishes; the page reloads. */
@@ -33,6 +33,8 @@ interface Props {
   /** `transferred`: the license went to someone else (the download isn't offered again). */
   onRemove: (item: PurchaseImported, transferred?: boolean) => Promise<void>;
   onSubscriptionEnded: (store: string, name: string) => Promise<void>;
+  /** Opened with Browse from the Purchases list: Back and the page's heading. */
+  back?: PageBack;
 }
 
 type Confirm =
@@ -88,7 +90,7 @@ function StoreSelect({
   );
 }
 
-export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath, onReplace, onRemove, onSubscriptionEnded }: Props) {
+export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath, onReplace, onRemove, onSubscriptionEnded, back }: Props) {
   const [status, setStatus] = useState<PurchasesStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -180,7 +182,7 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
   if (!status) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <PageHeader icon="shopping_bag" title="Purchases" />
+        <PageHeader icon="shopping_bag" title="Purchases" back={back} />
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
           {error ? (
             <span>Couldn't load purchases. {error}</span>
@@ -197,7 +199,7 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader icon="shopping_bag" title="Purchases">
+      <PageHeader icon="shopping_bag" title="Purchases" back={back}>
         <Button size="sm" variant="outline" onClick={() => pickImport(false)}>
           <Icon name="upload_file" size={16} />
           Import zip or fonts…

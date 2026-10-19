@@ -1,13 +1,18 @@
+import { LOCK_LABELS, MARK_ICONS, markOf, stateDetails, switchLook, type LockKind, type StateMark as Mark, type StateSummary } from "@/fontState";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-interface Props {
-  /** How many faces are on, out of `total`. A single style passes 0/1 or 1/1. */
-  active: number;
-  total: number;
+// A font's on/off control and the marks that say more (see src/fontState.ts for the states).
+// Every layout and the font page use `StateControl`; the marks have a tooltip, and what they
+// say is also screen-reader text (on `srId`, which the item's description points at), so color
+// is never the only sign.
+
+interface SwitchProps {
+  /** The item's states, counted (`summarize`). */
+  state: StateSummary;
   label: string;
   /** A request for these fonts is queued or running: show progress and ignore clicks. */
   busy?: boolean;
@@ -15,63 +20,136 @@ interface Props {
   tabIndex?: number;
   /** Tiles and Table: the small switch, with "n/total" only in its tooltip. */
   compact?: boolean;
+  /** The text that says more about the state, as the switch's description. */
+  describedBy?: string;
   onChange: (next: boolean) => void;
 }
 
 /**
- * The on/off control for activation. When only some faces in a family are on, the switch
- * reads as off with an "n/total" count beside it, and switching it turns them all on.
+ * The on/off switch. It's on when every style is on or set to turn on; with only some, it reads
+ * as off with an "n/total" count beside it, and switching it turns them all on. Set to turn on
+ * but not on yet (its files aren't available), it's on and paler.
  */
-export function ActivationSwitch({ active, total, label, busy = false, tabIndex, compact = false, onChange }: Props) {
-  const all = total > 0 && active === total;
-  const partial = active > 0 && !all;
+export function ActivationSwitch({ state, label, busy = false, tabIndex, compact = false, describedBy, onChange }: SwitchProps) {
+  const { checked, partial, dim } = switchLook(state);
+  const counted = `${state.on} of ${state.total} styles on${state.waiting ? `, ${state.waiting} more set to turn on` : ""}`;
   return (
     // Rows are clickable (they select); keep switch clicks from also selecting.
     <span
       className="flex items-center gap-1.5"
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
-      title={compact && partial ? `${active} of ${total} styles active` : undefined}
+      title={compact && partial ? counted : undefined}
     >
       {busy && <Icon name="progress_activity" size={14} className="animate-spin text-muted-foreground" aria-hidden />}
       {partial && !busy && !compact && (
-        <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={`${active} of ${total} styles active`}>
-          {active}/{total}
+        <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={counted}>
+          {state.wanted}/{state.total}
         </span>
       )}
       <Switch
-        checked={all}
+        checked={checked}
         disabled={busy}
         aria-busy={busy}
         onCheckedChange={(on) => onChange(on)}
         aria-label={label}
+        aria-describedby={describedBy}
         tabIndex={tabIndex}
         size={compact ? "sm" : "default"}
-        className={cn("data-checked:bg-active", partial && "data-unchecked:bg-active/40")}
+        className={cn("data-checked:bg-active", partial && "data-unchecked:bg-active/40", dim && "data-checked:bg-active/45")}
       />
     </span>
   );
 }
 
-/** Shown instead of a switch for fonts in a macOS font folder: macOS always loads them.
- *  `compact` (Tiles, Table): the lock alone, named for screen readers. */
-export function InstalledBadge({ compact = false }: { compact?: boolean }) {
+/** A tooltip over a mark. The trigger keeps clicks from reaching the row (they'd select it). */
+function MarkTip({ text, children }: { text: string; children: React.ReactNode }) {
   return (
     <Tooltip>
-      <TooltipTrigger render={<span onClick={(e) => e.stopPropagation()} />}>
-        {compact ? (
-          <span className="flex items-center text-muted-foreground">
-            <Icon name="lock" size={14} />
-            <span className="sr-only">Installed</span>
-          </span>
-        ) : (
-          <Badge variant="secondary" className="gap-1">
-            <Icon name="lock" size={12} />
-            Installed
-          </Badge>
-        )}
+      <TooltipTrigger render={<span className="inline-flex shrink-0 items-center" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} />}>
+        {children}
       </TooltipTrigger>
-      <TooltipContent>In a macOS font folder, so it's always on</TooltipContent>
+      <TooltipContent className="max-w-xs">{text}</TooltipContent>
     </Tooltip>
+  );
+}
+
+/**
+ * Shown instead of a switch for fonts in one of the OS's font folders: they're always on. It
+ * says why: "Part of macOS" or "Installed". `compact` (Tiles, Table): the lock alone, named for
+ * screen readers.
+ */
+export function LockBadge({ kind, details, compact = false }: { kind: LockKind; details: string[]; compact?: boolean }) {
+  return (
+    <MarkTip text={details.join(" ")}>
+      {compact ? (
+        <span className="flex items-center text-muted-foreground">
+          <Icon name="lock" size={14} />
+          <span className="sr-only">{LOCK_LABELS[kind]}</span>
+        </span>
+      ) : (
+        <Badge variant="secondary" className="gap-1">
+          <Icon name="lock" size={12} />
+          {LOCK_LABELS[kind]}
+        </Badge>
+      )}
+    </MarkTip>
+  );
+}
+
+/** The small mark beside a switch: on until logout, set to turn on but not on, or turned on by another app. */
+export function StateMark({ mark, details }: { mark: Mark; details: string[] }) {
+  return (
+    <MarkTip text={details.join(" ")}>
+      <Icon name={MARK_ICONS[mark]} size={14} className={mark === "waiting" ? "text-destructive/80" : "text-muted-foreground"} aria-hidden />
+    </MarkTip>
+  );
+}
+
+interface ControlProps {
+  state: StateSummary;
+  /** One style (else a family, whose details count its styles). */
+  single: boolean;
+  /** The switch's name: "Activate Inter". */
+  label: string;
+  busy?: boolean;
+  tabIndex?: number;
+  compact?: boolean;
+  /** Id for the screen-reader text that says more (the item's description points at it). */
+  srId?: string;
+  onSwitch: (on: boolean) => void;
+}
+
+/** A font's state wherever it shows: the lock (with why), or the switch with its mark. */
+export function StateControl({ state, single, label, busy, tabIndex, compact, srId, onSwitch }: ControlProps) {
+  const details = stateDetails(state, single);
+  const mark = markOf(state);
+  const said = details.length > 0 && (
+    <span id={srId} className="sr-only">
+      {details.join(" ")}
+    </span>
+  );
+  if (state.lock) {
+    return (
+      <>
+        <LockBadge kind={state.lock} details={details} compact={compact} />
+        {said}
+      </>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5">
+      {mark && <StateMark mark={mark} details={details} />}
+      <ActivationSwitch
+        state={state}
+        label={label}
+        busy={busy}
+        tabIndex={tabIndex}
+        compact={compact}
+        describedBy={details.length && srId ? srId : undefined}
+        onChange={onSwitch}
+      />
+      {said}
+    </span>
   );
 }

@@ -1,7 +1,11 @@
 // Run with `npm run test:ui`. The page stack over the library list and its Back keys (nav.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { backKeyIntent, EMPTY_NAV, isBackShortcut, navReducer, topPage, type KeyLike, type NavState, type NewPage } from "./nav.ts";
+import { backKeyIntent, EMPTY_NAV, isBackShortcut, navReducer, topPage as top, type FontPageEntry, type KeyLike, type NavState, type NewPage, type Page } from "./nav.ts";
+
+/** The top page, as a font page (these tests open font pages unless they say otherwise). */
+const topPage = (state: NavState) => top(state) as FontPageEntry | undefined;
+const asFont = (p: Page) => p as FontPageEntry;
 
 const page = (faceKey: string, styleKey = faceKey): NewPage => ({ kind: "font", faceKey, styleKey, tab: "specimen", returnTo: `f:${faceKey}` });
 
@@ -48,7 +52,7 @@ test("update changes only the named page, and only when something differs", () =
   const two = open(open(EMPTY_NAV, page("a")), page("b"));
   const styled = navReducer(two, { type: "update", id: 1, patch: { styleKey: "a-bold", tab: "info" } });
   assert.deepEqual(
-    styled.pages.map((p) => [p.styleKey, p.tab]),
+    styled.pages.map((p) => [asFont(p).styleKey, asFont(p).tab]),
     [
       ["a-bold", "info"],
       ["b", "specimen"],
@@ -91,4 +95,18 @@ test("Cmd+[ works from a text field, but not from a menu, and nothing works whil
   // Settings over the page, a dialog open, or a drag under way.
   assert.equal(backKeyIntent(cmd, { mac: true, focus: "other", blocked: true }), null);
   assert.equal(backKeyIntent(key("Escape"), { mac: true, focus: "other", blocked: true }), null);
+});
+
+test("a service's page opens over its list once, and Back closes it like any page", () => {
+  const catalog = { kind: "catalog", service: "google", returnTo: "browse" } as const;
+  const one = open(EMPTY_NAV, catalog);
+  assert.equal(top(one)?.kind, "catalog");
+  assert.equal(open(one, catalog), one, "Browse twice: still one page");
+  const purchases = open(one, { ...catalog, service: "purchases" });
+  assert.equal(purchases.pages.length, 2, "another service's page is a new page");
+  // A font page over a catalog, then Back to the catalog.
+  const font = open(one, page("ps:Inter-Regular"));
+  assert.equal(top(navReducer(font, { type: "back" }))?.kind, "catalog");
+  // Font-page changes never touch a catalog page.
+  assert.equal(navReducer(one, { type: "update", id: top(one)!.id, patch: { tab: "info" } }), one);
 });

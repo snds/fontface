@@ -4,6 +4,7 @@ import {
   addedAt,
   compareVersions,
   designerOf,
+  faceAddedAt,
   fileNameOf,
   fileSizeOf,
   formatsOf,
@@ -49,16 +50,32 @@ export interface Family {
   ungroupedFrom?: string;
 }
 
-/** Where the fonts come from: everything, the OS-installed fonts ("Font Book"), one folder, or a
- *  font service's own page. Or how they're organized: a tag (with the tags nested under it), or
- *  a folder inside a library folder. */
+/**
+ * A place in the sidebar. The smart entries narrow the whole library: everything ("all"), fonts
+ * with a copy of your own ("yours"), added in the last 30 days ("recent"), on now ("active") and
+ * with none of your own tags ("untagged"). The sources say where fonts come from: the OS's own
+ * font folders ("installed", Font Book), a folder you added ("folder"), or a service ("service":
+ * Google Fonts and Purchases list your library's fonts from them; Adobe Fonts has its own page).
+ * A "location" is a folder inside a source (the toolbar's subfolder picker). A "tag" lists the
+ * fonts with that tag, or one nested under it.
+ *
+ * Older saved views ("folder" for a macOS or service folder) are brought up to date by
+ * `migrateView` (places.ts).
+ */
 export type LibraryView =
   | { kind: "all" }
+  | { kind: "yours" }
+  | { kind: "recent" }
+  | { kind: "active" }
+  | { kind: "untagged" }
   | { kind: "installed" }
   | { kind: "folder"; id: number }
   | { kind: "service"; id: "google" | "adobe" | "purchases" }
   | { kind: "tag"; id: number }
   | { kind: "location"; path: string };
+
+/** The smart entries at the top of the sidebar. */
+export type SmartKind = "all" | "yours" | "recent" | "active" | "untagged";
 
 /** A string that's the same for the same view (for comparing views and keying UI state). */
 export function viewKey(v: LibraryView): string {
@@ -74,13 +91,25 @@ export function viewKey(v: LibraryView): string {
   }
 }
 
-/** What filtering needs to know about tags (see src/tags/model.ts). */
+/** What filtering needs to know beyond the fonts: tags, the time, and where services keep fonts. */
 export interface FilterContext {
   /** Lowercased full names of a face's tags; search matches them too. */
   tagNames?: (face: Face) => string[];
   /** The face has this tag, or one nested under it. */
   inTag?: (face: Face, tagId: number) => boolean;
+  /** The face has one of your own tags (built-in ones don't count): Not Tagged leaves it out. */
+  hasOwnTag?: (face: Face) => boolean;
+  /** Recently Added lists fonts added at or after this time, Unix seconds (`recentSince`). */
+  recentSince?: number;
+  /** The library folder a service keeps its fonts in (Google Fonts, Purchases), if it has one yet. */
+  serviceFolder?: (id: "google" | "purchases") => number | undefined;
 }
+
+/** How far back Recently Added goes. */
+export const RECENT_DAYS = 30;
+
+/** The start of Recently Added for a moment (`now` in Unix seconds). */
+export const recentSince = (now: number) => now - RECENT_DAYS * 86400;
 
 /** Narrows any view by on/off state. */
 export type StatusFilter = "any" | "active" | "inactive";
@@ -101,6 +130,20 @@ export interface Filters {
 
 /** Every copy is in an OS font folder: what All Fonts leaves out when it hides installed fonts. */
 export const onlyInOsFolders = (face: Face) => face.copies.every((c) => c.installed);
+
+/** Your Fonts: at least one copy outside the OS's own font folders (your folders, Google Fonts,
+ *  Purchases). */
+export const isYours = (face: Face) => !onlyInOsFolders(face);
+
+/** Recently Added: came into the library at or after `since` (its earliest copy's date). Fonts
+ *  with no date yet aren't listed. */
+export const isRecent = (face: Face, since: number) => {
+  const at = faceAddedAt(face);
+  return at !== undefined && at >= since;
+};
+
+/** Active: on right now, leaving out the fonts the OS always keeps on. */
+export const isOnNow = (face: Face) => face.active && !face.installed;
 
 /** What the OS calls its own installed-fonts library. */
 export const INSTALLED_LABEL =
@@ -324,12 +367,36 @@ export function filterFamilies(
 ): Family[] {
   const q = query.trim().toLowerCase();
   const inside = view.kind === "location" ? `${view.path}/` : "";
+  // A service's list is its folder's fonts; none while it has no folder (nothing downloaded
+  // yet), and none for Adobe Fonts, whose fonts aren't in the library.
+  const serviceFolder = view.kind === "service" && view.id !== "adobe" ? (ctx.serviceFolder?.(view.id) ?? null) : null;
+  const since = ctx.recentSince ?? recentSince(Date.now() / 1000);
+  const inView = (face: Face): boolean => {
+    switch (view.kind) {
+      case "all":
+        return !(hideInstalled && onlyInOsFolders(face));
+      case "yours":
+        return isYours(face);
+      case "recent":
+        return isRecent(face, since);
+      case "active":
+        return isOnNow(face);
+      case "untagged":
+        return !ctx.hasOwnTag?.(face);
+      case "installed":
+        return face.installed;
+      case "folder":
+        return face.copies.some((c) => c.folderId === view.id);
+      case "service":
+        return serviceFolder !== null && face.copies.some((c) => c.folderId === serviceFolder);
+      case "location":
+        return face.copies.some((c) => c.path.startsWith(inside));
+      case "tag":
+        return !!ctx.inTag?.(face, view.id);
+    }
+  };
   const keep = (face: Face) => {
-    if (view.kind === "all" && hideInstalled && onlyInOsFolders(face)) return false;
-    if (view.kind === "installed" && !face.installed) return false;
-    if (view.kind === "folder" && !face.copies.some((c) => c.folderId === view.id)) return false;
-    if (view.kind === "location" && !face.copies.some((c) => c.path.startsWith(inside))) return false;
-    if (view.kind === "tag" && !ctx.inTag?.(face, view.id)) return false;
+    if (!inView(face)) return false;
     if (status === "active" && !face.active) return false;
     if (status === "inactive" && face.active) return false;
     // Copies of a face are all variable or all static (it's part of the face key).
@@ -344,6 +411,39 @@ export function filterFamilies(
     if (faces.length) out.push(faces.length === family.faces.length ? family : makeFamily(family.id, family.name, faces));
   }
   return out;
+}
+
+/** Style counts for the sidebar's smart entries and Font Book: each face once. */
+export interface PlaceCounts {
+  all: number;
+  yours: number;
+  recent: number;
+  active: number;
+  untagged: number;
+  installed: number;
+}
+
+/**
+ * How many styles each smart entry (and Font Book) lists, matching what `filterFamilies` shows
+ * there with no filters on. All Fonts follows "Show installed fonts in All Fonts".
+ */
+export function placeCounts(
+  families: readonly Family[],
+  { hideInstalled = false, recentSince: since = recentSince(Date.now() / 1000), hasOwnTag }: { hideInstalled?: boolean; recentSince?: number; hasOwnTag?: (face: Face) => boolean } = {},
+): PlaceCounts {
+  const counts: PlaceCounts = { all: 0, yours: 0, recent: 0, active: 0, untagged: 0, installed: 0 };
+  for (const family of families) {
+    for (const face of family.faces) {
+      const yours = isYours(face);
+      if (yours || !hideInstalled) counts.all++;
+      if (yours) counts.yours++;
+      if (isRecent(face, since)) counts.recent++;
+      if (isOnNow(face)) counts.active++;
+      if (!hasOwnTag?.(face)) counts.untagged++;
+      if (face.installed) counts.installed++;
+    }
+  }
+  return counts;
 }
 
 /**

@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "@/api";
 import { Icon } from "@/components/ui/icon";
+import { cn } from "@/lib/utils";
 
 /**
  * On macOS the window has no separate title bar (see src-tauri/tauri.macos.conf.json). The
@@ -140,16 +141,35 @@ export function DialogDragStrip() {
   return <div aria-hidden className="fixed inset-x-0 top-0 z-50 h-13" {...dragRegion(true)} />;
 }
 
+/** A page header's Back button and heading, when the page sits on the page stack (a service's
+ *  page opened with Browse): Back takes the icon's place, and the title is the page's `h1`,
+ *  focused when the page opens. */
+export interface PageBack {
+  leading: React.ReactNode;
+  headingRef: React.Ref<HTMLHeadingElement>;
+}
+
 /**
  * The first row of a page in the main column. It's exactly as tall as the library toolbar and
  * the sidebar's top strip (52px), so they line up into one bar. Longer explanations go below it.
  */
-export function PageHeader({ icon, title, children }: { icon: string; title: string; children?: React.ReactNode }) {
+export function PageHeader({ icon, title, back, children }: { icon: string; title: string; back?: PageBack; children?: React.ReactNode }) {
   const titleBar = useTitleBar();
   return (
-    <header className="flex h-13 shrink-0 items-center gap-3 border-b px-4 select-none" {...dragRegion(titleBar)}>
-      <Icon name={icon} size={22} className="text-muted-foreground" />
-      <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
+    <header className={cn("flex h-13 shrink-0 items-center gap-3 border-b select-none", back ? "pr-4 pl-3" : "px-4")} {...dragRegion(titleBar)}>
+      {back ? (
+        <>
+          {back.leading}
+          <h1 ref={back.headingRef} tabIndex={-1} className="min-w-0 flex-1 truncate text-base font-semibold outline-none">
+            {title}
+          </h1>
+        </>
+      ) : (
+        <>
+          <Icon name={icon} size={22} className="text-muted-foreground" />
+          <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
+        </>
+      )}
       {children}
     </header>
   );

@@ -35,6 +35,9 @@ export interface FontSummary {
   fileSize: number;
   /** What macOS reports right now. Drives the switches. */
   osActive: boolean;
+  /** Fontface turned this file on until logout or restart (for this login only). Left out when
+   *  it didn't. Only means something while the font is on (`osActive`). */
+  temporary?: boolean;
   /** The font's own version string, designer and foundry (name IDs 5, 9 and 8): the Table's
    *  columns. Left out when the font doesn't say. */
   version?: string;
@@ -168,6 +171,8 @@ export interface ActivationOutcome {
   path: string;
   ids: number[];
   active: boolean;
+  /** The file is on until logout or restart (its scope after this request). */
+  temporary: boolean;
   error: string | null;
 }
 
@@ -386,7 +391,15 @@ export interface TableColumnSetting {
   width?: number;
 }
 
+/** What the sidebar shows. Must match SidebarSections in src-tauri/src/settings.rs: a key the
+ *  back end doesn't know isn't saved. All Fonts and your folders always show. */
 export interface SidebarSections {
+  /** The smart entries under Library. */
+  yours: boolean;
+  recent: boolean;
+  active: boolean;
+  untagged: boolean;
+  /** The sources. */
   fontBook: boolean;
   google: boolean;
   adobe: boolean;
@@ -476,6 +489,8 @@ export const api = {
   setActivation: (fontIds: number[], active: boolean, scope: ActivationMode | null = null, origin: SwitchOrigin = "switch") =>
     invoke<ActivationOutcome[]>("set_activation", { fontIds, active, scope, origin }),
   revealFont: (fontId: number) => invoke<void>("reveal_font", { fontId }),
+  /** Shows a library folder in Finder (Explorer on Windows). */
+  revealFolder: (folderId: number) => invoke<void>("reveal_folder", { folderId }),
   listServices: () => invoke<ServiceInfo[]>("list_services"),
   googleCatalog: (refresh = false) => invoke<GoogleCatalog>("google_catalog", { refresh }),
   googleInstall: (id: string) => invoke<GoogleInstallResult>("google_install", { id }),

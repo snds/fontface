@@ -11,7 +11,7 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ChoiceGroup } from "./ChoiceGroup";
-import { PageHeader } from "./TitleBar";
+import { PageHeader, type PageBack } from "./TitleBar";
 
 interface Props {
   /** Fonts in the Google Fonts folder, for previews of installed families. */
@@ -27,6 +27,8 @@ interface Props {
   onInstall: (id: string) => Promise<GoogleInstallResult>;
   onRemove: (id: string) => Promise<void>;
   onUpdateAll: (families: GoogleFamily[]) => Promise<void>;
+  /** Opened with Browse from the Google Fonts list: Back and the page's heading. */
+  back?: PageBack;
 }
 
 const CATEGORIES: { value: string; label: string }[] = [
@@ -77,7 +79,7 @@ function FamilyPreview({ family, font, text }: { family: GoogleFamily; font: Fon
   );
 }
 
-export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAll, onInstall, onRemove, onUpdateAll }: Props) {
+export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAll, onInstall, onRemove, onUpdateAll, back }: Props) {
   const [catalog, setCatalog] = useState<GoogleCatalog | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -158,7 +160,7 @@ export function GoogleFontsPanel({ fonts, previewText, busy, version, updatingAl
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader icon="cloud" title="Google Fonts">
+      <PageHeader icon="cloud" title="Google Fonts" back={back}>
         <Button variant="outline" size="sm" onClick={() => load(true)} disabled={loading}>
           <Icon name="refresh" size={16} className={cn(loading && "animate-spin")} />
           Refresh

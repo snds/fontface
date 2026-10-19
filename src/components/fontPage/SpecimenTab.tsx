@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
 import { ROW_HEIGHT } from "@/previewFit";
 import { isSampleKind, usePreviewProfile } from "@/previewProfiles";
 import { cn } from "@/lib/utils";
-import { ActivationSwitch, InstalledBadge } from "@/components/ActivationSwitch";
+import { summarize } from "@/fontState";
+import { StateControl } from "@/components/ActivationSwitch";
 import { CopiesBadge, FacePreview, SampleBadge } from "@/components/FacePreview";
 import { PreviewText } from "@/components/PreviewText";
 import { FaceStateMessage, paragraphText, SectionTitle, waterfallText } from "./parts";
@@ -164,6 +165,7 @@ function StyleLine({
   const font = face.primary;
   const preview = usePreviewProfile(font);
   const label = `${font.subfamily}${font.variable ? " (Variable)" : ""}`;
+  const stateId = useId();
   return (
     // Right-click a line for that style's menu (see FontPage).
     <li data-face-key={face.key} className="flex items-center gap-3 border-b py-1.5 last:border-b-0">
@@ -193,17 +195,14 @@ function StyleLine({
           <span aria-hidden className="block" style={{ height: STYLE_SIZE * ROW_HEIGHT }} />
         )}
       </button>
-      {face.installed ? (
-        <InstalledBadge />
-      ) : (
-        <ActivationSwitch
-          active={face.active ? 1 : 0}
-          total={1}
-          label={`Activate ${font.family} ${font.subfamily}`}
-          busy={busy}
-          onChange={(on) => onActivate(activationIds([face], on), on)}
-        />
-      )}
+      <StateControl
+        state={summarize([face])}
+        single
+        label={`Activate ${font.family} ${font.subfamily}`}
+        busy={busy}
+        srId={stateId}
+        onSwitch={(on) => onActivate(activationIds([face], on), on)}
+      />
     </li>
   );
 }

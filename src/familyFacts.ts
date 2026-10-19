@@ -71,6 +71,11 @@ export function addedAt(faces: readonly Face[]): number | undefined {
   return at;
 }
 
+const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+
+/** An added date in words ("Oct 12, 2026"), or "" while unknown. */
+export const addedDateText = (seconds: number | undefined) => (seconds === undefined ? "" : dateFormat.format(new Date(seconds * 1000)));
+
 /** "OpenType CFF", or several joined: "OpenType CFF, TrueType". */
 export function formatsOf(faces: readonly Face[]): string {
   return [...new Set(faces.map((f) => f.primary.format))].sort().join(", ");

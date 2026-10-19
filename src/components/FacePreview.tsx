@@ -119,11 +119,3 @@ export function CopiesBadge({ face, srId }: { face: Face; srId?: string }) {
     </Tooltip>
   );
 }
-
-/** How a face's or family's on/off state reads to a screen reader: "on", "3 of 12 on", "always on". */
-export function stateWords(active: number, total: number, installed: number): string {
-  if (total === 0) return installed ? "always on (installed)" : "off";
-  if (active === total) return "on";
-  if (active === 0) return "off";
-  return `${active} of ${total} on`;
-}

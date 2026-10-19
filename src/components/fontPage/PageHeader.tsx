@@ -7,7 +7,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { copyText } from "@/lib/clipboard";
-import { ActivationSwitch, InstalledBadge } from "@/components/ActivationSwitch";
+import { summarize } from "@/fontState";
+import { StateControl } from "@/components/ActivationSwitch";
 import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
 import { TagPicker } from "@/tags/TagPicker";
 import { REVEAL_LABEL } from "./InfoTab";
@@ -92,17 +93,14 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
       ) : (
         <span className="max-w-56 truncate text-sm text-muted-foreground">{styleLabel(face)}</span>
       )}
-      {family.switchable.length === 0 ? (
-        <InstalledBadge />
-      ) : (
-        <ActivationSwitch
-          active={family.activeCount}
-          total={family.switchable.length}
-          label={`Activate ${family.name}`}
-          busy={family.switchable.some((f) => f.copies.some((c) => busy.has(c.path)))}
-          onChange={(on) => onActivate(activationIds(family.switchable, on), on)}
-        />
-      )}
+      <StateControl
+        state={summarize(family.faces)}
+        single={family.faces.length === 1}
+        label={`Activate ${family.name}`}
+        busy={family.switchable.some((f) => f.copies.some((c) => busy.has(c.path)))}
+        srId="font-page-state"
+        onSwitch={(on) => onActivate(activationIds(family.switchable, on), on)}
+      />
       <Popover>
         <PopoverTrigger render={<Button variant="ghost" size="sm" aria-label={`Tags for ${family.name}`} />}>
           <Icon name="sell" size={16} />

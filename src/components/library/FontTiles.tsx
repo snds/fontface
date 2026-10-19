@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { addedAt, addedDateText } from "@/familyFacts";
+import { stateWords, summarize } from "@/fontState";
 import { activationIds, type Family } from "@/library";
 import { usePreviewProfile } from "@/previewProfiles";
 import { Badge } from "@/components/ui/badge";
 import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagDots } from "@/tags/TagChips";
-import { ActivationSwitch, InstalledBadge } from "../ActivationSwitch";
-import { FacePreview, MissingHint, SampleBadge, stateWords } from "../FacePreview";
+import { StateControl } from "../ActivationSwitch";
+import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
 import { activeInSight, describedBy, rowKey, useKeepFocus, type DisplayProps, type ListView, type Row } from "./LibraryPane";
 import {
   firstVisibleIndex,
@@ -189,7 +191,7 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
 type TileProps = DisplayProps & { actions: ListView["actions"]; row: Row; id: string; column: number; height: number };
 
 /** One card: name, style count and on/off; one fitted preview line; places, tags and marks. */
-function Tile({ row, actions, id, column, height, previewText, size, busy, locations, onActivate }: TileProps) {
+function Tile({ row, actions, id, column, height, previewText, size, busy, locations, onActivate, showAdded }: TileProps) {
   const family: Family = row.family;
   const single = !!family.ungroupedFrom;
   const key = rowKey(row);
@@ -202,8 +204,10 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
   const mono = family.faces.some((f) => f.primary.monospace);
   const count = family.faces.length;
   const styles = `${count} ${count === 1 ? "style" : "styles"}`;
-  const label = `${family.name}${single ? "" : `, ${styles}`}${variable ? ", variable" : ""}, ${stateWords(family.activeCount, family.switchable.length, count)}`;
-  const marks = [mono && "Monospaced", family.faces.some((f) => f.copies.length > 1) && "Has duplicate files"].filter(Boolean).join(". ");
+  const state = summarize(family.faces);
+  const label = `${family.name}${single ? "" : `, ${styles}`}${variable ? ", variable" : ""}, ${stateWords(state)}`;
+  const added = showAdded ? addedDateText(addedAt(family.faces)) : "";
+  const marks = [mono && "Monospaced", family.faces.some((f) => f.copies.length > 1) && "Has duplicate files", added && `Added ${added}`].filter(Boolean).join(". ");
   return (
     <div
       id={id}
@@ -211,7 +215,7 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
       aria-colindex={column}
       aria-selected={selected}
       aria-label={label}
-      aria-describedby={describedBy(id, ["marks"])}
+      aria-describedby={describedBy(id, ["state", "marks"])}
       data-row-key={key}
       onClick={(e) => actions.onRowClick(e, key)}
       onDoubleClick={(e) => actions.onRowDoubleClick(e, row)}
@@ -232,19 +236,16 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
         <span className="flex-1" />
         {/* No tag button on a card (there's no room): tag from the right-click menu (Shift-F10),
             the selection bar, or by dragging onto a tag. */}
-        {family.switchable.length === 0 ? (
-          <InstalledBadge compact />
-        ) : (
-          <ActivationSwitch
-            compact
-            active={family.activeCount}
-            total={family.switchable.length}
-            label={`Activate ${family.name}`}
-            busy={family.switchable.some((face) => face.copies.some((c) => busy.has(c.path)))}
-            tabIndex={tab}
-            onChange={(on) => onActivate(activationIds(family.switchable, on), on)}
-          />
-        )}
+        <StateControl
+          compact
+          state={state}
+          single={single}
+          label={`Activate ${family.name}`}
+          busy={family.switchable.some((face) => face.copies.some((c) => busy.has(c.path)))}
+          tabIndex={tab}
+          srId={`${id}-state`}
+          onSwitch={(on) => onActivate(activationIds(family.switchable, on), on)}
+        />
       </div>
       <div className="flex min-h-0 flex-1 items-center overflow-hidden">
         <div className="min-w-0 flex-1">
@@ -255,6 +256,11 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
         <LocationDots copies={copies} locations={locations} srId={`${id}-places`} />
         <TagDots faces={family.faces} index={actions.index} srId={`${id}-tags`} />
         <span className="flex-1" />
+        {added && (
+          <span className="shrink-0 truncate" aria-hidden>
+            Added {added}
+          </span>
+        )}
         {variable && <Badge variant="outline">Variable</Badge>}
         {mono && <Badge variant="outline">Mono</Badge>}
         {marks && (

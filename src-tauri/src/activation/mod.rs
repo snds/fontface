@@ -212,6 +212,15 @@ pub fn record_scope(conn: &Connection, path: &str, scope: Scope) -> AppResult<()
     Ok(())
 }
 
+/// Whether a file is on until logout after a switch request: the scope it was just registered
+/// in, if it was; else what it was before (`was_temporary`), unless it was turned off.
+pub fn temporary_after(active: bool, registered: Option<Scope>, was_temporary: bool) -> bool {
+    match registered {
+        Some(scope) => scope == Scope::Session,
+        None => active && was_temporary,
+    }
+}
+
 /// A file was turned off, so it's no longer on temporarily.
 pub fn forget_temporary(conn: &Connection, path: &str) -> AppResult<()> {
     conn.execute("DELETE FROM temporary_activations WHERE path = ?1", [path])?;

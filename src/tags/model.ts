@@ -146,17 +146,20 @@ export function countByTag(families: Family[], index: TagIndex): Map<number, num
   return counts;
 }
 
-/** How the library list filters by tag and searches tag names. */
-export function useFilterContext(): FilterContext {
+/** How the library list filters by tag (and Not Tagged) and searches tag names. */
+export function useFilterContext(): Pick<FilterContext, "tagNames" | "inTag" | "hasOwnTag"> {
   const index = useTagIndex();
   return useMemo(() => {
     const lower = new Map(index.tags.map((t) => [t.id, t.name.toLowerCase()]));
+    // Your own tags, as opposed to the built-in ones (from Font Book and Typeface).
+    const own = new Set(index.tags.filter((t) => index.groupOf(t.id) === "mine").map((t) => t.id));
     return {
       tagNames: (face) => index.tagsOf(face).map((id) => lower.get(id) ?? ""),
       inTag: (face, tagId) => {
         const within = index.subtree.get(tagId);
         return !!within && index.tagsOf(face).some((id) => within.has(id));
       },
+      hasOwnTag: (face) => index.tagsOf(face).some((id) => own.has(id)),
     };
   }, [index]);
 }

@@ -1,4 +1,5 @@
 import type { FontDetail, PreviewInfo } from "@/api";
+import { copyWords, stateDetails, stateWords, summarize } from "@/fontState";
 import { WEIGHT_NAMES, type Face } from "@/library";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
@@ -31,8 +32,13 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
   // The label is there only when a row of this face draws a sample of characters.
   const characterSet = characters.status === "ready" ? characterSetLine(characters.data, profile?.label) : profile?.label;
   const weight = detail?.weight ?? font.weight;
+  // On or off, in words: why it's locked, on until logout, and so on.
+  const state = summarize([face]);
+  const words = stateWords(state);
+  const status = stateDetails(state, true).join(" ") || `${words.charAt(0).toUpperCase()}${words.slice(1)}.`;
   // [label, value, monospace?]
   const rows: [string, string | null | undefined, boolean?][] = [
+    ["On or off", status],
     ["Full name", font.fullName],
     ["PostScript", font.postscriptName, true],
     ["Version", detail?.version],
@@ -80,7 +86,7 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
                   {face.copies.length > 1 && (
                     <span className={cn("flex shrink-0 items-center gap-1", c.osActive ? "text-active" : "text-muted-foreground")}>
                       <Icon name={c.osActive ? "check_circle" : "radio_button_unchecked"} size={14} filled={c.osActive} />
-                      {c.osActive ? "On" : "Off"}
+                      {copyWords(c)}
                     </span>
                   )}
                 </div>

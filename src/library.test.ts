@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FontSummary } from "./api.ts";
-import { filterFamilies, groupFamilies, sortFamilies, ungroup } from "./library.ts";
+import { filterFamilies, groupFamilies, placeCounts, recentSince, sortFamilies, ungroup, type Face, type LibraryView } from "./library.ts";
 
 let nextId = 1;
 function font(family: string, subfamily: string, more: Partial<FontSummary> = {}): FontSummary {
@@ -182,4 +182,85 @@ test("sorting 3,500 families stays quick", () => {
   for (const key of ["added", "foundry", "weight", "styles"] as const) sortFamilies(all, { key, desc: true });
   const each = (performance.now() - start) / 4;
   assert.ok(each < 60, `${each.toFixed(1)} ms per sort`);
+});
+
+// ------------------------------------------------------------------ smart entries and sources
+
+const DAY = 86400;
+const NOW = 1_800_000_000;
+
+/** A small library: one font of each kind the smart entries tell apart. */
+function smartLibrary() {
+  return groupFamilies([
+    // Yours, added yesterday, off, tagged with one of your tags.
+    font("Mine", "Regular", { folderId: 2, path: "/u/Mine.otf", addedAt: NOW - DAY }),
+    // Yours, added 40 days ago, on (Fontface turned it on), with only a built-in tag.
+    font("Older", "Regular", { folderId: 2, path: "/u/Older.otf", addedAt: NOW - 40 * DAY, activated: true, osActive: true }),
+    // Part of macOS: always on, added today (the backfill dates it too).
+    font("Sys", "Regular", { folderId: 9, path: "/System/Library/Fonts/Sys.ttf", installed: true, osActive: true, addedAt: NOW }),
+    // In a macOS folder and also in one of yours: yours, and installed.
+    font("Both", "Regular", { folderId: 9, path: "/Library/Fonts/Both.otf", installed: true, osActive: true }),
+    font("Both", "Regular", { folderId: 2, path: "/u/Both.otf" }),
+    // A Google Fonts download (its managed folder is 5), no date yet.
+    font("Goog", "Regular", { folderId: 5, path: "/g/Goog/Goog.ttf", osActive: true }),
+  ]);
+}
+
+const ownTags = new Set(["Mine"]);
+const ctx = {
+  recentSince: recentSince(NOW),
+  hasOwnTag: (face: Face) => ownTags.has(face.primary.family),
+  serviceFolder: (id: "google" | "purchases") => (id === "google" ? 5 : undefined),
+};
+const shown = (view: LibraryView, filters = {}) => names(filterFamilies(smartLibrary(), view, filters, ctx));
+
+test("Your Fonts: fonts with a copy outside the OS's font folders", () => {
+  assert.deepEqual(shown({ kind: "yours" }), ["Both", "Goog", "Mine", "Older"]);
+});
+
+test("Recently Added: the last 30 days by added date; fonts with no date aren't listed", () => {
+  assert.deepEqual(shown({ kind: "recent" }), ["Mine", "Sys"]);
+  assert.equal(recentSince(NOW), NOW - 30 * DAY);
+  // Exactly 30 days ago still counts.
+  const edge = groupFamilies([font("Edge", "Regular", { addedAt: NOW - 30 * DAY })]);
+  assert.equal(filterFamilies(edge, { kind: "recent" }, {}, ctx).length, 1);
+});
+
+test("Active: on now, leaving out the fonts the OS always keeps on", () => {
+  assert.deepEqual(shown({ kind: "active" }), ["Goog", "Older"]);
+  assert.deepEqual(shown({ kind: "active" }, { status: "inactive" }), [], "the status filter narrows it like any view");
+});
+
+test("Not Tagged: none of your own tags (built-in ones don't count)", () => {
+  assert.deepEqual(shown({ kind: "untagged" }), ["Both", "Goog", "Older", "Sys"]);
+  // Without the tag index everything counts as untagged.
+  assert.equal(filterFamilies(smartLibrary(), { kind: "untagged" }).length, 5);
+});
+
+test("a service's view lists the fonts in its managed folder; none without one, none for Adobe", () => {
+  assert.deepEqual(shown({ kind: "service", id: "google" }), ["Goog"]);
+  assert.deepEqual(shown({ kind: "service", id: "purchases" }), [], "no Purchases folder yet");
+  assert.deepEqual(shown({ kind: "service", id: "adobe" }), []);
+  assert.deepEqual(shown({ kind: "installed" }), ["Both", "Sys"], "Font Book: a copy in an OS font folder");
+  assert.deepEqual(shown({ kind: "location", path: "/g/Goog" }), ["Goog"]);
+});
+
+test("the smart entries' counts match what each lists", () => {
+  const families = smartLibrary();
+  const counts = placeCounts(families, ctx);
+  const count = (view: LibraryView, hideInstalled = false) => filterFamilies(families, view, { hideInstalled }, ctx).reduce((n, f) => n + f.faces.length, 0);
+  assert.deepEqual(counts, {
+    all: count({ kind: "all" }),
+    yours: count({ kind: "yours" }),
+    recent: count({ kind: "recent" }),
+    active: count({ kind: "active" }),
+    untagged: count({ kind: "untagged" }),
+    installed: count({ kind: "installed" }),
+  });
+  assert.deepEqual(counts, { all: 5, yours: 4, recent: 2, active: 2, untagged: 4, installed: 2 });
+  // All Fonts follows "Show installed fonts in All Fonts"; a font with a copy of yours stays.
+  const hidden = placeCounts(families, { ...ctx, hideInstalled: true });
+  assert.equal(hidden.all, 4);
+  assert.equal(hidden.all, count({ kind: "all" }, true));
+  assert.equal(hidden.installed, 2, "Font Book still counts them");
 });

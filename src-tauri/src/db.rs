@@ -443,6 +443,13 @@ pub fn apply_os_state(fonts: &mut [FontSummary], available: Option<&HashSet<Stri
     }
 }
 
+/// Marks the fonts whose file Fontface turned on for this login only (`temporary_paths`).
+pub fn mark_temporary(fonts: &mut [FontSummary], temporary: &HashSet<String>) {
+    for f in fonts {
+        f.temporary = temporary.contains(&f.path);
+    }
+}
+
 pub fn summary_from_row(r: &Row) -> rusqlite::Result<FontSummary> {
     Ok(FontSummary {
         id: r.get(0)?,
@@ -464,6 +471,7 @@ pub fn summary_from_row(r: &Row) -> rusqlite::Result<FontSummary> {
         mtime: r.get(16)?,
         file_size: r.get(17)?,
         os_active: false,
+        temporary: false,
         version: r.get(18)?,
         designer: r.get(19)?,
         manufacturer: r.get(20)?,

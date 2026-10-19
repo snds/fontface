@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Which tree rows are open in the sidebar (nested tags, subfolders). Remembered on this Mac
+ * Which tree rows are open in the sidebar (nested tags). Remembered on this Mac
  * only, as a convenience; if storage isn't available everything simply starts closed.
  */
 const KEY = "fontface.sidebar.open";

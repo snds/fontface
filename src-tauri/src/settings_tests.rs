@@ -46,7 +46,18 @@ fn defaults_match_the_spec() {
     assert!(d.show_installed_in_all);
     assert_eq!(
         d.sidebar,
-        SidebarSections { font_book: true, google: true, adobe: true, purchases: true, tags: true, builtin_tags: true }
+        SidebarSections {
+            yours: true,
+            recent: true,
+            active: true,
+            untagged: true,
+            font_book: true,
+            google: true,
+            adobe: true,
+            purchases: true,
+            tags: true,
+            builtin_tags: true
+        }
     );
     assert_eq!(d.activation_mode, ActivationMode::Persistent);
     assert!(!d.clear_temporary_on_quit);
@@ -75,7 +86,10 @@ fn serializes_in_the_shape_the_ui_expects() {
             "keepRunningInBackground": false,
             "scanAtLaunch": true,
             "showInstalledInAll": true,
-            "sidebar": { "fontBook": true, "google": true, "adobe": true, "purchases": true, "tags": true, "builtinTags": true },
+            "sidebar": {
+                "yours": true, "recent": true, "active": true, "untagged": true,
+                "fontBook": true, "google": true, "adobe": true, "purchases": true, "tags": true, "builtinTags": true
+            },
             "activationMode": "persistent",
             "clearTemporaryOnQuit": false,
             "restoreOnLaunch": "always",
@@ -157,6 +171,39 @@ fn builtin_tags_show_by_default_and_merge_on_their_own() {
     assert!(loaded.sidebar.builtin_tags && !loaded.sidebar.google);
     settings::save(&mut conn, &off).unwrap();
     assert!(!settings::load(&conn).unwrap().sidebar.builtin_tags);
+    drop(conn);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn smart_entries_show_by_default_and_each_hides_on_its_own() {
+    // Settings saved before the smart entries existed have none of their keys: they show.
+    let old: AppSettings = serde_json::from_str(r#"{"sidebar": {"fontBook": false, "tags": true}}"#).unwrap();
+    assert!(old.sidebar.yours && old.sidebar.recent && old.sidebar.active && old.sidebar.untagged);
+    assert!(!old.sidebar.font_book);
+
+    // Each is its own switch: hiding one leaves the rest as they were.
+    for key in ["yours", "recent", "active", "untagged"] {
+        let off = settings::apply_patch(&AppSettings::default(), &json!({ "sidebar": { key: false } })).unwrap();
+        let flags = [off.sidebar.yours, off.sidebar.recent, off.sidebar.active, off.sidebar.untagged];
+        assert_eq!(flags.iter().filter(|on| !**on).count(), 1, "{key} alone is off");
+        assert!(off.sidebar.font_book && off.sidebar.tags, "{key}: the sources and tags stay");
+        assert_eq!(serde_json::to_value(&off).unwrap()["sidebar"][key], json!(false), "{key} keeps its name in JSON");
+        assert!(settings::apply_patch(&off, &json!({ "sidebar": { key: "off" } })).is_err(), "{key} must be on or off");
+    }
+
+    // Stored and read back; a stored sidebar from before keeps them on.
+    let dir = temp("smart-entries");
+    let mut conn = db::open(&dir.join("library.sqlite3")).unwrap();
+    settings::ensure_schema(&conn).unwrap();
+    conn.execute("INSERT INTO app_settings (key, value) VALUES ('sidebar', '{\"fontBook\":true,\"google\":false}')", []).unwrap();
+    let loaded = settings::load(&conn).unwrap();
+    assert!(loaded.sidebar.yours && loaded.sidebar.untagged && !loaded.sidebar.google);
+    let hidden = settings::apply_patch(&loaded, &json!({ "sidebar": { "recent": false, "untagged": false } })).unwrap();
+    settings::save(&mut conn, &hidden).unwrap();
+    let again = settings::load(&conn).unwrap();
+    assert!(!again.sidebar.recent && !again.sidebar.untagged && again.sidebar.yours && again.sidebar.active);
+    assert_eq!(again, hidden);
     drop(conn);
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -315,7 +362,18 @@ fn every_setting_can_be_changed_by_a_patch() {
         keep_running_in_background: true,
         scan_at_launch: false,
         show_installed_in_all: false,
-        sidebar: SidebarSections { font_book: false, google: false, adobe: false, purchases: false, tags: false, builtin_tags: false },
+        sidebar: SidebarSections {
+            yours: false,
+            recent: false,
+            active: false,
+            untagged: false,
+            font_book: false,
+            google: false,
+            adobe: false,
+            purchases: false,
+            tags: false,
+            builtin_tags: false,
+        },
         activation_mode: ActivationMode::Temporary,
         clear_temporary_on_quit: true,
         restore_on_launch: RestorePolicy::Never,
@@ -391,6 +449,21 @@ fn turning_on_keeps_a_font_that_is_already_on_in_its_scope() {
     }
     assert_eq!(Scope::from(Persistent), Scope::Persistent);
     assert_eq!(Scope::from(Temporary), Scope::Session);
+}
+
+/// What a switch outcome tells the UI about "on until logout", so the mark shows without a reload.
+#[test]
+fn a_switch_says_whether_the_file_is_on_until_logout() {
+    use crate::activation::temporary_after;
+    // Registered just now: its scope says.
+    assert!(temporary_after(true, Some(Scope::Session), false));
+    assert!(!temporary_after(true, Some(Scope::Persistent), true), "turned on to stay: no longer temporary");
+    // Already on: as it was.
+    assert!(temporary_after(true, None, true));
+    assert!(!temporary_after(true, None, false));
+    // Turned off: never temporary.
+    assert!(!temporary_after(false, None, true));
+    assert!(!temporary_after(false, None, false));
 }
 
 #[test]

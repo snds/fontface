@@ -141,10 +141,17 @@ pub struct TableColumn {
     pub width: Option<u32>,
 }
 
-/// Which sections the sidebar shows.
+/// What the sidebar shows. All Fonts and the user's folders always show. Must match
+/// `SidebarSections` in src/api.ts: a key only the UI knows is dropped by `apply_key`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SidebarSections {
+    /// The smart entries under Library: Your Fonts, Recently Added, Active, Not Tagged.
+    pub yours: bool,
+    pub recent: bool,
+    pub active: bool,
+    pub untagged: bool,
+    /// The sources.
     pub font_book: bool,
     pub google: bool,
     pub adobe: bool,
@@ -157,7 +164,18 @@ pub struct SidebarSections {
 
 impl Default for SidebarSections {
     fn default() -> Self {
-        SidebarSections { font_book: true, google: true, adobe: true, purchases: true, tags: true, builtin_tags: true }
+        SidebarSections {
+            yours: true,
+            recent: true,
+            active: true,
+            untagged: true,
+            font_book: true,
+            google: true,
+            adobe: true,
+            purchases: true,
+            tags: true,
+            builtin_tags: true,
+        }
     }
 }
 
@@ -264,6 +282,10 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
             let sections = value.as_object().ok_or_else(|| invalid("Sidebar sections must be a list of on or off choices"))?;
             for (section, on) in sections {
                 let slot = match section.as_str() {
+                    "yours" => &mut s.sidebar.yours,
+                    "recent" => &mut s.sidebar.recent,
+                    "active" => &mut s.sidebar.active,
+                    "untagged" => &mut s.sidebar.untagged,
                     "fontBook" => &mut s.sidebar.font_book,
                     "google" => &mut s.sidebar.google,
                     "adobe" => &mut s.sidebar.adobe,

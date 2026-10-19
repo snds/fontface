@@ -19,6 +19,8 @@ interface Props {
   onPreviewText: (t: string) => void;
   status: StatusFilter;
   onStatus: (s: StatusFilter) => void;
+  /** All / Active / Inactive. Hidden in Active, where it would add nothing. */
+  showStatus?: boolean;
   variableOnly: boolean;
   onVariableOnly: (on: boolean) => void;
   size: number;
@@ -29,6 +31,10 @@ interface Props {
   onLayout: (layout: LibraryLayout) => void;
   /** The View options button and its popover. */
   viewOptions: React.ReactNode;
+  /** On a source's view: the subfolder picker (components/SubfolderPicker.tsx). */
+  subfolders?: React.ReactNode;
+  /** On Google Fonts and Purchases: Browse, which opens the service's own page. */
+  browse?: React.ReactNode;
 }
 
 const STATUS: { value: StatusFilter; label: string }[] = [
@@ -44,6 +50,7 @@ export function Toolbar({
   onPreviewText,
   status,
   onStatus,
+  showStatus = true,
   variableOnly,
   onVariableOnly,
   size,
@@ -53,23 +60,27 @@ export function Toolbar({
   layout,
   onLayout,
   viewOptions,
+  subfolders,
+  browse,
 }: Props) {
   const titleBar = useTitleBar();
   return (
     // On macOS this row is also the window's title bar (see TitleBar.tsx). It can be narrow (a
     // small window gives it well under 800px). So it gives way in steps as it narrows (container
     // queries on the width inside its padding): under 1120px the size slider and the preview
-    // text box get shorter; under 990px the count goes (screen readers still hear it); under
-    // 960px Variable shows only its icon; under 800px the layout switch folds into View options
-    // and search gets narrower; under 620px the preview text box goes, and under 520px the
-    // slider. Search always keeps room to type, and nothing paints past the window's edge.
+    // text box get shorter; under 990px the count goes (screen readers still hear it; on a
+    // source's view, with its subfolder picker and Browse, under 1180px); under
+    // 960px Variable shows only its icon (the subfolder picker already does under 1180px, and
+    // Browse under 1000px); under 800px the layout switch folds into View options and search gets
+    // narrower; under 620px the preview text box goes, and under 520px the slider. Search always
+    // keeps room to type, and nothing paints past the window's edge.
     <header
       className="@container/toolbar flex h-13 shrink-0 items-center gap-3 overflow-hidden border-b px-4 select-none"
       {...dragRegion(titleBar)}
     >
       {/* All / Active / Inactive and Variable narrow whatever view is selected in the sidebar. */}
       <div className="flex shrink-0 items-center gap-1.5">
-        <ChoiceGroup label="Show fonts" value={status} options={STATUS} onChange={onStatus} />
+        {showStatus && <ChoiceGroup label="Show fonts" value={status} options={STATUS} onChange={onStatus} />}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -130,9 +141,17 @@ export function Toolbar({
         />
         <span className="w-11 shrink-0 text-right font-mono text-xs text-muted-foreground tabular-nums">{size}px</span>
       </div>
+      {subfolders}
+      {browse}
       {viewOptions}
       <LayoutSwitch value={layout} onChange={onLayout} className="@max-[800px]/toolbar:hidden" />
-      <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums @max-[990px]/toolbar:sr-only">
+      {/* A source's view has more controls (the subfolder picker, Browse): its count goes sooner. */}
+      <span
+        className={cn(
+          "font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums @max-[990px]/toolbar:sr-only",
+          (subfolders || browse) && "@max-[1180px]/toolbar:sr-only",
+        )}
+      >
         {familyCount.toLocaleString()} fam · {fontCount.toLocaleString()} styles
       </span>
     </header>

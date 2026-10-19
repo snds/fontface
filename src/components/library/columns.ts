@@ -47,7 +47,7 @@ export interface ColumnDef {
 }
 
 export const COLUMNS: readonly ColumnDef[] = [
-  { id: "state", label: "", srLabel: "On or off", width: 52, min: 44, sort: "active", shown: true, pinned: true },
+  { id: "state", label: "", srLabel: "On or off", width: 64, min: 56, sort: "active", shown: true, pinned: true },
   { id: "name", label: "Name", width: 240, min: 120, sort: "name", shown: true, pinned: true },
   { id: "preview", label: "Preview", width: 280, min: 120, shown: true },
   { id: "styles", label: "Styles", width: 72, min: 56, sort: "styles", shown: true, numeric: true },

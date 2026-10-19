@@ -76,7 +76,7 @@ pub fn remove_folder(state: State<'_, AppState>, folder_id: i64) -> AppResult<Ve
     let mut failures = Vec::new();
     for path in active {
         if let Err(e) = turn_off_file(&path, temporary.contains(&path)) {
-            failures.push(ActivationOutcome { path, ids: vec![], active: true, error: Some(e.to_string()) });
+            failures.push(ActivationOutcome { path, ids: vec![], active: true, temporary: false, error: Some(e.to_string()) });
         }
     }
     state.write(|conn| {
@@ -198,8 +198,14 @@ pub fn cancel_scan(state: State<'_, AppState>, folder_id: i64) -> AppResult<()> 
 #[tauri::command(async)]
 pub fn list_fonts(state: State<'_, AppState>) -> AppResult<Vec<FontSummary>> {
     let loaded = activation::available_paths();
-    let mut fonts = db::list_fonts(&*state.conn()?)?;
+    // Read together, under one hold of the DB mutex (released before anything below takes the
+    // activation lock).
+    let (mut fonts, temporary) = {
+        let conn = state.conn()?;
+        (db::list_fonts(&conn)?, activation::temporary_paths(&conn)?)
+    };
     db::apply_os_state(&mut fonts, loaded.as_ref());
+    db::mark_temporary(&mut fonts, &temporary);
     if loaded.is_some() {
         notice_turned_off_elsewhere(&state, &mut fonts);
     }
@@ -408,7 +414,7 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
     for (path, installed, ids) in files {
         if installed {
             let error = (!active).then(|| "Installed in a macOS font folder, so it's always on".to_string());
-            outcomes.push(ActivationOutcome { path, ids, active: true, error });
+            outcomes.push(ActivationOutcome { path, ids, active: true, temporary: false, error });
             continue;
         }
         // Its folder may have been removed while this request waited for the lock.
@@ -418,7 +424,13 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         if !still_listed {
-            outcomes.push(ActivationOutcome { path, ids, active: false, error: Some("Its folder was removed from the library".into()) });
+            outcomes.push(ActivationOutcome {
+                path,
+                ids,
+                active: false,
+                temporary: false,
+                error: Some("Its folder was removed from the library".into()),
+            });
             continue;
         }
         let is_temporary = temporary.contains(&path);
@@ -442,9 +454,11 @@ pub(crate) fn switch(state: &AppState, font_ids: &[i64], active: bool, mode: Opt
                     }
                 })?;
                 to_verify.push(outcomes.len());
-                outcomes.push(ActivationOutcome { path, ids, active, error: None });
+                let temporary = activation::temporary_after(active, scope, is_temporary);
+                outcomes.push(ActivationOutcome { path, ids, active, temporary, error: None });
             }
-            Err(e) => outcomes.push(ActivationOutcome { path, ids, active: !active, error: Some(e.to_string()) }),
+            // Nothing changed: it's as it was, on until logout or not.
+            Err(e) => outcomes.push(ActivationOutcome { path, ids, active: !active, temporary: is_temporary, error: Some(e.to_string()) }),
         }
     }
 
@@ -512,6 +526,21 @@ pub fn reveal_font(state: State<'_, AppState>, font_id: i64) -> AppResult<()> {
         .optional()?
         .ok_or_else(|| AppError::NotFound(format!("font {font_id}")))?;
     reveal(Path::new(&path))
+}
+
+/// Shows a library folder in Finder (Explorer on Windows): the sidebar's "Show in Finder".
+#[tauri::command(async)]
+pub fn reveal_folder(state: State<'_, AppState>, folder_id: i64) -> AppResult<()> {
+    let path: String = state
+        .conn()?
+        .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| AppError::NotFound(format!("folder {folder_id}")))?;
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err(AppError::Invalid("Can't find this folder. If it moved, use Locate… to point Fontface at it.".into()));
+    }
+    reveal(&path)
 }
 
 #[cfg(target_os = "macos")]

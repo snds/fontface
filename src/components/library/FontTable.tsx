@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FontSummary, SortKey } from "@/api";
 import {
   addedAt,
+  addedDateText,
   designerOf,
   faceAddedAt,
   familySources,
@@ -15,6 +16,7 @@ import {
   sourcesOf,
   weightText,
 } from "@/familyFacts";
+import { stateWords, summarize, type StateSummary } from "@/fontState";
 import { activationIds, type Face } from "@/library";
 import { usePreviewProfile } from "@/previewProfiles";
 import { nextSort, sortInfo } from "@/viewOptions";
@@ -23,8 +25,8 @@ import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuGr
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
-import { ActivationSwitch, InstalledBadge } from "../ActivationSwitch";
-import { FacePreview, MissingHint, SampleBadge, stateWords } from "../FacePreview";
+import { StateControl } from "../ActivationSwitch";
+import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
 import {
   clampWidth,
   columnDef,
@@ -43,9 +45,6 @@ import {
   type ColumnId,
 } from "./columns";
 import { activeInSight, rowKey, useKeepFocus, type DisplayProps, type ListView, type Row, type TableOptions } from "./LibraryPane";
-
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
-const formatDate = (seconds: number | undefined) => (seconds === undefined ? "" : dateFormat.format(new Date(seconds * 1000)));
 
 /** How much Shift+Left or Shift+Right on a column header changes its width, px. */
 const RESIZE_STEP = 16;
@@ -395,9 +394,10 @@ function TableRow(props: RowProps) {
   const expandable = !face && !single;
   const font = face ? face.primary : family.representative.primary;
   const variable = family.faces.some((f) => f.primary.variable);
+  const state = summarize(faces);
   const label = face
-    ? `${font.subfamily}${font.variable ? " (Variable)" : ""}, ${font.family}, ${face.installed ? "always on (installed)" : face.active ? "on" : "off"}`
-    : `${family.name}${single ? "" : `, ${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`}${variable ? ", variable" : ""}, ${stateWords(family.activeCount, family.switchable.length, family.faces.length)}`;
+    ? `${font.subfamily}${font.variable ? " (Variable)" : ""}, ${font.family}, ${stateWords(state)}`
+    : `${family.name}${single ? "" : `, ${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`}${variable ? ", variable" : ""}, ${stateWords(state)}`;
   return (
     <div
       id={id}
@@ -429,7 +429,7 @@ function TableRow(props: RowProps) {
           )}
           style={pinStyle(c.def.id)}
         >
-          <Cell column={c.def.id} {...props} faces={faces} face={face} font={font} expandable={expandable} active={active} />
+          <Cell column={c.def.id} {...props} faces={faces} face={face} font={font} expandable={expandable} active={active} state={state} />
         </div>
       ))}
       {/* The keyboard ring, drawn over the pinned cells (which would cover a ring on the row). */}
@@ -440,15 +440,16 @@ function TableRow(props: RowProps) {
 
 /**
  * What a row's shown columns say to a screen reader, as ids for its description, in column
- * order: each column's text ("Foundry: Rasmus Andersson."), where its files are, the preview's
- * sample badge and missing characters, and its tags. On or off, Name and Styles are already in
- * the row's name.
+ * order: more about its state (on until logout, a lock's reason…), each column's text
+ * ("Foundry: Rasmus Andersson."), where its files are, the preview's sample badge and missing
+ * characters, and its tags. On or off, Name and Styles are already in the row's name.
  */
 function describedIds(id: string, columns: readonly Column[]): string {
   return columns
     .flatMap((c) => {
       switch (c.def.id) {
         case "state":
+          return [`${id}-state`];
         case "name":
         case "styles":
           return [];
@@ -478,9 +479,9 @@ function Fact({ id, column, text, className, title }: { id: string; column: Colu
   );
 }
 
-type CellProps = RowProps & { column: ColumnId; faces: Face[]; face: Face | undefined; font: FontSummary; expandable: boolean; active: boolean };
+type CellProps = RowProps & { column: ColumnId; faces: Face[]; face: Face | undefined; font: FontSummary; expandable: boolean; active: boolean; state: StateSummary };
 
-function Cell({ column, row, faces, face, font, expandable, active, actions, id, previewText, previewSize, busy, locations, onActivate, expanded, onToggleExpanded }: CellProps) {
+function Cell({ column, row, faces, face, font, expandable, active, state, actions, id, previewText, previewSize, busy, locations, onActivate, expanded, onToggleExpanded }: CellProps) {
   const family = row.family;
   const tab = active ? 0 : -1;
   const muted = "truncate text-xs text-muted-foreground";
@@ -488,17 +489,16 @@ function Cell({ column, row, faces, face, font, expandable, active, actions, id,
   switch (column) {
     case "state": {
       const switchable = face ? (face.installed ? [] : [face]) : family.switchable;
-      if (switchable.length === 0) return <InstalledBadge compact />;
-      const on = face ? (face.active ? 1 : 0) : family.activeCount;
       return (
-        <ActivationSwitch
+        <StateControl
           compact
-          active={on}
-          total={switchable.length}
+          state={state}
+          single={!!face || !!family.ungroupedFrom}
           label={`Activate ${face ? `${font.family} ${font.subfamily}` : family.name}`}
           busy={switchable.some((f) => f.copies.some((c) => busy.has(c.path)))}
           tabIndex={tab}
-          onChange={(next) => onActivate(activationIds(switchable, next), next)}
+          srId={`${id}-state`}
+          onSwitch={(next) => onActivate(activationIds(switchable, next), next)}
         />
       );
     }
@@ -555,7 +555,7 @@ function Cell({ column, row, faces, face, font, expandable, active, actions, id,
       );
     }
     case "added":
-      return <Fact {...fact} text={formatDate(face ? faceAddedAt(face) : addedAt(family.faces))} className={muted} />;
+      return <Fact {...fact} text={addedDateText(face ? faceAddedAt(face) : addedAt(family.faces))} className={muted} />;
     case "tags":
       return <TagChips faces={faces} index={actions.index} max={2} srId={`${id}-tags`} />;
     case "version": {

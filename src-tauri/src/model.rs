@@ -40,6 +40,10 @@ pub struct FontSummary {
     pub file_size: i64,
     /// What the OS reports right now. Can differ from `activated` if another app changed it.
     pub os_active: bool,
+    /// Fontface turned this file on for this login only (it's in `temporary_activations`; see
+    /// `db::mark_temporary`). Left out of the JSON when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub temporary: bool,
     /// The font's version (name ID 5), designer (9) and foundry (8), for the Table's columns.
     /// Left out of the list when the font doesn't say.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,5 +131,8 @@ pub struct ActivationOutcome {
     pub path: String,
     pub ids: Vec<i64>,
     pub active: bool,
+    /// On until logout or restart: the file's scope after the request (see
+    /// `activation::temporary_after`). The UI shows it without reloading the list.
+    pub temporary: bool,
     pub error: Option<String>,
 }

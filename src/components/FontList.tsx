@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { addedAt, addedDateText, faceAddedAt } from "@/familyFacts";
+import { stateWords, summarize } from "@/fontState";
 import { activationIds, type Face, type Family } from "@/library";
 import { usePreviewProfile } from "@/previewProfiles";
 import { Badge } from "@/components/ui/badge";
@@ -8,8 +10,8 @@ import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
-import { ActivationSwitch, InstalledBadge } from "./ActivationSwitch";
-import { CopiesBadge, FacePreview, MissingHint, SampleBadge, stateWords } from "./FacePreview";
+import { StateControl } from "./ActivationSwitch";
+import { CopiesBadge, FacePreview, MissingHint, SampleBadge } from "./FacePreview";
 import { activeInSight, describedBy, rowKey, RowTagButton, useKeepFocus, type DisplayProps, type ListView, type Row } from "./library/LibraryPane";
 
 /**
@@ -150,7 +152,7 @@ function optionProps({ actions, id, position, count, row }: RowProps, label: str
 }
 
 function FamilyRow(props: RowProps & { family: Family }) {
-  const { family, row, expanded, onToggleExpanded, previewText, size, busy, locations, onActivate, actions } = props;
+  const { family, row, expanded, onToggleExpanded, previewText, size, busy, locations, onActivate, actions, showAdded } = props;
   // "Group styles into families" off: one style on its own, named "Family Style".
   const single = !!family.ungroupedFrom;
   const isOpen = expanded.has(family.id);
@@ -161,9 +163,11 @@ function FamilyRow(props: RowProps & { family: Family }) {
   const variable = family.faces.some((f) => f.primary.variable);
   const styles = `${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`;
   const mono = family.faces.some((f) => f.primary.monospace);
-  const label = `${family.name}${single ? "" : `, ${styles}`}${variable ? ", variable" : ""}, ${stateWords(family.activeCount, family.switchable.length, family.faces.length)}`;
-  const marks = [mono && "Monospaced", duplicates && "Has duplicate files"].filter(Boolean).join(". ");
-  const { active, attrs } = optionProps(props, label, describedBy(props.id, ["marks"]));
+  const state = summarize(family.faces);
+  const label = `${family.name}${single ? "" : `, ${styles}`}${variable ? ", variable" : ""}, ${stateWords(state)}`;
+  const added = showAdded ? addedDateText(addedAt(family.faces)) : "";
+  const marks = [mono && "Monospaced", duplicates && "Has duplicate files", added && `Added ${added}`].filter(Boolean).join(". ");
+  const { active, attrs } = optionProps(props, label, describedBy(props.id, ["state", "marks"]));
   const tab = active ? 0 : -1;
   return (
     <div {...attrs}>
@@ -197,6 +201,11 @@ function FamilyRow(props: RowProps & { family: Family }) {
           ) : (
             <span className="shrink-0">{styles}</span>
           )}
+          {added && (
+            <span className="shrink-0" aria-hidden>
+              Added {added}
+            </span>
+          )}
           {variable && <Badge variant="outline">Variable</Badge>}
           {mono && <Badge variant="outline">Mono</Badge>}
           {duplicates && (single ? <CopiesBadge face={family.faces[0]} /> : <Badge variant="outline">Duplicates</Badge>)}
@@ -210,18 +219,15 @@ function FamilyRow(props: RowProps & { family: Family }) {
           <TagChips faces={family.faces} index={actions.index} srId={`${props.id}-tags`} />
         </span>
         <RowTagButton rowKey={key} actions={actions} label={family.name} tabIndex={tab} />
-        {family.switchable.length === 0 ? (
-          <InstalledBadge />
-        ) : (
-          <ActivationSwitch
-            active={family.activeCount}
-            total={family.switchable.length}
-            label={`Activate ${family.name}`}
-            busy={family.switchable.some((face) => face.copies.some((c) => busy.has(c.path)))}
-            tabIndex={tab}
-            onChange={(on) => onActivate(activationIds(family.switchable, on), on)}
-          />
-        )}
+        <StateControl
+          state={state}
+          single={single}
+          label={`Activate ${family.name}`}
+          busy={family.switchable.some((face) => face.copies.some((c) => busy.has(c.path)))}
+          tabIndex={tab}
+          srId={`${props.id}-state`}
+          onSwitch={(on) => onActivate(activationIds(family.switchable, on), on)}
+        />
       </div>
       <div className="pl-8">
         <FacePreview font={family.representative.primary} preview={preview} typed={previewText} own={single ? "full" : "family"} size={size} />
@@ -231,13 +237,15 @@ function FamilyRow(props: RowProps & { family: Family }) {
 }
 
 function FaceRow(props: RowProps & { face: Face }) {
-  const { face, row, previewText, size, busy, locations, onActivate, actions } = props;
+  const { face, row, previewText, size, busy, locations, onActivate, actions, showAdded } = props;
   const font = face.primary;
   const preview = usePreviewProfile(font);
   const key = rowKey(row);
   const style = `${font.subfamily}${font.variable ? " (Variable)" : ""}`;
-  const label = `${style}, ${font.family}, ${face.installed ? "always on (installed)" : face.active ? "on" : "off"}`;
-  const { active, attrs } = optionProps(props, label, describedBy(props.id, ["copies"]));
+  const state = summarize([face]);
+  const label = `${style}, ${font.family}, ${stateWords(state)}`;
+  const added = showAdded ? addedDateText(faceAddedAt(face)) : "";
+  const { active, attrs } = optionProps(props, label, describedBy(props.id, ["state", "copies", "added"]));
   const tab = active ? 0 : -1;
   return (
     <div {...attrs} className={cn(attrs.className, "pl-12")}>
@@ -252,6 +260,11 @@ function FaceRow(props: RowProps & { face: Face }) {
             {font.weight}
             {font.italic ? " · italic" : ""}
           </span>
+          {added && (
+            <span className="shrink-0 font-sans" id={`${props.id}-added`}>
+              Added {added}
+            </span>
+          )}
           <CopiesBadge face={face} srId={`${props.id}-copies`} />
           <span className="flex items-center gap-1.5 font-sans">
             <SampleBadge profile={preview.profile} row="full" id={`${props.id}-sample`} />
@@ -262,18 +275,15 @@ function FaceRow(props: RowProps & { face: Face }) {
           </span>
         </span>
         <RowTagButton rowKey={key} actions={actions} label={`${font.family} ${font.subfamily}`} tabIndex={tab} />
-        {face.installed ? (
-          <InstalledBadge />
-        ) : (
-          <ActivationSwitch
-            active={face.active ? 1 : 0}
-            total={1}
-            label={`Activate ${font.family} ${font.subfamily}`}
-            busy={face.copies.some((c) => busy.has(c.path))}
-            tabIndex={tab}
-            onChange={(on) => onActivate(activationIds([face], on), on)}
-          />
-        )}
+        <StateControl
+          state={state}
+          single
+          label={`Activate ${font.family} ${font.subfamily}`}
+          busy={face.copies.some((c) => busy.has(c.path))}
+          tabIndex={tab}
+          srId={`${props.id}-state`}
+          onSwitch={(on) => onActivate(activationIds([face], on), on)}
+        />
       </div>
       <FacePreview font={font} preview={preview} typed={previewText} own="full" size={size} />
     </div>

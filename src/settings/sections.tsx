@@ -104,22 +104,62 @@ function useOutsideState(onPurchasesChanged: () => void) {
   return { purchases, purchasesError, watchBusy, setWatching, backups, backingUp, backUpNow, version };
 }
 
-const SIDEBAR_ROWS: { key: keyof SidebarSections; label: string; description: string; keywords?: string }[] = [
-  { key: "fontBook", label: INSTALLED_LABEL, description: `Fonts installed in ${OS}, with its font folders.`, keywords: "installed system" },
-  { key: "google", label: "Google Fonts", description: "Browse and download free Google Fonts.", keywords: "service" },
-  { key: "adobe", label: "Adobe Fonts", description: "Fonts Creative Cloud has turned on.", keywords: "service creative cloud" },
-  { key: "purchases", label: "Purchases", description: "Fonts you bought, found in your downloads.", keywords: "service store" },
-  { key: "tags", label: "Tags", description: "Your tags, each with its own view.", keywords: "labels organize" },
+type SidebarKey = keyof SidebarSections;
+
+/** Settings › Sidebar, in the sidebar's own order: LIBRARY's smart entries, SOURCES, then TAGS. */
+const SIDEBAR_GROUPS: { id: string; title: string; rows: { key: SidebarKey; label: string; description: string; keywords?: string }[] }[] = [
   {
-    key: "builtinTags",
-    label: "Built-in tags",
-    description: "Tags that came with Font Book and Typeface, such as Fixed Width and Style. When hidden, fonts still show them.",
-    keywords: "labels font book typeface style fixed width defaults automatic classification group",
+    id: "library",
+    title: "Library",
+    rows: [
+      {
+        key: "yours",
+        label: "Your Fonts",
+        description: `Fonts you added: in your folders, Google Fonts or Purchases. Fonts that are only in ${OS}'s own font folders aren't listed.`,
+        keywords: "smart mine my own added user folders",
+      },
+      { key: "recent", label: "Recently Added", description: "Fonts added in the last 30 days, newest first.", keywords: "smart new latest date added" },
+      {
+        key: "active",
+        label: "Active",
+        description: `Fonts that are on right now, apart from the ones ${OS} always keeps on.`,
+        keywords: "smart on turned on activated enabled",
+      },
+      {
+        key: "untagged",
+        label: "Not Tagged",
+        description: "Fonts with none of your own tags. Built-in tags don't count.",
+        keywords: "smart untagged no tags labels organize",
+      },
+    ],
+  },
+  {
+    id: "sources",
+    title: "Sources",
+    rows: [
+      { key: "fontBook", label: INSTALLED_LABEL, description: `Fonts installed in ${OS}, from its font folders as one source.`, keywords: "installed system folders" },
+      { key: "google", label: "Google Fonts", description: "Your Google Fonts, and Browse to download more.", keywords: "service catalog download" },
+      { key: "adobe", label: "Adobe Fonts", description: "Fonts Creative Cloud has turned on.", keywords: "service creative cloud" },
+      { key: "purchases", label: "Purchases", description: "Fonts you bought, found in your downloads.", keywords: "service store downloads" },
+    ],
+  },
+  {
+    id: "tags",
+    title: "Tags",
+    rows: [
+      { key: "tags", label: "Tags", description: "Your tags, each with its own view.", keywords: "labels organize" },
+      {
+        key: "builtinTags",
+        label: "Built-in tags",
+        description: "Tags that came with Font Book and Typeface, such as Fixed Width and Style. When hidden, fonts still show them.",
+        keywords: "labels font book typeface style fixed width defaults automatic classification group",
+      },
+    ],
   },
 ];
 
 /** Rows that only matter while another row is on: Built-in tags sit inside Tags. */
-const SIDEBAR_NEEDS: Partial<Record<keyof SidebarSections, keyof SidebarSections>> = { builtinTags: "tags" };
+const SIDEBAR_NEEDS: Partial<Record<SidebarKey, SidebarKey>> = { builtinTags: "tags" };
 
 /** Every settings section, in order, with its rows and their controls. */
 export function useSections(props: SectionProps): SectionDef[] | null {
@@ -305,31 +345,30 @@ export function useSections(props: SectionProps): SectionDef[] | null {
   const sidebar: SectionDef = {
     ...meta("sidebar"),
     intro: "Choose what the sidebar shows. All Fonts and your folders are always there.",
-    groups: [
-      {
-        id: "sidebar",
-        rows: SIDEBAR_ROWS.map((r) => {
-          const needs = SIDEBAR_NEEDS[r.key];
-          const off = !!needs && !s.sidebar[needs];
-          return {
-            id: `sidebar-${r.key}`,
-            label: r.label,
-            description: off ? `${r.description} Shown only while Tags is on.` : r.description,
-            keywords: `sidebar show hide ${r.keywords ?? ""}`,
-            labelsControl: true,
-            control: (ids: RowIds) => (
-              <Switch
-                id={ids.control}
-                {...describe(ids)}
-                checked={s.sidebar[r.key]}
-                disabled={off}
-                onCheckedChange={(on) => update({ sidebar: { [r.key]: on } })}
-              />
-            ),
-          };
-        }),
-      },
-    ],
+    groups: SIDEBAR_GROUPS.map((group) => ({
+      id: `sidebar-${group.id}`,
+      title: group.title,
+      rows: group.rows.map((r) => {
+        const needs = SIDEBAR_NEEDS[r.key];
+        const off = !!needs && !s.sidebar[needs];
+        return {
+          id: `sidebar-${r.key}`,
+          label: r.label,
+          description: off ? `${r.description} Shown only while Tags is on.` : r.description,
+          keywords: `sidebar show hide ${r.keywords ?? ""}`,
+          labelsControl: true,
+          control: (ids: RowIds) => (
+            <Switch
+              id={ids.control}
+              {...describe(ids)}
+              checked={s.sidebar[r.key]}
+              disabled={off}
+              onCheckedChange={(on) => update({ sidebar: { [r.key]: on } })}
+            />
+          ),
+        };
+      }),
+    })),
   };
 
   const activation: SectionDef = {

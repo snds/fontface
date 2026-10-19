@@ -91,6 +91,8 @@ export interface DisplayProps {
   busy: Set<string>;
   locations: Locations;
   onActivate: (ids: number[], active: boolean) => void;
+  /** Recently Added: Rows and Tiles say when each item was added. */
+  showAdded?: boolean;
 }
 
 /** What the pane hands its layout. */
@@ -534,5 +536,6 @@ export function activeInSight(item: { start: number; end: number } | undefined, 
 }
 
 /** Ids of an item's screen-reader texts, read after its name as its description: where its
- *  copies are, marks (Mono, duplicates, copies, a sample preview), missing characters and tags. */
+ *  copies are, marks (more about its state, Mono, duplicates, copies, a sample preview, when it
+ *  was added), missing characters and tags. */
 export const describedBy = (id: string, marks: string[]) => [`${id}-places`, ...marks.map((m) => `${id}-${m}`), `${id}-sample`, `${id}-missing`, `${id}-tags`].join(" ");

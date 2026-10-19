@@ -23,14 +23,18 @@ import {
   filterFamilies,
   groupFamilies,
   INSTALLED_LABEL,
-  onlyInOsFolders,
+  placeCounts,
+  recentSince,
   sortFamilies,
   ungroup,
   viewKey,
   type Family,
+  type FilterContext,
   type LibraryView,
   type StatusFilter,
 } from "@/library";
+import { hiddenBySidebar, placeLabel, SERVICE_LABELS, sourceFolders, sourceOf, sourceView } from "@/places";
+import { hasSubfolders } from "@/subfolders";
 import { describeSort, layoutInfo, layoutShortcut, sizeShortcut, stepSize } from "@/viewOptions";
 import { familySources } from "@/familyFacts";
 import { newestWins } from "@/newestWins";
@@ -48,23 +52,25 @@ import {
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { SETTINGS_BUTTON_ID, Sidebar, scanStatus } from "@/components/Sidebar";
 import { LIBRARY_SEARCH_ID, Toolbar } from "@/components/Toolbar";
 import { LibraryPane, type ListHandle, type OpenRequest } from "@/components/library/LibraryPane";
 import { ViewOptions } from "@/components/ViewOptions";
 import { FontPage } from "@/components/fontPage/FontPage";
+import { BackButton } from "@/components/fontPage/PageHeader";
+import { SubfolderPicker } from "@/components/SubfolderPicker";
 import { GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
-import { IS_MAC } from "@/components/TitleBar";
+import { IS_MAC, type PageBack } from "@/components/TitleBar";
 import { cancelDrag, isDragging } from "@/tags/drag";
 import { locateFolder } from "@/tags/locate";
 import { useLocations } from "@/tags/locations";
 import { leafOf, useFilterContext, useTagIndex } from "@/tags/model";
 import { TagDialogHost } from "@/tags/TagDialogs";
-import { hiddenBySidebar, useLastView } from "@/settings/lastView";
+import { useLastView } from "@/settings/lastView";
 import type { SectionId } from "@/settings/parts";
 import { useRestorePrompt } from "@/settings/restorePrompt";
 import { SETTINGS_SEARCH_ID, SettingsScreen } from "@/settings/SettingsView";
@@ -72,12 +78,34 @@ import { applyTheme, useDarkTheme } from "@/settings/theme";
 import { DEFAULT_SETTINGS, SettingsContext, useSettingsStore } from "@/settings/useSettings";
 import { useSyncEvents } from "@/sync/store";
 import { popupOpen, useNav } from "@/useNav";
+import type { CatalogPageEntry } from "@/nav";
 
 const fileName = (path: string) => path.split("/").pop() || path;
 /** While a scan runs, reload the font list at most this often so new fonts appear as they're read. */
 const LIVE_REFRESH_MS = 4000;
 /** Screen readers hear scan progress at most this often (plus start and finish). */
 const ANNOUNCE_MS = 15000;
+/** Recently Added starts newest first, whatever the library's sort is (see `chooseSort`). */
+const RECENT_SORT: SortOrder = { key: "added", desc: true };
+/** The Browse button on Google Fonts and Purchases: focus comes back to it from their page. */
+const BROWSE_ID = "browse-service";
+
+/** Unix seconds now, to the hour: Recently Added's 30 days move on while Fontface stays open. */
+function useHourNow(): number {
+  const [hour, setHour] = useState(() => Math.floor(Date.now() / 3_600_000));
+  useEffect(() => {
+    const timer = setInterval(() => setHour(Math.floor(Date.now() / 3_600_000)), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return hour * 3600;
+}
+
+/** A service's page on the page stack: its header has Back, and its heading takes focus when it opens. */
+function CatalogPage({ placeName, onBack, children }: { placeName: string; onBack: () => void; children: (back: PageBack) => React.ReactNode }) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => headingRef.current?.focus({ preventScroll: true }), []);
+  return <>{children({ leading: <BackButton placeName={placeName} onBack={onBack} />, headingRef })}</>;
+}
 
 export default function App() {
   const settingsStore = useSettingsStore();
@@ -90,6 +118,8 @@ export default function App() {
   const [fonts, setFonts] = useState<FontSummary[]>([]);
   const [view, setView] = useState<LibraryView>({ kind: "all" });
   const [status, setStatus] = useState<StatusFilter>("any");
+  /** Recently Added's own sort, so sorting it another way leaves the library's sort as it was. */
+  const [recentSort, setRecentSort] = useState<SortOrder>(RECENT_SORT);
   /** Only variable fonts (the toolbar's Variable toggle). */
   const [variableOnly, setVariableOnly] = useState(false);
   const [query, setQuery] = useState("");
@@ -209,14 +239,14 @@ export default function App() {
   // Pages (the font page) open over the list, which stays as it was underneath (see nav.ts).
   // Back puts focus on the row that opened the page; ⌘F leaves the page for Search.
   const listRef = useRef<ListHandle>(null);
-  const pendingFocus = useRef<{ row: string | null } | "search" | null>(null);
+  const pendingFocus = useRef<{ row: string | null } | { element: string | null } | "search" | null>(null);
   const placeNameRef = useRef("All Fonts");
   const nav = useNav({
     // Settings over the page take Esc themselves; a drag takes Esc to cancel.
     blocked: () => settingsOpenRef.current || isDragging(),
     onBack: (closed, remaining) => {
       if (remaining.length) return;
-      pendingFocus.current = { row: closed.returnTo };
+      pendingFocus.current = closed.kind === "font" ? { row: closed.returnTo } : { element: closed.returnTo };
       announce(`Back to ${placeNameRef.current}`);
     },
   });
@@ -235,17 +265,33 @@ export default function App() {
     const want = pendingFocus.current;
     pendingFocus.current = null;
     if (!want) return;
-    if (want !== "search" && listRef.current) listRef.current.focusRow(want.row);
-    else if (!focusSearch()) document.querySelector<HTMLElement>("main")?.focus();
+    if (want !== "search" && "element" in want) {
+      // The button that opened a service's page (Browse), else the list.
+      const el = want.element ? document.getElementById(want.element) : null;
+      if (el) return el.focus();
+      if (listRef.current) return void listRef.current.focusRow(null);
+    } else if (want !== "search" && listRef.current) return void listRef.current.focusRow(want.row);
+    if (!focusSearch()) document.querySelector<HTMLElement>("main")?.focus();
   }, [pageOpen]);
-  const { clear: clearPages } = nav;
-  /** A sidebar click (or another way of going somewhere): the place changes and every page closes. */
+  const { clear: clearPages, open: openPage } = nav;
+  /** A sidebar click (or another way of going somewhere): the place changes and every page closes.
+   *  Recently Added starts newest first; in Active, All / Active / Inactive is hidden and set to All. */
   const goToPlace = useCallback(
     (v: LibraryView) => {
       setView(v);
+      if (v.kind === "recent") setRecentSort(RECENT_SORT);
+      if (v.kind === "active") setStatus("any");
       clearPages();
     },
     [clearPages],
+  );
+  /** Browse on Google Fonts or Purchases: that service's own page, over its list. */
+  const openCatalog = useCallback(
+    (service: CatalogPageEntry["service"]) => {
+      openPage({ kind: "catalog", service, returnTo: BROWSE_ID });
+      announce(`Opened the ${SERVICE_LABELS[service]} page`);
+    },
+    [openPage, announce],
   );
   // ⌘F (Ctrl+F on Windows) goes to Search, leaving a font page if one is open.
   useEffect(() => {
@@ -388,6 +434,7 @@ export default function App() {
           label: "Review",
           onClick: () => {
             goToPlace({ kind: "service", id: "purchases" });
+            openCatalog("purchases");
             // The page opens in the library, so leave settings if they're open.
             closeSettings();
           },
@@ -398,7 +445,7 @@ export default function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [countNewPurchases, closeSettings, goToPlace]);
+  }, [countNewPurchases, closeSettings, goToPlace, openCatalog]);
 
   // A folder view whose folder is gone (e.g. removed while a removal was still running) falls
   // back to All Fonts.
@@ -441,7 +488,7 @@ export default function App() {
   const sidebarShows = settings?.sidebar ?? DEFAULT_SETTINGS.sidebar;
   const sidebarKey = JSON.stringify(sidebarShows);
   useEffect(() => {
-    setView((v) => (hiddenBySidebar(v, sidebarShows, foldersRef.current) ? { kind: "all" } : v));
+    setView((v) => (hiddenBySidebar(v, sidebarShows, foldersRef.current, servicesRef.current) ? { kind: "all" } : v));
   }, [sidebarKey]);
 
   // "Ask me": fonts turned off while Fontface was closed are offered back once, at launch.
@@ -534,14 +581,17 @@ export default function App() {
       const on = new Set<string>();
       try {
         const outcomes = await api.setActivation(ids, active, scope, origin);
-        const state = new Map<number, boolean>();
+        const state = new Map<number, { active: boolean; temporary: boolean }>();
         for (const o of outcomes) {
           if (o.active) on.add(o.path);
-          for (const id of o.ids) state.set(id, o.active);
+          for (const id of o.ids) state.set(id, { active: o.active, temporary: o.temporary });
           if (o.error) toast.error(fileName(o.path), { description: o.error });
         }
         setFonts((list) =>
-          list.map((f) => (state.has(f.id) ? { ...f, activated: state.get(f.id)!, osActive: state.get(f.id)! } : f)),
+          list.map((f) => {
+            const now = state.get(f.id);
+            return now ? { ...f, activated: now.active, osActive: now.active, temporary: now.temporary } : f;
+          }),
         );
       } catch (e) {
         toast.error(String(e));
@@ -850,18 +900,28 @@ export default function App() {
         for (const id of new Set(face.copies.map((c) => c.folderId))) map.set(id, (map.get(id) ?? 0) + 1);
     return map;
   }, [allFamilies]);
-  // Tags narrow tag views and are searched too; location colors show on rows.
-  const filterContext = useFilterContext();
+  // Tags narrow tag views (and Not Tagged) and are searched too; Recently Added goes back 30
+  // days from now; a service's view lists its managed folder. Location colors show on rows.
+  const tagContext = useFilterContext();
+  const since = recentSince(useHourNow());
+  const filterContext = useMemo<FilterContext>(
+    () => ({ ...tagContext, recentSince: since, serviceFolder: (id) => services.find((s) => s.id === id)?.folderId ?? undefined }),
+    [tagContext, since, services],
+  );
   const locations = useLocations(folders, services);
   // A setting: All Fonts can leave out fonts that are only in the OS's font folders.
   const hideInstalled = settings ? !settings.showInstalledInAll : false;
+  // In Active, All / Active / Inactive would add nothing: it's hidden there, and counts as All.
+  const listStatus: StatusFilter = view.kind === "active" ? "any" : status;
   const filtered = useMemo(
-    () => filterFamilies(allFamilies, view, { status, query, variableOnly, hideInstalled }, filterContext),
-    [allFamilies, view, status, query, variableOnly, hideInstalled, filterContext],
+    () => filterFamilies(allFamilies, view, { status: listStatus, query, variableOnly, hideInstalled }, filterContext),
+    [allFamilies, view, listStatus, query, variableOnly, hideInstalled, filterContext],
   );
   // The View options (settings): layout, grouping, sort and the Table's columns. Grouping off
   // lists every style on its own; the sort runs after filtering.
-  const { layout, groupStyles, sort, tableColumns, tableDensity } = settings ?? DEFAULT_SETTINGS;
+  const { layout, groupStyles, sort: savedSort, tableColumns, tableDensity } = settings ?? DEFAULT_SETTINGS;
+  // Recently Added has a sort of its own (newest first to start with); everywhere else uses the saved one.
+  const sort = view.kind === "recent" ? recentSort : savedSort;
   // The Source sort goes by the place the Table's Source column names first.
   const sortContext = useMemo(() => ({ sourceOf: (f: Family) => familySources(f, locations.sourceOf)[0] ?? "" }), [locations]);
   const families = useMemo(
@@ -879,7 +939,8 @@ export default function App() {
     [updateSettings, announce],
   );
   const chooseSort = (next: SortOrder) => {
-    updateSettings({ sort: next });
+    if (view.kind === "recent") setRecentSort(next);
+    else updateSettings({ sort: next });
     announce(describeSort(next));
   };
   const chooseGrouping = (on: boolean) => {
@@ -890,7 +951,8 @@ export default function App() {
   // the library list is showing (not under settings, a page or a service's own page). Like Cmd+F
   // and Back, they wait while a menu, dialog or popover is open (the list it hands focus back to
   // would be gone) and during a drag (the rows being dragged would change under it).
-  const listShowing = !settingsOpen && !pageOpen && view.kind !== "service";
+  const adobePage = view.kind === "service" && view.id === "adobe";
+  const listShowing = !settingsOpen && !pageOpen && !adobePage;
   useEffect(() => {
     if (!listShowing) return;
     const onKey = (e: KeyboardEvent) => {
@@ -924,37 +986,23 @@ export default function App() {
   }, [allFamilies]);
   const tagIndex = useTagIndex();
   // What Back goes back to, in words.
-  const placeName =
-    view.kind === "all"
-      ? "All Fonts"
-      : view.kind === "installed"
-        ? INSTALLED_LABEL
-        : view.kind === "folder"
-          ? (folders.find((f) => f.id === view.id)?.label ?? "the folder")
-          : view.kind === "tag"
-            ? leafOf(tagIndex.byId.get(view.id)?.name ?? "the tag")
-            : view.kind === "location"
-              ? (view.path.split("/").pop() ?? "the folder")
-              : { google: "Google Fonts", adobe: "Adobe Fonts", purchases: "Purchases" }[view.id];
+  const placeName = placeLabel(view, { folders, fontBook: INSTALLED_LABEL, tagName: (id) => leafOf(tagIndex.byId.get(id)?.name ?? "") || undefined });
   placeNameRef.current = placeName;
   const styleCount = useMemo(() => filtered.reduce((n, f) => n + f.faces.length, 0), [filtered]);
-  const counts = useMemo(() => {
-    let all = 0;
-    let installed = 0;
-    // What All Fonts leaves out when it hides installed fonts (see filterFamilies).
-    let onlyInstalled = 0;
-    for (const family of allFamilies) {
-      all += family.faces.length;
-      installed += family.faces.filter((face) => face.installed).length;
-      onlyInstalled += family.faces.filter(onlyInOsFolders).length;
-    }
-    return { all: hideInstalled ? all - onlyInstalled : all, installed };
-  }, [allFamilies, hideInstalled]);
-  const viewScan = view.kind === "folder" ? scans.get(view.id) : [...scans.values()][0];
-  const resetKey = `${viewKey(view)}:${status}:${variableOnly}:${query}`;
+  const { hasOwnTag } = filterContext;
+  const counts = useMemo(() => placeCounts(allFamilies, { hideInstalled, recentSince: since, hasOwnTag }), [allFamilies, hideInstalled, since, hasOwnTag]);
+  // The source this view shows (its sidebar row), its library folders, and whether the toolbar
+  // offers its subfolders.
+  const source = sourceOf(view, folders, services);
+  const sourceKey = source ? `${source}:${sourceFolders(source, folders, services).map((f) => `${f.id}=${f.path}`).join(",")}` : "";
+  const sourceRoots = useMemo(() => (source ? sourceFolders(source, folders, services) : []), [sourceKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const offerSubfolders = useMemo(() => sourceRoots.length > 0 && (view.kind === "location" || hasSubfolders(sourceRoots, allFamilies)), [sourceRoots, allFamilies, view.kind]);
+  const browseService = source === "google" || source === "purchases" ? source : null;
+  const viewScan = sourceRoots.length ? sourceRoots.map((f) => scans.get(f.id)).find(Boolean) : [...scans.values()][0];
+  const resetKey = `${viewKey(view)}:${listStatus}:${variableOnly}:${query}`;
   // Empty list with filters on: say which fonts were asked for, e.g. "No active variable fonts here."
-  const filtersOn = !!query || status !== "any" || variableOnly;
-  const kinds = [status !== "any" && status, variableOnly && "variable", "fonts"].filter(Boolean).join(" ");
+  const filtersOn = !!query || listStatus !== "any" || variableOnly;
+  const kinds = [listStatus !== "any" && listStatus, variableOnly && "variable", "fonts"].filter(Boolean).join(" ");
   const where = view.kind === "tag" ? " with this tag" : view.kind === "location" ? " in this folder" : "";
   const noMatch = query ? `No ${kinds}${where} match “${query}”.` : `No ${kinds}${where || " here"}.`;
 
@@ -963,6 +1011,7 @@ export default function App() {
     settings,
     libraryLoaded,
     folders,
+    services,
     families: allFamilies,
     current: { view, status, variableOnly },
     apply: (last) => {
@@ -1014,37 +1063,14 @@ export default function App() {
               onCancelScan={(f) => api.cancelScan(f.id).catch((e) => toast.error(String(e)))}
               onOpenSettings={openSettings}
               onLocateFolder={relocate}
+              onRevealFolder={(f) => api.revealFolder(f.id).catch((e) => toast.error(`Couldn't show ${f.label}`, { description: String(e) }))}
             />
             <main className="relative flex min-h-0 min-w-0 flex-col outline-none" tabIndex={-1}>
               {/* The list layer: the place picked in the sidebar. While a page is open it stays as it
                   was (scroll, selection, loaded previews), hidden and out of reach underneath. */}
               <div inert={pageOpen} className={cn("flex min-h-0 flex-1 flex-col", pageOpen && "invisible")}>
-              {view.kind === "service" ? (
-                view.id === "google" ? (
-                  <GoogleFontsPanel
-                    fonts={googleFolder ? fonts.filter((f) => f.folderId === googleFolder.id) : []}
-                    previewText={previewText}
-                    busy={googleBusy}
-                    version={googleVersion}
-                    updatingAll={googleUpdatingAll}
-                    onInstall={installGoogle}
-                    onRemove={removeGoogle}
-                    onUpdateAll={updateAllGoogle}
-                  />
-                ) : view.id === "purchases" ? (
-                  <PurchasesPanel
-                    version={purchasesVersion}
-                    busy={purchaseBusy}
-                    onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
-                    onImport={importPurchase}
-                    onImportPath={importPurchasePath}
-                    onReplace={replacePurchase}
-                    onRemove={removePurchase}
-                    onSubscriptionEnded={purchaseSubscriptionEnded}
-                  />
-                ) : (
-                  <AdobeFontsPanel previewText={previewText} onStatus={(st) => setAdobeCount(st.faces.length)} />
-                )
+              {adobePage ? (
+                <AdobeFontsPanel previewText={previewText} onStatus={(st) => setAdobeCount(st.faces.length)} />
               ) : (
               <>
               <Toolbar
@@ -1052,8 +1078,9 @@ export default function App() {
                 onQuery={setQuery}
                 previewText={previewText}
                 onPreviewText={setPreviewText}
-                status={status}
+                status={listStatus}
                 onStatus={setStatus}
+                showStatus={view.kind !== "active"}
                 variableOnly={variableOnly}
                 onVariableOnly={setVariableOnly}
                 size={size}
@@ -1062,6 +1089,19 @@ export default function App() {
                 fontCount={styleCount}
                 layout={layout}
                 onLayout={chooseLayout}
+                subfolders={
+                  source && offerSubfolders ? (
+                    <SubfolderPicker
+                      sourceLabel={placeLabel(sourceView(source), { folders, fontBook: INSTALLED_LABEL, tagName: () => undefined })}
+                      roots={sourceRoots}
+                      families={allFamilies}
+                      selected={view.kind === "location" ? view.path : null}
+                      locations={locations}
+                      onPick={(path) => goToPlace(path === null ? sourceView(source) : { kind: "location", path })}
+                    />
+                  ) : undefined
+                }
+                browse={browseService ? <BrowseButton service={browseService} newPurchases={newPurchases} onBrowse={openCatalog} /> : undefined}
                 viewOptions={
                   <ViewOptions
                     layout={layout}
@@ -1093,6 +1133,7 @@ export default function App() {
                   locations={locations}
                   onActivate={setActivation}
                   onOpen={openFont}
+                  showAdded={view.kind === "recent"}
                   table={{
                     sort,
                     onSort: chooseSort,
@@ -1115,24 +1156,8 @@ export default function App() {
                 </div>
               ) : filtersOn ? (
                 <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">{noMatch}</div>
-              ) : view.kind === "tag" || view.kind === "location" ? (
-                <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
-                  {view.kind === "tag"
-                    ? "No fonts have this tag yet. Select fonts in another view, then tag them from the tag button or by right-clicking."
-                    : "No fonts in this folder."}
-                </div>
               ) : (
-                <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-                  <Icon name="font_download" size={40} weight={300} className="text-muted-foreground" />
-                  <h2 className="text-lg font-semibold">No fonts here yet</h2>
-                  <p className="max-w-sm text-sm text-muted-foreground">
-                    Add a folder of fonts. Fontface reads them where they are. Nothing is copied or moved.
-                  </p>
-                  <Button onClick={addFolder}>
-                    <Icon name="create_new_folder" size={16} />
-                    Add Folder…
-                  </Button>
-                </div>
+                <EmptyPlace view={view} libraryEmpty={allFamilies.length === 0} onAddFolder={addFolder} onBrowse={openCatalog} />
               )}
               </>
               )}
@@ -1142,6 +1167,37 @@ export default function App() {
                 const covered = i < nav.pages.length - 1;
                 return (
                   <div key={page.id} inert={covered} className={cn("absolute inset-0 flex flex-col bg-background", covered && "invisible")}>
+                    {page.kind === "catalog" ? (
+                      <CatalogPage placeName={placeName} onBack={nav.back}>
+                        {(back) =>
+                          page.service === "google" ? (
+                            <GoogleFontsPanel
+                              fonts={googleFolder ? fonts.filter((f) => f.folderId === googleFolder.id) : []}
+                              previewText={previewText}
+                              busy={googleBusy}
+                              version={googleVersion}
+                              updatingAll={googleUpdatingAll}
+                              onInstall={installGoogle}
+                              onRemove={removeGoogle}
+                              onUpdateAll={updateAllGoogle}
+                              back={back}
+                            />
+                          ) : (
+                            <PurchasesPanel
+                              version={purchasesVersion}
+                              busy={purchaseBusy}
+                              onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
+                              onImport={importPurchase}
+                              onImportPath={importPurchasePath}
+                              onReplace={replacePurchase}
+                              onRemove={removePurchase}
+                              onSubscriptionEnded={purchaseSubscriptionEnded}
+                              back={back}
+                            />
+                          )
+                        }
+                      </CatalogPage>
+                    ) : (
                     <FontPage
                       page={page}
                       family={familyOfFace.get(page.styleKey) ?? familyOfFace.get(page.faceKey)}
@@ -1157,6 +1213,7 @@ export default function App() {
                       onActivate={setActivation}
                       onReveal={revealFont}
                     />
+                    )}
                   </div>
                 );
               })}
@@ -1172,12 +1229,13 @@ export default function App() {
               onAddFolder={addFolder}
               onTurnOffAll={turnOffAll}
               onPurchasesChanged={() => {
-                // The Purchases page stays mounted underneath; have it read its state again.
+                // The Purchases page may be open underneath; have it read its state again.
                 setPurchasesVersion((v) => v + 1);
                 countNewPurchases();
               }}
               onOpenPurchases={() => {
                 goToPlace({ kind: "service", id: "purchases" });
+                openCatalog("purchases");
                 closeSettings();
               }}
             />
@@ -1220,5 +1278,99 @@ export default function App() {
         </div>
       </TooltipProvider>
     </SettingsContext.Provider>
+  );
+}
+
+/** Browse, on Google Fonts and Purchases: opens the service's own page (the catalog, or new
+ *  downloads and imports) over the list, with Back. Purchases shows how many downloads are new. */
+function BrowseButton({ service, newPurchases, onBrowse }: { service: CatalogPageEntry["service"]; newPurchases: number; onBrowse: (service: CatalogPageEntry["service"]) => void }) {
+  const google = service === "google";
+  const fresh = !google && newPurchases > 0;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            id={BROWSE_ID}
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            aria-label={google ? "Browse Google Fonts" : `Browse purchases${fresh ? `, ${newPurchases.toLocaleString()} new ${newPurchases === 1 ? "download" : "downloads"}` : ""}`}
+            onClick={() => onBrowse(service)}
+          />
+        }
+      >
+        <Icon name={google ? "travel_explore" : "storefront"} size={16} />
+        <span className="@max-[1000px]/toolbar:hidden">Browse</span>
+        {fresh && (
+          <span aria-hidden className="rounded-full bg-primary px-1.5 font-mono text-[11px] text-primary-foreground tabular-nums">
+            {newPurchases.toLocaleString()}
+          </span>
+        )}
+      </TooltipTrigger>
+      <TooltipContent>{google ? "Browse and download Google Fonts" : "Review new downloads, import fonts you bought, and manage watched folders"}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** What an empty place says, with a way to fill it where there is one. */
+function EmptyPlace({
+  view,
+  libraryEmpty,
+  onAddFolder,
+  onBrowse,
+}: {
+  view: LibraryView;
+  /** No fonts at all yet. */
+  libraryEmpty: boolean;
+  onAddFolder: () => void;
+  onBrowse: (service: CatalogPageEntry["service"]) => void;
+}) {
+  const quiet = (text: string) => <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">{text}</div>;
+  if (view.kind === "service" && view.id !== "adobe") {
+    const google = view.id === "google";
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+        <Icon name={google ? "cloud" : "shopping_bag"} size={40} weight={300} className="text-muted-foreground" />
+        <h2 className="text-lg font-semibold">{google ? "No Google Fonts in your library yet" : "No purchased fonts in your library yet"}</h2>
+        <p className="max-w-sm text-sm text-muted-foreground">
+          {google
+            ? "Browse Google Fonts to download free fonts. They're added here and turned on."
+            : "Browse your purchases to add fonts you bought, from your downloads or from a zip or folder."}
+        </p>
+        <Button onClick={() => onBrowse(view.id as CatalogPageEntry["service"])}>
+          <Icon name={google ? "travel_explore" : "storefront"} size={16} />
+          {google ? "Browse Google Fonts" : "Browse Purchases"}
+        </Button>
+      </div>
+    );
+  }
+  if (!libraryEmpty) {
+    switch (view.kind) {
+      case "tag":
+        return quiet("No fonts have this tag yet. Select fonts in another view, then tag them from the tag button or by right-clicking.");
+      case "location":
+      case "folder":
+        return quiet("No fonts in this folder.");
+      case "recent":
+        return quiet("No fonts were added in the last 30 days.");
+      case "active":
+        return quiet(`No fonts are on right now, apart from the ones ${IS_MAC ? "macOS" : "Windows"} always keeps on.`);
+      case "untagged":
+        return quiet("Every font has at least one of your tags.");
+      case "installed":
+        return quiet(`No fonts are installed in ${IS_MAC ? "macOS" : "Windows"}'s font folders.`);
+    }
+  }
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+      <Icon name="font_download" size={40} weight={300} className="text-muted-foreground" />
+      <h2 className="text-lg font-semibold">{view.kind === "yours" && !libraryEmpty ? "No fonts of your own yet" : "No fonts here yet"}</h2>
+      <p className="max-w-sm text-sm text-muted-foreground">Add a folder of fonts. Fontface reads them where they are. Nothing is copied or moved.</p>
+      <Button onClick={onAddFolder}>
+        <Icon name="create_new_folder" size={16} />
+        Add Folder…
+      </Button>
+    </div>
   );
 }
