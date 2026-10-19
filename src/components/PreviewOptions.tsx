@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { ChoiceGroup } from "./ChoiceGroup";
+import { Tip } from "./Tip";
 
 /** Ready-made inks and papers; the color well picks any other. */
 const INKS = [
@@ -32,6 +33,19 @@ const PAPERS = [
   { value: "#1d2a5a", label: "Navy" },
   { value: "#000000", label: "Black" },
 ] as const;
+
+/** What picking each alignment and case does, for their tooltips. */
+const ALIGN_TIPS: Record<PreviewOptions["align"], string> = {
+  left: "Lines previews up on the left",
+  center: "Centers previews",
+  right: "Lines previews up on the right",
+};
+const CASE_TIPS: Record<PreviewOptions["case"], string> = {
+  asTyped: "Shows previews as typed",
+  upper: "Shows previews in capitals",
+  lower: "Shows previews in small letters",
+  title: "Starts each word in previews with a capital",
+};
 
 interface Props {
   preview: PreviewOptions;
@@ -55,17 +69,23 @@ export function PreviewOptionsSection({ preview, onPreview, dark }: Props) {
         <h2 id={`${id}-title`} className="text-sm font-medium">
           Preview
         </h2>
-        {/* Stays focusable once there's nothing to reset, so focus stays in the popover. */}
-        <Button
-          variant="ghost"
-          size="xs"
-          disabled={isDefaultPreview(preview)}
-          focusableWhenDisabled
-          className="aria-disabled:opacity-50"
-          onClick={() => onPreview({ align: "left", case: "asTyped", outline: false, underline: false, ink: null, paper: null, features: [] })}
+        {/* Stays focusable once there's nothing to reset, so focus stays in the popover (and its
+            tooltip still says why it's greyed out). */}
+        <Tip
+          tip="Puts alignment, case, lines, features and colors back to the defaults"
+          disabledReason={isDefaultPreview(preview) && "Nothing to reset: the preview already uses the defaults"}
         >
-          Reset preview
-        </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={isDefaultPreview(preview)}
+            focusableWhenDisabled
+            className="aria-disabled:opacity-50"
+            onClick={() => onPreview({ align: "left", case: "asTyped", outline: false, underline: false, ink: null, paper: null, features: [] })}
+          >
+            Reset preview
+          </Button>
+        </Tip>
       </div>
 
       <Row label="Alignment" id={`${id}-align`}>
@@ -81,6 +101,7 @@ export function PreviewOptionsSection({ preview, onPreview, dark }: Props) {
                 {a.label}
               </span>
             ),
+            tip: ALIGN_TIPS[a.id],
           }))}
         />
       </Row>
@@ -101,17 +122,22 @@ export function PreviewOptionsSection({ preview, onPreview, dark }: Props) {
                   <span className="sr-only">{c.label}</span>
                 </>
               ),
+            tip: CASE_TIPS[c.id],
           }))}
         />
       </Row>
 
       <div className="flex flex-wrap gap-x-5 gap-y-1.5" role="group" aria-label="Lines">
         <label className="flex items-center gap-2 text-sm">
-          <Checkbox checked={preview.outline} onCheckedChange={(on) => onPreview({ outline: on })} />
+          <Tip tip="Draws previews as outlines, with no fill">
+            <Checkbox checked={preview.outline} onCheckedChange={(on) => onPreview({ outline: on })} />
+          </Tip>
           Outline
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <Checkbox checked={preview.underline} onCheckedChange={(on) => onPreview({ underline: on })} />
+          <Tip tip="Underlines previews, with the font's own underline">
+            <Checkbox checked={preview.underline} onCheckedChange={(on) => onPreview({ underline: on })} />
+          </Tip>
           Underline
         </label>
       </div>
@@ -119,14 +145,17 @@ export function PreviewOptionsSection({ preview, onPreview, dark }: Props) {
       <Row label="Features" id={`${id}-features`}>
         <div role="group" aria-labelledby={`${id}-features`} className="grid grid-cols-2 gap-x-3 gap-y-1.5">
           {PREVIEW_FEATURES.map((f) => (
-            <label key={f.id} className="flex items-center gap-2 text-sm" title={f.description}>
-              <Checkbox
-                checked={preview.features.includes(f.id)}
-                onCheckedChange={(on) =>
-                  onPreview({ features: PREVIEW_FEATURES.map((x) => x.id).filter((x) => (x === f.id ? on : preview.features.includes(x))) })
-                }
-                aria-describedby={`${id}-${f.id}`}
-              />
+            <label key={f.id} className="flex items-center gap-2 text-sm">
+              {/* Its description is already the same words. */}
+              <Tip tip={f.description} describe={false}>
+                <Checkbox
+                  checked={preview.features.includes(f.id)}
+                  onCheckedChange={(on) =>
+                    onPreview({ features: PREVIEW_FEATURES.map((x) => x.id).filter((x) => (x === f.id ? on : preview.features.includes(x))) })
+                  }
+                  aria-describedby={`${id}-${f.id}`}
+                />
+              </Tip>
               {f.label}
               <span id={`${id}-${f.id}`} className="sr-only">
                 {f.description}
@@ -229,6 +258,8 @@ function ColorChoice({
     refs.current[n]?.focus();
   };
   const custom = isColor(shown) && checked < 0;
+  /** "ink", "paper", in the tooltips' words. */
+  const kind = label.toLowerCase();
   return (
     <div className="flex flex-col gap-1.5">
       <span id={id} className="text-xs font-medium text-muted-foreground">
@@ -254,36 +285,36 @@ function ColorChoice({
           {choices.map((c, i) => {
             const on = i === checked;
             return (
-              <button
-                key={c.label}
-                ref={(el) => {
-                  refs.current[i] = el;
-                }}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                aria-label={c.value ? c.label : "Theme's color"}
-                title={c.value ? c.label : "The theme's color"}
-                // One Tab stop: the chosen color, or Theme while a color from the well is chosen.
-                tabIndex={on || (checked < 0 && i === 0) ? 0 : -1}
-                onClick={() => choose(c.value)}
-                className={cn(
-                  "flex size-6 items-center justify-center rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-                  on ? "ring-2 ring-primary ring-offset-1 ring-offset-popover" : "",
-                )}
-              >
-                {c.value ? (
-                  <span className="size-5 rounded-full border border-foreground/20" style={{ background: c.value }} />
-                ) : (
-                  // Theme: half the theme's color, half the page's.
-                  <span
-                    className="flex size-5 items-center justify-center rounded-full border border-foreground/20 text-[9px] font-semibold"
-                    style={{ background: theme, color: readableOn(theme) }}
-                  >
-                    A
-                  </span>
-                )}
-              </button>
+              <Tip key={c.label} tip={c.value ? `Uses ${c.label.toLowerCase()} ${kind}` : `Uses the theme's ${kind} color`}>
+                <button
+                  ref={(el) => {
+                    refs.current[i] = el;
+                  }}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  aria-label={c.value ? c.label : "Theme's color"}
+                  // One Tab stop: the chosen color, or Theme while a color from the well is chosen.
+                  tabIndex={on || (checked < 0 && i === 0) ? 0 : -1}
+                  onClick={() => choose(c.value)}
+                  className={cn(
+                    "flex size-6 items-center justify-center rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                    on ? "ring-2 ring-primary ring-offset-1 ring-offset-popover" : "",
+                  )}
+                >
+                  {c.value ? (
+                    <span className="size-5 rounded-full border border-foreground/20" style={{ background: c.value }} />
+                  ) : (
+                    // Theme: half the theme's color, half the page's.
+                    <span
+                      className="flex size-5 items-center justify-center rounded-full border border-foreground/20 text-[9px] font-semibold"
+                      style={{ background: theme, color: readableOn(theme) }}
+                    >
+                      A
+                    </span>
+                  )}
+                </button>
+              </Tip>
             );
           })}
         </div>
@@ -292,7 +323,6 @@ function ColorChoice({
             "relative ml-1 flex size-6 cursor-pointer items-center justify-center rounded-full has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50",
             custom && "ring-2 ring-primary ring-offset-1 ring-offset-popover",
           )}
-          title={`Another ${label.toLowerCase()} color`}
         >
           <span
             className="flex size-5 items-center justify-center rounded-full border border-foreground/20"
@@ -300,22 +330,25 @@ function ColorChoice({
           >
             {!custom && <Icon name="add" size={12} className="text-white mix-blend-difference" />}
           </span>
-          <input
-            type="color"
-            aria-label={`Another ${label.toLowerCase()} color`}
-            className="absolute inset-0 size-full cursor-pointer opacity-0"
-            value={isColor(shown) ? shown.toLowerCase() : theme}
-            onChange={(e) => {
-              const next = e.target.value;
-              setDraft(next);
-              pending.current = next;
-              clearTimeout(timer.current);
-              timer.current = setTimeout(() => {
-                commit();
-                setDraft(null);
-              }, 200);
-            }}
-          />
+          {/* The color well covers the whole circle, so it takes the pointer. */}
+          <Tip tip={`Picks any other ${kind} color`}>
+            <input
+              type="color"
+              aria-label={`Another ${kind} color`}
+              className="absolute inset-0 size-full cursor-pointer opacity-0"
+              value={isColor(shown) ? shown.toLowerCase() : theme}
+              onChange={(e) => {
+                const next = e.target.value;
+                setDraft(next);
+                pending.current = next;
+                clearTimeout(timer.current);
+                timer.current = setTimeout(() => {
+                  commit();
+                  setDraft(null);
+                }, 200);
+              }}
+            />
+          </Tip>
         </label>
       </div>
     </div>

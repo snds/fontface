@@ -32,6 +32,8 @@ import {
   SORT_DESC_ITEM,
   SORT_ITEMS,
   switchScope,
+  switchTip,
+  actionTip,
   turnOnLabel,
   type ActionContext,
   type FontTarget,
@@ -340,4 +342,50 @@ test("menu state: the list's commands only while it shows; Back only with a page
 
   assert.equal(menuStateKey(list), menuStateKey({ ...list, enabled: [...list.enabled].reverse() }), "order doesn't matter");
   assert.notEqual(menuStateKey(list), menuStateKey(page));
+});
+
+test("a font switch's tooltip says what a click does now", () => {
+  const off = { lock: null, total: 12, on: 0, wanted: 0, temporary: 0, waiting: 0, elsewhere: 0, locked: 0, macos: 0 };
+  const ctx = { mode: "persistent" as const, mac: true };
+  assert.equal(switchTip(off, false, ctx), "Turns on all 12 styles. Option-click to turn on until you log out.");
+  assert.equal(switchTip({ ...off, on: 3, wanted: 3 }, false, ctx), "Turns on the other 9 styles. Option-click to turn on until you log out.");
+  assert.equal(switchTip({ ...off, on: 11, wanted: 11 }, false, ctx), "Turns on the other style. Option-click to turn on until you log out.");
+  assert.equal(switchTip({ ...off, on: 12, wanted: 12 }, false, ctx), "Turns off all 12 styles");
+  assert.equal(switchTip({ ...off, wanted: 12, waiting: 12 }, false, ctx), "Turns off all 12 styles", "set to turn on counts as on");
+  const one = { ...off, total: 1 };
+  assert.equal(switchTip(one, true, { mode: "temporary", mac: false }), "Turns on this style. Alt-click to turn on until you turn it off.");
+  assert.equal(switchTip({ ...one, on: 1, wanted: 1 }, true, ctx), "Turns off this style");
+  assert.equal(switchTip({ ...one, locked: 3 }, false, ctx), "Turns on its 1 style. Option-click to turn on until you log out.", "a family with one style that isn't always on");
+  assert.equal(switchTip(off, false, { ...ctx, untilQuit: true }), "Turns on all 12 styles. Option-click to turn on until you quit Fontface.");
+});
+
+test("each font action's tooltip says what it does, or why it's greyed out", () => {
+  const tip = (id: Parameters<typeof actionTip>[0], target: FontTarget, mac = true) =>
+    actionTip(id, fontActionStates(target, ctx)[id].enabled, target, { mode: "persistent", mac });
+  const inter = listTarget("Inter");
+  assert.equal(tip("open", inter), "Opens this font's page");
+  assert.equal(tip("turnOn", inter), "Turns this family on until you turn it off");
+  assert.equal(tip("turnOnOther", inter), "Turns this family on until you log out");
+  assert.equal(tip("turnOff", listTarget("Lora")), "It's already off");
+  assert.equal(tip("turnOn", listTarget("Helvetica")), "Always on: it's in macOS Fonts");
+  assert.equal(tip("reveal", listTarget("Inter/Bold"), false), "Shows its font file in Explorer");
+  assert.equal(tip("remove", listTarget("Roboto")), "Only fonts in your own folders can be removed from the library");
+  assert.equal(tip("remove", inter), "Stops listing this family and turns it off, after asking. Nothing is deleted.");
+
+  const two = listTarget("Inter", "Lora");
+  assert.equal(tip("open", two), "Select just one font to open its page");
+  assert.equal(tip("turnOn", two), "Turns the selected fonts on until you turn them off");
+  assert.equal(tip("compare", two), "Shows the selected fonts side by side");
+  assert.equal(tip("pair", two), "Pairs them: the first as heading, the second as body text");
+
+  const page = pageTarget(fam("Inter"), fam("Inter").representative);
+  assert.equal(tip("open", page), "This font's page is already open");
+  assert.equal(tip("info", page), "Shows this font's details on the Info tab");
+  // One sentence has no closing period; two or more end each with one.
+  for (const id of ACTION_ORDER.map((a) => a.id)) {
+    for (const t of [inter, two, page]) {
+      const words = tip(id, t);
+      assert.equal(words.endsWith("."), /\. [A-Z]/.test(words), `${id}: ${words}`);
+    }
+  }
 });

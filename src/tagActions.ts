@@ -1,7 +1,7 @@
 import type { ActivationMode, ActivationOutcome } from "./api.ts";
 import { optionClickHint, otherMode } from "./fontActions.ts";
 import { summarize, switchLook, type StateSummary } from "./fontState.ts";
-import { activationIds, type Face, type Family } from "./library.ts";
+import { activationIds, INSTALLED_LABEL, type Face, type Family } from "./library.ts";
 
 /**
  * What can be done to a tag, and what it covers: the tag's right-click and "…" menus, the switch
@@ -246,8 +246,8 @@ export function tagTurnOnLabel(mode: ActivationMode, untilQuit = false): string 
 const lasts = (mode: ActivationMode, untilQuit = false) =>
   mode === "persistent" ? "They stay on until you turn them off." : untilQuit ? "They go off when you quit Fontface." : "They go off when you log out.";
 
-export const NO_FONTS_TIP = "No fonts in your library have this tag.";
-const ALWAYS_ON_TIP = "Its fonts are always on: they're installed in macOS's font folders.";
+export const NO_FONTS_TIP = "No fonts in your library have this tag";
+const ALWAYS_ON_TIP = `Its fonts are always on: they're in ${INSTALLED_LABEL}`;
 
 /** The tag menu's Turn on (the saved mode), Turn on (the other mode) and Turn off, for a tag whose set is `set`. */
 export function tagSwitchStates(name: string, set: readonly Face[], ctx: TagSwitchContext): Record<"turnOn" | "turnOnOther" | "turnOff", TagActionState> {
@@ -258,7 +258,7 @@ export function tagSwitchStates(name: string, set: readonly Face[], ctx: TagSwit
     const label = tagTurnOnLabel(mode, ctx.untilQuit);
     if (!set.length) return { enabled: false, label, tip: NO_FONTS_TIP };
     if (s.total === 0) return { enabled: false, label, tip: ALWAYS_ON_TIP };
-    if (off === 0) return { enabled: false, label, tip: s.total === 1 ? `The font in “${name}” is already on.` : `All ${fonts(s.total)} in “${name}” are already on.` };
+    if (off === 0) return { enabled: false, label, tip: s.total === 1 ? `The font in “${name}” is already on` : `All ${fonts(s.total)} in “${name}” are already on` };
     const which = s.on === 0 ? (s.total === 1 ? "the font" : `all ${fonts(s.total)}`) : `the ${fonts(off)} that ${off === 1 ? "is" : "are"} off`;
     return { enabled: true, label, tip: `Turns on ${which} in “${name}”${inside}. ${lasts(mode, ctx.untilQuit)}` };
   };
@@ -266,10 +266,10 @@ export function tagSwitchStates(name: string, set: readonly Face[], ctx: TagSwit
   let turnOff: TagActionState;
   if (!set.length) turnOff = { enabled: false, label, tip: NO_FONTS_TIP };
   else if (s.total === 0) turnOff = { enabled: false, label, tip: ALWAYS_ON_TIP };
-  else if (s.wanted === 0) turnOff = { enabled: false, label, tip: `None of the fonts in “${name}” are on.` };
+  else if (s.wanted === 0) turnOff = { enabled: false, label, tip: `None of the fonts in “${name}” are on` };
   else {
     const which = s.wanted === 1 ? "the 1 font that is" : `the ${fonts(s.wanted)} that are`;
-    turnOff = { enabled: true, label, tip: `Turns off ${which} on in “${name}”${inside}, however ${s.wanted === 1 ? "it was" : "they were"} turned on.` };
+    turnOff = { enabled: true, label, tip: `Turns off ${which} on in “${name}”${inside}, however ${s.wanted === 1 ? "it was" : "they were"} turned on` };
   }
   return { turnOn: turnOn(ctx.mode), turnOnOther: turnOn(otherMode(ctx.mode)), turnOff };
 }
@@ -288,7 +288,7 @@ export function tagSwitchTip(name: string, s: StateSummary, { mode, untilQuit = 
   }
   const hint = optionClickHint(mode, mac, untilQuit);
   if (partial) return `${s.on.toLocaleString()} of ${fonts(s.total)} in “${name}” ${s.on === 1 ? "is" : "are"} on. Click to turn on the rest. ${hint}`;
-  return `${one ? "Turn on the font" : `Turn on all ${fonts(s.total)}`} in “${name}”. ${hint}`;
+  return `${one ? "Turns on the font" : `Turns on all ${fonts(s.total)}`} in “${name}”. ${hint}`;
 }
 
 // ------------------------------------------------------------------------ editing a tag
@@ -321,25 +321,25 @@ export function tagEditStates(tag: TagLike, top: TagLike, { nested = false }: { 
   return {
     rename: locked
       ? state(false, "Rename…", `Built-in tags can't be renamed. ${first}`)
-      : state(true, "Rename…", "Change its name. A “/” in the name puts it inside another tag."),
-    color: locked ? state(false, "Color", `Built-in tags keep their color. ${first}`) : state(true, "Color", "Change its color."),
+      : state(true, "Rename…", "Changes its name. A “/” in the name puts it inside another tag."),
+    color: locked ? state(false, "Color", `Built-in tags keep their color. ${first}`) : state(true, "Color", "Changes its color"),
     newInside: locked
       ? state(false, "New tag inside…", `Tags can't go inside a built-in tag. ${first}`)
-      : state(true, "New tag inside…", `Make a new tag inside “${tag.name}”.`),
+      : state(true, "New tag inside…", `Makes a new tag inside “${tag.name}”`),
     moveTo: locked
       ? state(false, "Move to", `Built-in tags can't be moved. ${first}`)
-      : state(true, "Move to", "Put it inside another of your tags, or back at the top level."),
-    export: state(true, "Export…", `Save it${nested ? " and the tags inside it" : ""} to a file, to Finder tags, or to this Mac's font collections.`),
+      : state(true, "Move to", "Puts it inside another of your tags, or back at the top level"),
+    export: state(true, "Export…", `Saves it${nested ? " and the tags inside it" : ""} to a file, to Finder tags, or to this Mac's font collections`),
     delete: locked
       ? state(false, "Delete…", `Built-in tags can't be deleted. ${first} To hide them instead, turn off Built-in tags in Settings › Sidebar.`)
-      : state(true, "Delete…", nested ? "Delete it and the tags inside it. The fonts stay in your library." : "Delete the tag. The fonts stay in your library."),
+      : state(true, "Delete…", nested ? "Deletes it and the tags inside it. The fonts stay in your library." : "Deletes the tag. The fonts stay in your library."),
     makeMine: locked
       ? state(
           true,
           inside ? `Make “${top.name}” my tag` : "Make it my tag",
           `Moves “${top.name}”${inside || nested ? " and the tags inside it" : ""} to My tags. Then you can rename, recolor and delete ${inside || nested ? "them" : "it"}, and change ${inside || nested ? "their" : "its"} fonts.`,
         )
-      : state(false, "Make it my tag", "It's already your tag."),
+      : state(false, "Make it my tag", "It's already your tag"),
   };
 }
 

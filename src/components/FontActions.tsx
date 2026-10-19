@@ -1,12 +1,13 @@
 import { createContext, Fragment, useContext } from "react";
-import { ACTION_ORDER, shortcutText, type ActionStates, type FontActionId, type FontTarget } from "@/fontActions";
+import { ACTION_ORDER, actionTip, shortcutText, type ActionStates, type FontActionId, type FontTarget } from "@/fontActions";
 import { ContextMenuShortcut } from "@/components/ui/context-menu";
 import { DropdownMenuShortcut } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
 import { SyncFontMenuItems } from "@/sync/SyncFontMenu";
 import { FontMenuLabel, TagSubmenus } from "@/tags/FontMenu";
-import { CONTEXT, DROPDOWN } from "@/tags/menus";
 import type { TagIndex } from "@/tags/model";
+import { useStateWording } from "./ActivationSwitch";
+import { CONTEXT, DROPDOWN, TipItem } from "./Tip";
 import { IS_MAC } from "./TitleBar";
 
 /**
@@ -60,6 +61,7 @@ interface Props {
  */
 export function FontActionItems({ kind, target, index, only, returnTo }: Props) {
   const api = useFontActions();
+  const { mode = "persistent", untilQuit = false } = useStateWording();
   if (!api) return null;
   const kit = kind === "context" ? CONTEXT : DROPDOWN;
   const Shortcut = kind === "context" ? ContextMenuShortcut : DropdownMenuShortcut;
@@ -74,11 +76,18 @@ export function FontActionItems({ kind, target, index, only, returnTo }: Props) 
         return (
           <Fragment key={id}>
             {gap && i > 0 && <kit.Separator />}
-            <kit.Item disabled={!state.enabled} variant={id === "remove" ? "destructive" : undefined} onClick={() => api.run(id, target, { returnTo })}>
+            {/* The shortcut the item shows isn't repeated in its tooltip. */}
+            <TipItem
+              kit={kit}
+              tip={actionTip(id, state.enabled, target, { mode, untilQuit, mac: IS_MAC })}
+              disabled={!state.enabled}
+              variant={id === "remove" ? "destructive" : undefined}
+              onClick={() => api.run(id, target, { returnTo })}
+            >
               <Icon name={ICONS[id]} size={16} />
               {state.label}
               {keys && <Shortcut>{keys}</Shortcut>}
-            </kit.Item>
+            </TipItem>
             {id === "tags" && kind === "context" && index && target.faces.length > 0 && <TagSubmenus faces={target.faces} index={index} />}
           </Fragment>
         );

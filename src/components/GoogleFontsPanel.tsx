@@ -35,10 +35,10 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { catalogItems } from "@/catalogOrder";
 import { ChoiceGroup } from "./ChoiceGroup";
+import { createTipHandle, ROW_TIP_DELAY, Tip, TipHost, type TipHandle } from "./Tip";
 import { IS_MAC, PageHeader, type PageBack } from "./TitleBar";
 
 interface Props {
@@ -67,20 +67,23 @@ interface Props {
   back?: PageBack;
 }
 
-const CATEGORIES: { value: string; label: string }[] = [
-  { value: "", label: "All" },
-  { value: "sans-serif", label: "Sans Serif" },
-  { value: "serif", label: "Serif" },
-  { value: "display", label: "Display" },
-  { value: "handwriting", label: "Handwriting" },
-  { value: "monospace", label: "Monospace" },
-  { value: "icons", label: "Icons" },
+const CATEGORIES: { value: string; label: string; tip: string }[] = [
+  { value: "", label: "All", tip: "Shows families of every category" },
+  { value: "sans-serif", label: "Sans Serif", tip: "Shows only sans serif families" },
+  { value: "serif", label: "Serif", tip: "Shows only serif families" },
+  { value: "display", label: "Display", tip: "Shows only display families, for headings and big sizes" },
+  { value: "handwriting", label: "Handwriting", tip: "Shows only handwriting and script families" },
+  { value: "monospace", label: "Monospace", tip: "Shows only monospace families, for code" },
+  { value: "icons", label: "Icons", tip: "Shows only icon fonts" },
 ];
 
 type Show = "all" | "installed" | "updates";
 
 /** What "Yours first" does, for its tooltip and screen readers. */
 const YOURS_FIRST_HINT = "Families you have, downloaded here or already in your library, come first. Turn it off for A to Z.";
+
+/** Why a row's button is greyed out while its family is being downloaded or removed. */
+const ROW_BUSY_TIP = "Wait: Fontface is still downloading or removing this family";
 
 /** How tall a group's heading is in the list ("Yours first"). */
 const HEADING_HEIGHT = 32;
@@ -123,17 +126,21 @@ function useRetry(request: PreviewRequest | undefined, path: string | undefined,
 }
 
 /** The name in the interface font, the same height as a preview. `note`: why it isn't in its own
- *  font, on hover and for screen readers. `hidden`: kept invisible while a preview loads. */
-function PlainName({ family, note, hidden }: { family: GoogleFamily; note?: string; hidden?: boolean }) {
+ *  font, on hover (the list's shared tooltip, `tips`) and for screen readers. `hidden`: kept
+ *  invisible while a preview loads. */
+function PlainName({ family, note, hidden, tips }: { family: GoogleFamily; note?: string; hidden?: boolean; tips: TipHandle }) {
   return (
-    <div
-      className={cn("truncate text-lg font-medium transition-opacity", hidden && "preview-loading")}
-      style={{ height: PREVIEW_HEIGHT, lineHeight: `${PREVIEW_HEIGHT}px` }}
-      title={note}
-    >
-      {family.family}
-      {note && <span className="sr-only">. {note}</span>}
-    </div>
+    // Always wrapped, so the name never remounts when a note arrives. The note is in the name's
+    // words already, for screen readers.
+    <Tip handle={tips} tip={note} hide={!note} describe={false} delay={ROW_TIP_DELAY} contentClassName="max-w-xs">
+      <div
+        className={cn("truncate text-lg font-medium transition-opacity", hidden && "preview-loading")}
+        style={{ height: PREVIEW_HEIGHT, lineHeight: `${PREVIEW_HEIGHT}px` }}
+      >
+        {family.family}
+        {note && <span className="sr-only">. {note}</span>}
+      </div>
+    </Tip>
   );
 }
 
@@ -142,15 +149,14 @@ function PlainName({ family, note, hidden }: { family: GoogleFamily; note?: stri
 function YourCopy({ font }: { font: FontSummary }) {
   const note = yourCopyNote(fileName(font.path));
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="shrink-0" />}>
+    <Tip tip={note} describe={false} contentClassName="max-w-xs">
+      <span className="shrink-0">
         <Badge variant="outline" className="text-muted-foreground">
           Your copy
         </Badge>
         <span className="sr-only">. {note}</span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">{note}</TooltipContent>
-    </Tooltip>
+      </span>
+    </Tip>
   );
 }
 
@@ -163,16 +169,16 @@ function AlphabetHint({ text }: { text: string }) {
   if (!outside.length) return null;
   const list = outside.join(" ");
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex shrink-0 items-center text-muted-foreground" />}>
+    <Tip
+      tip={`Can't preview ${list} here. Online previews only hold basic Latin letters, so the text you type never leaves your ${COMPUTER}. Download the family to see everything it has.`}
+      describe={false}
+      contentClassName="max-w-xs"
+    >
+      <span className="inline-flex shrink-0 items-center text-muted-foreground">
         <Icon name="privacy_tip" size={14} />
         <span className="sr-only">Can't preview here: {list}.</span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        Can't preview {list} here. Online previews only hold basic Latin letters, so the text you type never leaves your{" "}
-        {COMPUTER}. Download the family to see everything it has.
-      </TooltipContent>
-    </Tooltip>
+      </span>
+    </Tip>
   );
 }
 
@@ -188,11 +194,14 @@ function FamilyInfo({
   match,
   text,
   online,
+  tips,
 }: {
   family: GoogleFamily;
   match: LibraryMatch<FontSummary> | undefined;
   text: string;
   online: boolean;
+  /** The list's shared tooltip. */
+  tips: TipHandle;
 }) {
   const icons = family.category === "icons";
   const font = match?.font;
@@ -281,7 +290,7 @@ function FamilyInfo({
           sample={f.sample}
         />
       ) : (
-        <PlainName family={family} note={shown.kind === "plain" ? shown.note : undefined} hidden={shown.kind === "plain" && shown.hidden} />
+        <PlainName family={family} note={shown.kind === "plain" ? shown.note : undefined} hidden={shown.kind === "plain" && shown.hidden} tips={tips} />
       )}
       {/* One line, always as tall as a badge: what it holds can change (a badge arrives with a
           preview), its height can't, so the row never moves the rows below it. */}
@@ -343,6 +352,8 @@ export function GoogleFontsPanel({
   const [show, setShow] = useState<Show>("all");
   const scrollRef = useRef<HTMLDivElement>(null);
   const yoursFirstHintId = useId();
+  // One tooltip shared by the list's rows (thousands of families, drawn as they scroll by).
+  const [tips] = useState(createTipHandle);
 
   const load = async (refresh = false) => {
     setLoading(true);
@@ -424,10 +435,12 @@ export function GoogleFontsPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader icon="cloud" title="Google Fonts" back={back}>
-        <Button variant="outline" size="sm" onClick={() => load(true)} disabled={loading}>
-          <Icon name="refresh" size={16} className={cn(loading && "animate-spin")} />
-          Refresh
-        </Button>
+        <Tip tip="Checks Google Fonts for new families and updates" disabledReason={loading && "Wait: Fontface is still loading the catalog"}>
+          <Button variant="outline" size="sm" onClick={() => load(true)} disabled={loading} focusableWhenDisabled className="aria-disabled:opacity-50">
+            <Icon name="refresh" size={16} className={cn(loading && "animate-spin")} />
+            Refresh
+          </Button>
+        </Tip>
       </PageHeader>
       <div className="flex flex-col gap-3 border-b px-4 py-3">
         <div className="flex flex-col gap-1">
@@ -440,13 +453,15 @@ export function GoogleFontsPanel({
               ? "Previews of families you haven't downloaded come from Google. You can turn them off in "
               : "Previews of families you haven't downloaded are off. You can turn them on in "}
             {onOpenSettings ? (
-              <button
-                type="button"
-                className="rounded-sm underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-                onClick={onOpenSettings}
-              >
-                Settings
-              </button>
+              <Tip tip="Opens Settings › General, where previews are turned on or off">
+                <button
+                  type="button"
+                  className="rounded-sm underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                  onClick={onOpenSettings}
+                >
+                  Settings
+                </button>
+              </Tip>
             ) : (
               "Settings"
             )}
@@ -475,31 +490,32 @@ export function GoogleFontsPanel({
             value={show}
             onChange={setShow}
             options={[
-              { value: "all", label: "Everything" },
-              { value: "installed", label: `Downloaded · ${installedCount}` },
-              { value: "updates", label: `Updates · ${updates.length}` },
+              { value: "all", label: "Everything", tip: "Shows every family in the catalog" },
+              { value: "installed", label: `Downloaded · ${installedCount}`, tip: "Shows only families you've downloaded here" },
+              { value: "updates", label: `Updates · ${updates.length}`, tip: "Shows only downloaded families that have a newer version" },
             ]}
           />
           <span className="mx-1 h-5 w-px bg-border" />
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <label className="flex cursor-default items-center gap-2 text-xs text-muted-foreground has-[button:focus-visible]:text-foreground" />
-              }
-            >
+          {/* The whole label shows the tooltip (keyboard focus on the switch too). Its words are the
+              switch's description, not part of its name. */}
+          <Tip tip={YOURS_FIRST_HINT} describe={false} contentClassName="max-w-xs">
+            <label className="flex cursor-default items-center gap-2 text-xs text-muted-foreground has-[button:focus-visible]:text-foreground">
               <Switch checked={yoursFirst} onCheckedChange={(on) => onYoursFirst(on)} aria-describedby={yoursFirstHintId} />
               Yours first
-              {/* The tooltip shows on hover; keyboard and screen-reader users get the same words here. */}
-              <span id={yoursFirstHintId} className="sr-only">
+              <span id={yoursFirstHintId} hidden>
                 {YOURS_FIRST_HINT}
               </span>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-xs">{YOURS_FIRST_HINT}</TooltipContent>
-          </Tooltip>
+            </label>
+          </Tip>
           {updates.length > 0 && (
-            <Button size="sm" variant="outline" onClick={() => onUpdateAll(updates)} disabled={updatingAll}>
-              {updatingAll ? "Updating…" : "Update all"}
-            </Button>
+            <Tip
+              tip={updates.length === 1 ? "Downloads the newer version of the 1 family with an update" : `Downloads the newer version of all ${updates.length} families with updates`}
+              disabledReason={updatingAll && "Wait: Fontface is still updating these families"}
+            >
+              <Button size="sm" variant="outline" onClick={() => onUpdateAll(updates)} disabled={updatingAll} focusableWhenDisabled className="aria-disabled:opacity-50">
+                {updatingAll ? "Updating…" : "Update all"}
+              </Button>
+            </Tip>
           )}
         </div>
         {category === "icons" && (
@@ -517,7 +533,9 @@ export function GoogleFontsPanel({
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <Icon name="cloud_off" size={36} weight={300} className="text-muted-foreground" />
           <p className="max-w-sm text-sm text-muted-foreground">Couldn't load the Google Fonts catalog. {error}</p>
-          <Button onClick={() => load(true)}>Try again</Button>
+          <Tip tip="Tries loading the Google Fonts catalog again">
+            <Button onClick={() => load(true)}>Try again</Button>
+          </Tip>
         </div>
       ) : !catalog ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -562,55 +580,65 @@ export function GoogleFontsPanel({
                   className="absolute top-0 left-0 flex w-full items-center gap-3 border-b px-4 py-2.5"
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
-                  <FamilyInfo family={fam} match={matches.get(fam.id)} text={previewText} online={onlinePreviews} />
+                  <FamilyInfo family={fam} match={matches.get(fam.id)} text={previewText} online={onlinePreviews} tips={tips} />
                   {isBusy ? (
-                    <Button size="sm" variant="outline" disabled focusableWhenDisabled aria-label={`Working on ${fam.family}`}>
-                      <Icon name="progress_activity" size={16} className="animate-spin" />
-                      Working…
-                    </Button>
+                    <Tip handle={tips} tip={ROW_BUSY_TIP} disabledReason={ROW_BUSY_TIP}>
+                      <Button size="sm" variant="outline" disabled focusableWhenDisabled aria-label={`Working on ${fam.family}`}>
+                        <Icon name="progress_activity" size={16} className="animate-spin" />
+                        Working…
+                      </Button>
+                    </Tip>
                   ) : fam.unavailable ? (
-                    <span className="text-xs text-muted-foreground" title={fam.unavailable}>
-                      Not downloadable here<span className="sr-only">. {fam.unavailable}</span>
-                    </span>
+                    // Why, on hover; screen readers hear it in the words.
+                    <Tip handle={tips} tip={fam.unavailable} describe={false} contentClassName="max-w-xs">
+                      <span className="text-xs text-muted-foreground">
+                        Not downloadable here<span className="sr-only">. {fam.unavailable}</span>
+                      </span>
+                    </Tip>
                   ) : fam.updateAvailable ? (
-                    <Button
-                      size="sm"
-                      aria-label={`Update ${fam.family}`}
-                      onClick={() =>
-                        run(fam, async () =>
-                          (await onInstall(fam.id)).unchanged ? `${fam.family} is already up to date` : `${fam.family} updated`,
-                        )
-                      }
-                    >
-                      <Icon name="update" size={16} />
-                      Update
-                    </Button>
+                    <Tip handle={tips} tip="Downloads the newest version of this family">
+                      <Button
+                        size="sm"
+                        aria-label={`Update ${fam.family}`}
+                        onClick={() =>
+                          run(fam, async () =>
+                            (await onInstall(fam.id)).unchanged ? `${fam.family} is already up to date` : `${fam.family} updated`,
+                          )
+                        }
+                      >
+                        <Icon name="update" size={16} />
+                        Update
+                      </Button>
+                    </Tip>
                   ) : fam.installed ? (
                     <div className="flex items-center gap-1">
                       <Badge variant="secondary" className="gap-1">
                         <Icon name="check" size={12} />
                         Downloaded
                       </Badge>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label={`Remove ${fam.family}`}
-                        title="Remove (turns it off and deletes the downloaded files)"
-                        onClick={() => run(fam, () => onRemove(fam.id).then(() => `${fam.family} removed`))}
-                      >
-                        <Icon name="delete" size={16} />
-                      </Button>
+                      <Tip handle={tips} tip="Turns this family off and deletes its downloaded files">
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Remove ${fam.family}`}
+                          onClick={() => run(fam, () => onRemove(fam.id).then(() => `${fam.family} removed`))}
+                        >
+                          <Icon name="delete" size={16} />
+                        </Button>
+                      </Tip>
                     </div>
                   ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      aria-label={`Get ${fam.family}`}
-                      onClick={() => run(fam, () => onInstall(fam.id).then(() => `${fam.family} downloaded and turned on`))}
-                    >
-                      <Icon name="download" size={16} />
-                      Get
-                    </Button>
+                    <Tip handle={tips} tip="Downloads this family and turns it on">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Get ${fam.family}`}
+                        onClick={() => run(fam, () => onInstall(fam.id).then(() => `${fam.family} downloaded and turned on`))}
+                      >
+                        <Icon name="download" size={16} />
+                        Get
+                      </Button>
+                    </Tip>
                   )}
                 </div>
               );
@@ -621,6 +649,7 @@ export function GoogleFontsPanel({
           )}
         </div>
       )}
+      <TipHost handle={tips} />
       <footer className="border-t px-4 py-1.5 text-[11px] text-muted-foreground">
         Catalog by Fontsource · files from github.com/google/fonts and github.com/google/material-design-icons ·{" "}
         {catalog ? `${catalog.families.length.toLocaleString()} families` : ""}

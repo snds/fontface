@@ -245,24 +245,24 @@ test("the tag menu's on and off items", () => {
   assert.equal(some.turnOnOther.label, "Turn on all fonts until logout");
   assert.match(some.turnOnOther.tip, /They go off when you log out\.$/);
   assert.equal(some.turnOff.enabled, true);
-  assert.equal(some.turnOff.tip, "Turns off the 1 font that is on in “Sci-Fi”, and in the tags inside it, however it was turned on.");
+  assert.equal(some.turnOff.tip, "Turns off the 1 font that is on in “Sci-Fi”, and in the tags inside it, however it was turned on");
 
   const temporary = tagSwitchStates("Sci-Fi", set, { mode: "temporary", untilQuit: true });
   assert.equal(temporary.turnOn.label, "Turn on all fonts until Fontface quits");
   assert.equal(temporary.turnOnOther.label, "Turn on all fonts");
 
   const allOn = tagSwitchStates("Sci-Fi", [lib.face(b)], { mode: "persistent" });
-  assert.deepEqual([allOn.turnOn.enabled, allOn.turnOn.tip], [false, "The font in “Sci-Fi” is already on."]);
+  assert.deepEqual([allOn.turnOn.enabled, allOn.turnOn.tip], [false, "The font in “Sci-Fi” is already on"]);
   const allOff = tagSwitchStates("Sci-Fi", [lib.face(a)], { mode: "persistent" });
-  assert.deepEqual([allOff.turnOff.enabled, allOff.turnOff.tip], [false, "None of the fonts in “Sci-Fi” are on."]);
+  assert.deepEqual([allOff.turnOff.enabled, allOff.turnOff.tip], [false, "None of the fonts in “Sci-Fi” are on"]);
   const nothing = tagSwitchStates("Empty", [], { mode: "persistent" });
   assert.ok(!nothing.turnOn.enabled && !nothing.turnOnOther.enabled && !nothing.turnOff.enabled);
-  assert.equal(nothing.turnOff.tip, "No fonts in your library have this tag.");
+  assert.equal(nothing.turnOff.tip, "No fonts in your library have this tag");
 
   // The row switch's tooltip.
   assert.equal(
     tagSwitchTip("Sci-Fi", summarize([lib.face(a)]), { mode: "persistent", mac: true }),
-    "Turn on the font in “Sci-Fi”. Option-click to turn on until you log out.",
+    "Turns on the font in “Sci-Fi”. Option-click to turn on until you log out.",
   );
   assert.match(tagSwitchTip("Sci-Fi", summarize(set), { mode: "persistent" }), /^1 of 2 fonts in “Sci-Fi” is on\. Click to turn on the rest\./);
   assert.equal(tagSwitchTip("Sci-Fi", summarize([lib.face(b)]), { mode: "persistent" }), "The font in “Sci-Fi” is on. Click to turn it off.");
@@ -295,7 +295,8 @@ test("built-in tags are read-only, except to export them or make them your own",
   const own = tagEditStates(mine, mine, { nested: true });
   for (const id of ["rename", "color", "newInside", "moveTo", "export", "delete"] as const) assert.equal(own[id].enabled, true, id);
   assert.equal(own.makeMine.enabled, false);
-  assert.equal(own.delete.tip, "Delete it and the tags inside it. The fonts stay in your library.");
+  assert.equal(own.delete.tip, "Deletes it and the tags inside it. The fonts stay in your library.");
+  assert.equal(own.color.tip, "Changes its color", "one sentence: no closing period");
 });
 
 test("only your own tags move, and only into your own tags", () => {

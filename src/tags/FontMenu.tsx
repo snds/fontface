@@ -2,9 +2,9 @@ import { focusBack } from "@/focusReturn";
 import type { Face } from "@/library";
 import { ContextMenuGroup, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
+import { CONTEXT, TipItem } from "@/components/Tip";
 import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
-import { CONTEXT, TipItem } from "./menus";
 import { tagCoverage, type TagIndex } from "./model";
 import { applyTags } from "./TagPicker";
 
@@ -47,16 +47,16 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
   return (
     <>
       <ContextMenuSub>
-        <TipItem kit={CONTEXT} as="SubTrigger" tip={`Add ${these} to one of your tags.`}>
+        <TipItem kit={CONTEXT} as="SubTrigger" tip={`Adds ${these} to one of your tags`}>
           <Icon name="new_label" size={16} />
           Add to tag
         </TipItem>
         <ContextMenuSubContent className={subContent}>
-          <TipItem kit={CONTEXT} tip="Find a tag by typing its name." onClick={() => openTagDialog({ kind: "pick", faces, returnFocus: focusBack() })}>
+          <TipItem kit={CONTEXT} tip="Opens a box to find a tag by typing its name" onClick={() => openTagDialog({ kind: "pick", faces, returnFocus: focusBack() })}>
             <Icon name="search" size={16} />
             Find a tag…
           </TipItem>
-          <TipItem kit={CONTEXT} tip={`Make a new tag and add ${these} to it.`} onClick={() => openTagDialog({ kind: "create", faces })}>
+          <TipItem kit={CONTEXT} tip={`Makes a new tag and adds ${these} to it`} onClick={() => openTagDialog({ kind: "create", faces })}>
             <Icon name="add" size={16} />
             New tag…
           </TipItem>
@@ -69,7 +69,7 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
                   kit={CONTEXT}
                   key={node.tag.id}
                   disabled={all}
-                  tip={all ? `Already in “${node.tag.name}”.` : `Add ${these} to “${node.tag.name}”.`}
+                  tip={all ? `Already in “${node.tag.name}”` : `Adds ${these} to “${node.tag.name}”`}
                   style={{ paddingLeft: 6 + node.depth * 14 }}
                   onClick={() => applyTags([node.tag.id], faces, true)}
                 >
@@ -88,7 +88,7 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
           as="SubTrigger"
           disabled={!has.length}
           className={disabledTrigger}
-          tip={has.length ? `Take ${these} off one of your tags.` : lockedOn ? `${faces.length === 1 ? "It's" : "They're"} only in built-in tags, which can't be changed by hand.` : `${faces.length === 1 ? "It isn't" : "They aren't"} in any of your tags.`}
+          tip={has.length ? `Takes ${these} off one of your tags` : lockedOn ? `${faces.length === 1 ? "It's" : "They're"} only in built-in tags, which can't be changed by hand` : `${faces.length === 1 ? "It isn't" : "They aren't"} in any of your tags`}
         >
           <Icon name="label_off" size={16} />
           Remove from tag
@@ -97,7 +97,7 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
           {has.map((node) => {
             const n = count(node.tag.id);
             return (
-              <TipItem kit={CONTEXT} key={node.tag.id} tip={`Take ${these} off “${node.tag.name}”.`} onClick={() => applyTags([node.tag.id], faces, false)}>
+              <TipItem kit={CONTEXT} key={node.tag.id} tip={`Takes ${these} off “${node.tag.name}”`} onClick={() => applyTags([node.tag.id], faces, false)}>
                 <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
                 <span className="flex-1 truncate">{pathLabel(node.tag.name)}</span>
                 {n < faces.length && (
@@ -113,7 +113,7 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
               <ContextMenuSeparator />
               <TipItem
                 kit={CONTEXT}
-                tip={`Take ${these} off all your tags.${lockedOn ? " Built-in tags stay." : ""}`}
+                tip={lockedOn ? `Takes ${these} off all your tags. Built-in tags stay.` : `Takes ${these} off all your tags`}
                 onClick={() =>
                   applyTags(
                     has.map((node) => node.tag.id),

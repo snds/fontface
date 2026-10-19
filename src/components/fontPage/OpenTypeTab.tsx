@@ -9,6 +9,7 @@ import { Icon } from "@/components/ui/icon";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { usePreviewStyle } from "@/components/PreviewStyle";
 import { FaceStateMessage, factsOf, FactsMessage, SectionTitle, type FactsState } from "./parts";
@@ -77,14 +78,16 @@ export function OpenTypeTab(props: Props) {
               <span className="flex-1" />
               <div className="flex w-40 items-center gap-2">
                 <Icon name="format_size" size={16} className="text-muted-foreground" />
-                <Slider
-                  min={16}
-                  max={96}
-                  step={1}
-                  value={[testSize]}
-                  onValueChange={(v) => onTestSize(Array.isArray(v) ? v[0] : v)}
-                  aria-label="Test text size"
-                />
+                <Tip tip="Sets the size of the test text">
+                  <Slider
+                    min={16}
+                    max={96}
+                    step={1}
+                    value={[testSize]}
+                    onValueChange={(v) => onTestSize(Array.isArray(v) ? v[0] : v)}
+                    aria-label="Test text size"
+                  />
+                </Tip>
               </div>
               {languages.length > 0 && (
                 <Select
@@ -92,9 +95,11 @@ export function OpenTypeTab(props: Props) {
                   onValueChange={(v) => typeof v === "string" && onLang(v === NO_LANGUAGE ? undefined : v)}
                   items={[{ value: NO_LANGUAGE, label: "Default forms" }, ...languages.map((l) => ({ value: l.value, label: l.label }))]}
                 >
-                  <SelectTrigger size="sm" aria-label="Language of the text" className="min-w-36">
-                    <SelectValue />
-                  </SelectTrigger>
+                  <Tip tip="Sets the text's language, to show the font's forms for it">
+                    <SelectTrigger size="sm" aria-label="Language of the text" className="min-w-36">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </Tip>
                   <SelectContent className="max-h-80">
                     <SelectItem value={NO_LANGUAGE}>Default forms</SelectItem>
                     {languages.map((l) => (
@@ -107,10 +112,15 @@ export function OpenTypeTab(props: Props) {
                 </Select>
               )}
               {/* Stays focusable once it has nothing left to undo, so focus doesn't fall out of the page. */}
-              <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={onReset}>
-                <Icon name="restart_alt" size={16} />
-                Reset
-              </Button>
+              <Tip
+                tip="Puts the switches and the language back as they started"
+                disabledReason={!changed && "Nothing to reset yet: no switch or language has changed"}
+              >
+                <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={onReset}>
+                  <Icon name="restart_alt" size={16} />
+                  Reset
+                </Button>
+              </Tip>
             </div>
             <textarea
               id={`${id}-text`}
@@ -212,13 +222,20 @@ function FeatureRow({
   const sample = featureSampleText(feature, caseMode);
   return (
     <li className="flex min-h-11 items-center gap-3 border-b py-1.5 last:border-b-0">
-      <Switch
-        checked={on}
-        disabled={!feature.switchable}
-        onCheckedChange={(v) => onToggle(v)}
-        aria-labelledby={`${id}-label`}
-        aria-describedby={`${id}-detail`}
-      />
+      {/* The page's switch, for the test text and the Specimen (every style, while the page is
+          open). Vertical-text features can't show here, so their switch is greyed out. */}
+      <Tip
+        tip={`${on ? "Turns off" : "Turns on"} ${feature.label} in the test text and Specimen`}
+        disabledReason={!feature.switchable && "Changes only vertical text, which these previews don't show"}
+      >
+        <Switch
+          checked={on}
+          disabled={!feature.switchable}
+          onCheckedChange={(v) => onToggle(v)}
+          aria-labelledby={`${id}-label`}
+          aria-describedby={`${id}-detail`}
+        />
+      </Tip>
       <span className="flex min-w-0 flex-1 flex-col">
         <span id={`${id}-label`} className="truncate text-sm">
           {feature.label}

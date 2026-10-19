@@ -1,9 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api, type CharacterBlock, type FontCharacters } from "@/api";
 import { codeLabel, findCharacters, parseCharacterQuery, type CharacterMatch } from "@/characterSearch";
 import type { FaceState } from "@/fontLoader";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { createTipHandle, Tip, TIP_DELAY, TIP_INSTANT_WINDOW, TipHost } from "@/components/Tip";
 import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
@@ -181,6 +183,9 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready, query, res
   const [showAll, setShowAll] = useState(false);
   const [focus, setFocus] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
+  // One tooltip for the block buttons, and one for every cell (CellTip).
+  const [blockTips] = useState(createTipHandle);
+  const cellTip = useRef<CellTipControl>(null);
   /** "Show all" was used: once the new cells are there, focus the first of them. */
   const focusFirstNew = useRef(false);
   useEffect(() => {
@@ -249,20 +254,24 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready, query, res
         <p className="text-xs text-muted-foreground">{charactersSummary(data)}</p>
       )}
       {!results && data.blocks.length > 1 && (
-        <div role="group" aria-label="Unicode blocks" className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
-          {data.blocks.map((b) => (
-            <Button
-              key={b.name}
-              size="xs"
-              variant={b.name === block.name ? "secondary" : "ghost"}
-              aria-pressed={b.name === block.name}
-              onClick={() => setBlockName(b.name)}
-            >
-              {b.name}
-              <span className="font-mono text-muted-foreground tabular-nums">{count(b).toLocaleString()}</span>
-            </Button>
-          ))}
-        </div>
+        <>
+          <TipHost handle={blockTips} />
+          <div role="group" aria-label="Unicode blocks" className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+            {data.blocks.map((b) => (
+              <Tip key={b.name} handle={blockTips} tip={`Shows the characters in ${b.name}`}>
+                <Button
+                  size="xs"
+                  variant={b.name === block.name ? "secondary" : "ghost"}
+                  aria-pressed={b.name === block.name}
+                  onClick={() => setBlockName(b.name)}
+                >
+                  {b.name}
+                  <span className="font-mono text-muted-foreground tabular-nums">{count(b).toLocaleString()}</span>
+                </Button>
+              </Tip>
+            ))}
+          </div>
+        </>
       )}
       <div
         ref={gridRef}
@@ -271,27 +280,41 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready, query, res
         aria-label={label}
         // Hidden while the face loads: out of the Tab order too, so focus can't land on it.
         inert={!ready}
-        className={cn("grid grid-cols-[repeat(auto-fill,minmax(2.75rem,1fr))] gap-1 transition-opacity", !ready && "preview-loading")}
+        // `relative`: the cells' tooltip is placed over a cell by its offset in the grid.
+        className={cn("relative grid grid-cols-[repeat(auto-fill,minmax(2.75rem,1fr))] gap-1 transition-opacity", !ready && "preview-loading")}
         onKeyDown={onKeyDown}
+        onPointerOver={(e) => e.pointerType !== "touch" && cellTip.current?.hover(cellOf(e.target))}
+        onPointerLeave={() => cellTip.current?.hover(null)}
+        onPointerDown={() => cellTip.current?.press()}
+        onFocus={(e) => {
+          // Keyboard focus shows it, as it does for the app's other tooltips; a click's doesn't.
+          const cell = cellOf(e.target);
+          if (cell?.matches(":focus-visible")) cellTip.current?.focus(cell);
+        }}
+        onBlur={(e) => !cellOf(e.relatedTarget) && cellTip.current?.focus(null)}
       >
         {shown.map(({ cp, name }, i) => (
           <Cell key={cp} cp={cp} index={i} name={name} tabbable={i === focus} glyphStyle={glyphStyle} onFocusCell={setFocus} onCopy={onCopy} />
         ))}
+        {/* Another block or search: a new tooltip, closed. */}
+        <CellTip key={`${block.name}\n${query}`} control={cellTip} />
       </div>
       {!showAll && all.length > FIRST_CELLS && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="self-start"
-          onClick={() => {
-            // This button goes away; focus moves to the first cell it reveals.
-            focusFirstNew.current = true;
-            setFocus(FIRST_CELLS);
-            setShowAll(true);
-          }}
-        >
-          Show all {all.length.toLocaleString()}
-        </Button>
+        <Tip tip={results ? `Shows the other ${(all.length - FIRST_CELLS).toLocaleString()} characters found` : `Shows the other ${(all.length - FIRST_CELLS).toLocaleString()} characters in ${block.name}`}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={() => {
+              // This button goes away; focus moves to the first cell it reveals.
+              focusFirstNew.current = true;
+              setFocus(FIRST_CELLS);
+              setShowAll(true);
+            }}
+          >
+            Show all {all.length.toLocaleString()}
+          </Button>
+        </Tip>
       )}
     </div>
   );
@@ -308,14 +331,15 @@ interface CellProps {
   onCopy: (cp: number, name: string) => void;
 }
 
-/** One character. Memoized: moving focus re-renders two cells, not the whole block. */
+/** One character. Memoized: moving focus re-renders two cells, not the whole block. Its tooltip's
+ *  words (`data-tip`) are shown by the grid's one CellTip. */
 const Cell = memo(function Cell({ cp, index, name, tabbable, glyphStyle, onFocusCell, onCopy }: CellProps) {
   return (
     <button
       type="button"
       data-cell
       tabIndex={tabbable ? 0 : -1}
-      title={`${hex(cp)}${name ? ` · ${name}` : ""}`}
+      data-tip={`Copies ${hex(cp)}${name ? ` (glyph “${name}”)` : ""}`}
       aria-label={`${hex(cp)}${name ? `, glyph ${name}` : ""}. Copy`}
       onFocus={() => onFocusCell(index)}
       onClick={() => onCopy(cp, name)}
@@ -330,3 +354,89 @@ const Cell = memo(function Cell({ cp, index, name, tabbable, glyphStyle, onFocus
     </button>
   );
 });
+
+/** The cell an event happened in, if any. */
+const cellOf = (target: EventTarget | null) => (target instanceof Element ? target.closest<HTMLElement>("button[data-cell]") : null);
+
+/** What the grid tells its cells' tooltip. */
+interface CellTipControl {
+  /** The pointer is over this cell; null: over a gap between cells, or gone from the grid. */
+  hover: (cell: HTMLElement | null) => void;
+  /** Keyboard focus is on this cell; null: it has left the cells. */
+  focus: (cell: HTMLElement | null) => void;
+  /** A press on the grid: the tooltip closes until the pointer moves to another cell. */
+  press: () => void;
+}
+
+/**
+ * The cells' one tooltip ("Copies U+00DF (glyph “germandbls”)"), on the cell the pointer rests on
+ * or keyboard focus is on, with the app's timing (components/Tip.tsx): it opens once the pointer
+ * rests for TIP_DELAY, and at once while one is open or has just closed. It's one for the whole
+ * grid, not a Tip per cell, because a block can hold tens of thousands of cells (Show all), and
+ * every tooltip trigger costs its cell hooks and window listeners: here the grid's own pointer and
+ * focus events drive it, and it sits on an empty box moved over the cell (that box only places
+ * it). Its words are for sight only: each cell's name already says them.
+ */
+function CellTip({ control }: { control: React.Ref<CellTipControl> }) {
+  const [tip, setTip] = useState<{ open: boolean; text: string; box?: React.CSSProperties }>({ open: false, text: "" });
+  const timer = useRef<number | undefined>(undefined);
+  const now = useRef({
+    /** The cell it's on (or waiting to open on), and what opened it. */
+    cell: null as HTMLElement | null,
+    by: null as "hover" | "focus" | null,
+    /** The cell pressed: no tooltip on it until the pointer leaves it. */
+    pressed: null as HTMLElement | null,
+    closedAt: -Infinity,
+  });
+  const openOn = (cell: HTMLElement, by: "hover" | "focus") => {
+    window.clearTimeout(timer.current);
+    Object.assign(now.current, { cell, by });
+    setTip({
+      open: true,
+      text: cell.dataset.tip ?? "",
+      box: { top: cell.offsetTop, left: cell.offsetLeft, width: cell.offsetWidth, height: cell.offsetHeight },
+    });
+  };
+  const close = () => {
+    window.clearTimeout(timer.current);
+    if (now.current.by) now.current.closedAt = performance.now();
+    Object.assign(now.current, { cell: null, by: null });
+    setTip((t) => (t.open ? { ...t, open: false } : t));
+  };
+  useImperativeHandle(
+    control,
+    () => ({
+      hover(cell) {
+        const n = now.current;
+        if (cell !== n.pressed) n.pressed = null;
+        if (cell && (cell === n.pressed || cell === n.cell)) return;
+        if (!cell) {
+          // Leaving the cells closes one the pointer opened; one keyboard focus opened stays.
+          if (n.by !== "focus") close();
+          return;
+        }
+        // While one is open, or just after, the next opens at once (as the app's other tooltips do).
+        if (n.by || performance.now() - n.closedAt < TIP_INSTANT_WINDOW) return openOn(cell, "hover");
+        window.clearTimeout(timer.current);
+        n.cell = cell;
+        timer.current = window.setTimeout(() => openOn(cell, "hover"), TIP_DELAY);
+      },
+      focus(cell) {
+        if (cell) openOn(cell, "focus");
+        else if (now.current.by === "focus") close();
+      },
+      press() {
+        now.current.pressed = now.current.cell;
+        close();
+      },
+    }),
+    [],
+  );
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return (
+    <Tooltip open={tip.open} onOpenChange={(open) => !open && close()}>
+      <TooltipTrigger render={<span aria-hidden className="pointer-events-none absolute" style={tip.box} />} />
+      <TooltipContent>{tip.text}</TooltipContent>
+    </Tooltip>
+  );
+}

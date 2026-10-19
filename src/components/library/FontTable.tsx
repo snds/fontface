@@ -19,14 +19,15 @@ import {
 import { stateWords, summarize, type StateSummary } from "@/fontState";
 import { activationIds, type Face } from "@/library";
 import { usePreviewProfile } from "@/previewProfiles";
-import { nextSort, sortInfo } from "@/viewOptions";
+import { directionWords, nextSort, sortInfo } from "@/viewOptions";
 import { Button } from "@/components/ui/button";
-import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuGroup, ContextMenuLabel, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuLabel, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
 import { StateControl, useStateWording } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
+import { CONTEXT, Tip, TipItem } from "../Tip";
 import {
   clampWidth,
   columnDef,
@@ -241,6 +242,16 @@ function widthWords(id: ColumnId, asked: number): string {
   return `${def.label || def.srLabel} column, ${width} pixels wide${end}`;
 }
 
+/** What clicking a sortable column's header does, in its tooltip: sorts by it the usual way
+ *  ("Sorts by Date added, newest first", as the announcement says it), or, when it's the sort
+ *  already, reverses the order. */
+function headerTip(key: SortKey, sort: TableOptions["sort"]): string {
+  const words = directionWords(nextSort(sort, key));
+  // "A to Z" keeps its capitals; "Newest first" reads on in lowercase.
+  const inSentence = /^[A-Z][a-z]/.test(words) ? words.charAt(0).toLowerCase() + words.slice(1) : words;
+  return sort.key === key ? `Reverses the order: ${inSentence}` : `Sorts by ${sortInfo(key).label}, ${inSentence}`;
+}
+
 /** The header row: sort buttons, resize edges, and a right-click menu to show or hide columns. */
 function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, onToggle, onDrag, onResized }: HeaderProps) {
   const shown = shownColumns(columns);
@@ -295,26 +306,28 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
               className={cn("relative flex min-w-0 items-center bg-background", def.numeric && "justify-end")}
               style={pinStyle(def.id)}
             >
-              <button
-                type="button"
-                data-header
-                tabIndex={def.id === tabStop ? 0 : -1}
-                aria-describedby={def.sort ? `${hintId}-sorts` : `${hintId}-fixed`}
-                aria-label={def.label ? undefined : def.srLabel}
-                onFocus={() => setRoving(def.id)}
-                onClick={() => def.sort && onSort(def.sort)}
-                onKeyDown={(e) => onKeyDown(e, column)}
-                title={def.sort ? `Sort by ${sortInfo(def.sort).label}` : undefined}
-                className={cn(
-                  "flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset",
-                  def.numeric && "justify-end text-right",
-                  def.sort ? "hover:text-foreground" : "cursor-default",
-                  sorted && "text-foreground",
-                )}
-              >
-                <span className="truncate">{def.label}</span>
-                {sorted && <Icon name={sort.desc ? "arrow_downward" : "arrow_upward"} size={14} />}
-              </button>
+              {/* A column that doesn't sort says so; its description already does. */}
+              <Tip tip={def.sort ? headerTip(def.sort, sort) : "The list can't be sorted by this column"} describe={!!def.sort}>
+                <button
+                  type="button"
+                  data-header
+                  tabIndex={def.id === tabStop ? 0 : -1}
+                  aria-describedby={def.sort ? `${hintId}-sorts` : `${hintId}-fixed`}
+                  aria-label={def.label ? undefined : def.srLabel}
+                  onFocus={() => setRoving(def.id)}
+                  onClick={() => def.sort && onSort(def.sort)}
+                  onKeyDown={(e) => onKeyDown(e, column)}
+                  className={cn(
+                    "flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset",
+                    def.numeric && "justify-end text-right",
+                    def.sort ? "hover:text-foreground" : "cursor-default",
+                    sorted && "text-foreground",
+                  )}
+                >
+                  <span className="truncate">{def.label}</span>
+                  {sorted && <Icon name={sort.desc ? "arrow_downward" : "arrow_upward"} size={14} />}
+                </button>
+              </Tip>
               <ResizeEdge column={column} onDrag={onDrag} onResized={onResized} />
             </div>
           );
@@ -326,9 +339,16 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
           {columns
             .filter((c) => !c.def.pinned)
             .map((c) => (
-              <ContextMenuCheckboxItem key={c.def.id} checked={c.shown} onCheckedChange={(on) => onToggle(c.def.id, on)}>
+              <TipItem
+                kit={CONTEXT}
+                as="CheckboxItem"
+                key={c.def.id}
+                tip={c.shown ? `Hides the ${c.def.label} column` : `Shows the ${c.def.label} column`}
+                checked={c.shown}
+                onCheckedChange={(on: boolean) => onToggle(c.def.id, on)}
+              >
                 {c.def.label}
-              </ContextMenuCheckboxItem>
+              </TipItem>
             ))}
         </ContextMenuGroup>
       </ContextMenuContent>
@@ -336,34 +356,38 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
   );
 }
 
-/** A column's right edge: drag it to change the width. */
+/** A column's right edge: drag it to change the width. (From the keyboard: Shift with Left or
+ *  Right on the header, which its description says.) */
 function ResizeEdge({ column, onDrag, onResized }: { column: Column; onDrag: HeaderProps["onDrag"]; onResized: HeaderProps["onResized"] }) {
   return (
-    <div
-      aria-hidden
-      className="absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-ring/40"
-      onClick={(e) => e.stopPropagation()}
-      onPointerDown={(e) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const from = e.clientX;
-        const start = column.width;
-        const at = (x: number) => Math.max(column.def.min, start + x - from);
-        const target = e.currentTarget;
-        target.setPointerCapture(e.pointerId);
-        const move = (ev: PointerEvent) => onDrag(column.def.id, at(ev.clientX));
-        const up = (ev: PointerEvent) => {
-          target.removeEventListener("pointermove", move);
-          target.removeEventListener("pointerup", up);
-          target.removeEventListener("pointercancel", up);
-          onResized(column.def.id, at(ev.clientX));
-        };
-        target.addEventListener("pointermove", move);
-        target.addEventListener("pointerup", up);
-        target.addEventListener("pointercancel", up);
-      }}
-    />
+    // Hidden from screen readers, like the edge itself: the header says how to resize.
+    <Tip tip="Changes this column's width as you drag it" describe={false}>
+      <div
+        aria-hidden
+        className="absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-ring/40"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const from = e.clientX;
+          const start = column.width;
+          const at = (x: number) => Math.max(column.def.min, start + x - from);
+          const target = e.currentTarget;
+          target.setPointerCapture(e.pointerId);
+          const move = (ev: PointerEvent) => onDrag(column.def.id, at(ev.clientX));
+          const up = (ev: PointerEvent) => {
+            target.removeEventListener("pointermove", move);
+            target.removeEventListener("pointerup", up);
+            target.removeEventListener("pointercancel", up);
+            onResized(column.def.id, at(ev.clientX));
+          };
+          target.addEventListener("pointermove", move);
+          target.addEventListener("pointerup", up);
+          target.addEventListener("pointercancel", up);
+        }}
+      />
+    </Tip>
   );
 }
 
@@ -502,6 +526,7 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
           busy={switchable.some((f) => f.copies.some((c) => busy.has(c.path)))}
           tabIndex={tab}
           srId={`${id}-state`}
+          tipHandle={actions.tips}
           onSwitch={(next, scope) => onActivate(activationIds(switchable, next), next, scope)}
         />
       );
@@ -511,19 +536,21 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
         // A style's name sits one step (the chevron and its gap) past its family's.
         <span className={cn("flex min-w-0 items-center gap-1", face && "pl-14")}>
           {expandable ? (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={expanded.has(family.id) ? `Collapse ${family.name}` : `Expand ${family.name}`}
-              aria-expanded={expanded.has(family.id)}
-              tabIndex={tab}
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleExpanded(family.id);
-              }}
-            >
-              <Icon name="chevron_right" size={16} className={cn("transition-transform", expanded.has(family.id) && "rotate-90")} />
-            </Button>
+            <Tip handle={actions.tips} tip={expanded.has(family.id) ? "Hides this family's styles" : "Lists this family's styles under it"}>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={expanded.has(family.id) ? `Collapse ${family.name}` : `Expand ${family.name}`}
+                aria-expanded={expanded.has(family.id)}
+                tabIndex={tab}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleExpanded(family.id);
+                }}
+              >
+                <Icon name="chevron_right" size={16} className={cn("transition-transform", expanded.has(family.id) && "rotate-90")} />
+              </Button>
+            </Tip>
           ) : (
             !face && <span className="size-6 shrink-0" aria-hidden />
           )}

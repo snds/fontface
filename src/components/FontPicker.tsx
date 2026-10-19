@@ -8,6 +8,7 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { FacePreview } from "./FacePreview";
+import { Tip } from "./Tip";
 
 /** Families listed before anything is typed, and at most while typing. */
 const SHOWN = 60;
@@ -20,6 +21,8 @@ export interface PickRequest {
   multiple: boolean;
   /** The button that confirms several: "Compare". */
   confirm?: string;
+  /** That button's tooltip, what it does: "Opens Compare with the fonts you picked". */
+  confirmTip?: string;
   /** Families shown as already chosen and not offered again (by Family.id). */
   exclude?: readonly string[];
   /** The picked families, in the order picked. True when picking opens a page, whose heading
@@ -152,10 +155,14 @@ function PickerBody({ request, families, onClose }: { request: PickRequest; fami
           Cancel
         </Button>
         {request.multiple && (
-          <Button disabled={!picked.length} onClick={() => finish(picked)}>
-            {request.confirm ?? "Done"}
-            {picked.length > 0 && ` (${picked.length})`}
-          </Button>
+          // Greyed out until something is picked, but still focusable, so its tooltip can say so.
+          // Cmd+Return in the search field does the same.
+          <Tip tip={request.confirmTip ?? "Uses the fonts you picked"} shortcut="Mod+Enter" disabledReason={!picked.length && "Pick at least one font first"}>
+            <Button disabled={!picked.length} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={() => finish(picked)}>
+              {request.confirm ?? "Done"}
+              {picked.length > 0 && ` (${picked.length})`}
+            </Button>
+          </Tip>
         )}
       </DialogFooter>
     </DialogContent>

@@ -1,6 +1,6 @@
 import type { FontSummary } from "@/api";
 import type { Face } from "@/library";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { colorVar, type Tag } from "./api";
 import type { Locations } from "./locations";
@@ -112,24 +112,31 @@ export function LocationDots({ copies, locations, max = 3, srId }: { copies: Fon
   }
   if (!byColor.size) return null;
   const places = [...new Set([...byColor.values()].flatMap((s) => [...s]))];
+  // Screen readers hear the places in the dots' own words (srId), so the tooltip adds none.
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span onClick={(e) => e.stopPropagation()} />} className="flex shrink-0 items-center gap-0.5">
+    <Tip
+      tip={
+        // One place per line.
+        <div className="flex min-w-0 flex-col">
+          {places.slice(0, 8).map((p) => (
+            <div key={p} className="truncate">
+              {p}
+            </div>
+          ))}
+          {places.length > 8 && <div className="text-background/70">and {places.length - 8} more</div>}
+        </div>
+      }
+      describe={false}
+      contentClassName="max-w-md"
+    >
+      <span onClick={(e) => e.stopPropagation()} className="flex shrink-0 items-center gap-0.5">
         <span className="sr-only" id={srId}>
           In {places.join("; ")}.
         </span>
         {[...byColor.keys()].slice(0, max).map((color) => (
           <span key={color} className="size-2 rounded-full" style={{ background: colorVar(color) }} />
         ))}
-      </TooltipTrigger>
-      <TooltipContent className="max-w-md">
-        {places.slice(0, 8).map((p) => (
-          <div key={p} className="truncate">
-            {p}
-          </div>
-        ))}
-        {places.length > 8 && <div className="text-muted-foreground">and {places.length - 8} more</div>}
-      </TooltipContent>
-    </Tooltip>
+      </span>
+    </Tip>
   );
 }

@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Icon } from "@/components/ui/icon";
+import { Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { COLOR_NAMES, PALETTE, colorVar, type TagColor } from "./api";
 
@@ -11,7 +12,8 @@ interface Props {
   defaultColor?: TagColor;
 }
 
-/** The fixed palette as a radio group: one tab stop, arrow keys move, names for screen readers. */
+/** The fixed palette as a radio group: one tab stop, arrow keys move, names for screen readers.
+ *  Each swatch's tooltip names its color (hover or the arrow keys), since the dot alone doesn't. */
 export function ColorSwatches({ value, onChange, label = "Color", defaultColor }: Props) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const current = value ? PALETTE.indexOf(value) : -1;
@@ -32,30 +34,31 @@ export function ColorSwatches({ value, onChange, label = "Color", defaultColor }
       {PALETTE.map((c, i) => {
         const checked = c === value;
         const name = COLOR_NAMES[c] + (c === defaultColor ? " (default)" : "");
+        // The name is the swatch's accessible name already, so the tooltip isn't its description too.
         return (
-          <button
-            key={c}
-            ref={(el) => {
-              refs.current[i] = el;
-            }}
-            type="button"
-            role="radio"
-            aria-checked={checked}
-            aria-label={name}
-            title={name}
-            tabIndex={checked || (current < 0 && i === 0) ? 0 : -1}
-            onClick={() => onChange(c)}
-            className={cn(
-              "flex size-6 items-center justify-center rounded-full ring-offset-2 ring-offset-popover outline-none focus-visible:ring-2 focus-visible:ring-foreground",
-              checked && "ring-2 ring-foreground/60",
-            )}
-            style={{ background: colorVar(c) }}
-          >
-            {/* The page background contrasts with every swatch: white on the light-mode colors,
-                near-black on the dark-mode ones. */}
-            {checked && <Icon name="check" size={14} weight={600} className="text-background" />}
-            {!checked && c === defaultColor && <span className="size-1.5 rounded-full bg-background/80" />}
-          </button>
+          <Tip key={c} tip={checked ? `${name}, chosen` : `Uses ${name}`} describe={false}>
+            <button
+              ref={(el) => {
+                refs.current[i] = el;
+              }}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              aria-label={name}
+              tabIndex={checked || (current < 0 && i === 0) ? 0 : -1}
+              onClick={() => onChange(c)}
+              className={cn(
+                "flex size-6 items-center justify-center rounded-full ring-offset-2 ring-offset-popover outline-none focus-visible:ring-2 focus-visible:ring-foreground",
+                checked && "ring-2 ring-foreground/60",
+              )}
+              style={{ background: colorVar(c) }}
+            >
+              {/* The page background contrasts with every swatch: white on the light-mode colors,
+                  near-black on the dark-mode ones. */}
+              {checked && <Icon name="check" size={14} weight={600} className="text-background" />}
+              {!checked && c === defaultColor && <span className="size-1.5 rounded-full bg-background/80" />}
+            </button>
+          </Tip>
         );
       })}
     </div>

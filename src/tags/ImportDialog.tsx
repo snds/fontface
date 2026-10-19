@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
+import { createTipHandle, Tip, TipHost } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { useSync } from "@/sync/store";
 import { colorVar, tagsApi, type ImportPreview, type ImportSource } from "./api";
@@ -31,17 +32,19 @@ const when = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle:
 
 /** How a backup is restored: its tags added to the ones there, or in place of them. */
 type RestoreMode = "add" | "replace";
-const RESTORE_MODES: { value: RestoreMode; label: string; description: string }[] = [
+const RESTORE_MODES: { value: RestoreMode; label: string; description: string; tip: string }[] = [
   {
     value: "add",
     label: "Add to my tags",
     description: "Brings back the backup's tags and keeps all of yours. A tag you renamed since comes back under its old name too.",
+    tip: "Keeps your tags and adds the backup's",
   },
   {
     value: "replace",
     label: "Replace my tags",
     description:
       "Your tags become the ones ticked below, as they were in the backup. Tags you made since are deleted, and location colors go back to the backup's.",
+    tip: "Makes your tags match the backup",
   },
 ];
 
@@ -50,16 +53,18 @@ const RESTORE_MODES_WITH_SYNC = RESTORE_MODES.map((m) =>
   m.value === "replace" ? { ...m, description: `${m.description} Sync is on, so your other computers' tags change to match.` } : m,
 );
 
-const SOURCES: { kind: ImportSource["kind"]; icon: string; title: string; hint: string }[] = [
+/** `tip`: the button's tooltip, what a click does (nothing changes until Import). */
+const SOURCES: { kind: ImportSource["kind"]; icon: string; title: string; hint: string; tip: string }[] = [
   {
     kind: "typeface",
     icon: "backup",
     title: "Another font manager's backup…",
     hint: "A tags backup file made by another font manager.",
+    tip: "Asks for the backup file, then shows the tags in it",
   },
-  { kind: "fontface", icon: "data_object", title: "Fontface tags file…", hint: "A .json file exported from Fontface." },
-  { kind: "finder", icon: "sell", title: "Finder tags", hint: "Tags you added to font files in Finder." },
-  { kind: "fontBook", icon: "auto_stories", title: "macOS font collections", hint: "Font collections you made on this Mac." },
+  { kind: "fontface", icon: "data_object", title: "Fontface tags file…", hint: "A .json file exported from Fontface.", tip: "Asks for the file, then shows the tags in it" },
+  { kind: "finder", icon: "sell", title: "Finder tags", hint: "Tags you added to font files in Finder.", tip: "Reads the Finder tags on your font files and shows them" },
+  { kind: "fontBook", icon: "auto_stories", title: "macOS font collections", hint: "Font collections you made on this Mac.", tip: "Reads your font collections and shows them" },
 ];
 
 async function pickSource(kind: ImportSource["kind"]): Promise<ImportSource | null> {
@@ -87,9 +92,11 @@ function MissingFonts({ preview }: { preview: ImportPreview }) {
   };
   return (
     <details className="rounded-lg border text-xs" onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
-      <summary className="cursor-default px-3 py-2 select-none">
-        Show the {n(total)} {total === 1 ? "font" : "fonts"} not in your library
-      </summary>
+      <Tip tip={open ? "Hides the list" : "Lists them, with the tags each would get"}>
+        <summary className="cursor-default px-3 py-2 select-none">
+          Show the {n(total)} {total === 1 ? "font" : "fonts"} not in your library
+        </summary>
+      </Tip>
       {open && (
         <div className="flex flex-col gap-2 border-t p-2">
           <div className="flex items-center gap-2">
@@ -97,10 +104,12 @@ function MissingFonts({ preview }: { preview: ImportPreview }) {
               Most are fonts you don't have here, such as Google Fonts that another app downloaded itself.
               {preview.missing.length < total && ` The first ${n(preview.missing.length)} are listed.`}
             </span>
-            <Button variant="outline" size="xs" onClick={copy}>
-              <Icon name="content_copy" size={14} />
-              Copy list
-            </Button>
+            <Tip tip="Copies the font names and their tags, one font per line">
+              <Button variant="outline" size="xs" onClick={copy}>
+                <Icon name="content_copy" size={14} />
+                Copy list
+              </Button>
+            </Tip>
           </div>
           <ul className="max-h-48 overflow-y-auto font-mono" aria-label="Fonts not in your library">
             {preview.missing.map((m, i) => (
@@ -147,6 +156,8 @@ export function ImportDialog({
   const [failed, setFailed] = useState<string | null>(null);
   const replace = restoring && mode === "replace";
   const syncOn = useSync().status?.enabled ?? false;
+  /** One tooltip for the table's rows (a source can hold hundreds of tags). */
+  const [rowTips] = useState(createTipHandle);
   // Each preview request gets a number. Closing the dialog or starting another request makes
   // older answers stale, so a slow one can't land in a dialog that has moved on.
   const request = useRef(0);
@@ -292,19 +303,25 @@ export function ImportDialog({
 
         {!restoring && !preview && (
           <div className="-m-1 flex min-h-0 flex-col gap-1.5 overflow-y-auto p-1">
+            {/* Greyed out while one is read, but still focusable, so the tooltip can say why. */}
             {SOURCES.map((s) => (
-              <button
+              <Tip
                 key={s.kind}
-                disabled={loading}
-                onClick={() => choose(s.kind)}
-                className="flex items-start gap-3 rounded-lg border p-3 text-left hover:bg-muted disabled:opacity-50"
+                tip={s.tip}
+                disabledReason={loading && (source?.kind === s.kind ? "Wait: Fontface is reading it now" : "Wait: Fontface is still reading another source")}
               >
-                <Icon name={loading && source?.kind === s.kind ? "progress_activity" : s.icon} size={20} className={cn("mt-0.5 text-muted-foreground", loading && source?.kind === s.kind && "animate-spin")} />
-                <span className="flex flex-col gap-0.5">
-                  <span className="text-sm font-medium">{s.title}</span>
-                  <span className="text-xs text-muted-foreground">{s.hint}</span>
-                </span>
-              </button>
+                <button
+                  aria-disabled={loading || undefined}
+                  onClick={() => !loading && choose(s.kind)}
+                  className="flex items-start gap-3 rounded-lg border p-3 text-left hover:bg-muted aria-disabled:opacity-50"
+                >
+                  <Icon name={loading && source?.kind === s.kind ? "progress_activity" : s.icon} size={20} className={cn("mt-0.5 text-muted-foreground", loading && source?.kind === s.kind && "animate-spin")} />
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium">{s.title}</span>
+                    <span className="text-xs text-muted-foreground">{s.hint}</span>
+                  </span>
+                </button>
+              </Tip>
             ))}
           </div>
         )}
@@ -343,49 +360,71 @@ export function ImportDialog({
                   <thead className="sticky top-0 bg-popover text-muted-foreground">
                     <tr className="border-b text-left">
                       <th className="w-8 p-2">
-                        <Checkbox
-                          aria-label="All tags"
-                          checked={chosen.size === preview.tags.length}
-                          indeterminate={chosen.size > 0 && chosen.size < preview.tags.length}
-                          onCheckedChange={(on) => setChosen(on ? new Set(preview.tags.map((t) => t.name)) : new Set())}
-                        />
+                        <Tip handle={rowTips} tip={chosen.size === preview.tags.length ? "Unticks every tag" : "Ticks every tag"}>
+                          <Checkbox
+                            aria-label="All tags"
+                            checked={chosen.size === preview.tags.length}
+                            indeterminate={chosen.size > 0 && chosen.size < preview.tags.length}
+                            onCheckedChange={(on) => setChosen(on ? new Set(preview.tags.map((t) => t.name)) : new Set())}
+                          />
+                        </Tip>
                       </th>
                       <th className="p-2 font-medium">Tag</th>
-                      <th className="p-2 text-right font-medium" title="Styles in your library that get this tag">In library</th>
+                      {/* What each count is, on its heading. */}
+                      <th className="p-2 text-right font-medium">
+                        <Tip handle={rowTips} tip="Styles in your library that get this tag">
+                          <span>In library</span>
+                        </Tip>
+                      </th>
                       {/* Replacing starts from no tags, so every style in the library is new. */}
                       {!replace && (
-                        <th className="p-2 text-right font-medium" title="Styles that don't have it yet">New</th>
+                        <th className="p-2 text-right font-medium">
+                          <Tip handle={rowTips} tip="Styles that don't have it yet">
+                            <span>New</span>
+                          </Tip>
+                        </th>
                       )}
-                      <th className="p-2 text-right font-medium" title="Fonts not in your library">Missing</th>
+                      <th className="p-2 text-right font-medium">
+                        <Tip handle={rowTips} tip="Fonts it names that aren't in your library">
+                          <span>Missing</span>
+                        </Tip>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {preview.tags.map((t) => {
                       const id = `import-${t.name}`;
+                      // Where it lands in the sidebar. Tags nested inside follow their top-level tag, so
+                      // it's said once per branch: on the top-most tag the list shows.
+                      const builtinMark = t.builtin && !listed.has(parentOf(t.name)?.toLowerCase() ?? "");
+                      const on = chosen.has(t.name);
+                      // The full name (the row shows a nested tag's last part), and what a click does.
+                      const tip = on
+                        ? `Leaves “${t.name}” out`
+                        : `${restoring ? "Restores" : "Brings in"} “${t.name}”${builtinMark ? ". It goes under Built-in in the sidebar (tags another app made for you)." : ""}`;
                       return (
                         <tr key={t.name} className="border-b last:border-0">
                           <td className="p-2 align-top">
-                            <Checkbox id={id} checked={chosen.has(t.name)} onCheckedChange={(on) => toggle(t.name, !!on)} />
+                            <Tip handle={rowTips} tip={tip} contentClassName="max-w-72">
+                              <Checkbox id={id} checked={on} onCheckedChange={(v) => toggle(t.name, !!v)} />
+                            </Tip>
                           </td>
                           <td className="p-2 align-top">
-                            <label htmlFor={id} className="flex flex-col gap-0.5" style={{ paddingLeft: depthOf(t.name) * 12 }} title={t.name}>
-                              <span className="flex items-center gap-1.5">
-                                <Icon name="label" size={14} filled style={{ color: colorVar(t.color) }} />
-                                <span className="truncate font-medium">{depthOf(t.name) ? leafOf(t.name) : t.name}</span>
-                                {/* Where it lands in the sidebar. Tags nested inside follow their top-level tag, so
-                                    it's said once per branch: on the top-most tag the list shows. */}
-                                {t.builtin && !listed.has(parentOf(t.name)?.toLowerCase() ?? "") && (
-                                  <span className="shrink-0 text-muted-foreground" title="Goes under Built-in in the sidebar (tags another app made for you)">
-                                    Built-in
-                                  </span>
+                            {/* The checkbox's tooltip too, for the pointer (the label isn't focusable). */}
+                            <Tip handle={rowTips} tip={tip} describe={false} contentClassName="max-w-72">
+                              <label htmlFor={id} className="flex flex-col gap-0.5" style={{ paddingLeft: depthOf(t.name) * 12 }}>
+                                <span className="flex items-center gap-1.5">
+                                  <Icon name="label" size={14} filled style={{ color: colorVar(t.color) }} />
+                                  <span className="truncate font-medium">{depthOf(t.name) ? leafOf(t.name) : t.name}</span>
+                                  {builtinMark && <span className="shrink-0 text-muted-foreground">Built-in</span>}
+                                  {t.exists && !replace && <span className="text-muted-foreground">(you have this tag)</span>}
+                                </span>
+                                {t.note && <span className="text-muted-foreground italic">{t.note}</span>}
+                                {t.merged.length > 0 && (
+                                  <span className="text-muted-foreground">Also includes “{t.merged.join("”, “")}”</span>
                                 )}
-                                {t.exists && !replace && <span className="text-muted-foreground">(you have this tag)</span>}
-                              </span>
-                              {t.note && <span className="text-muted-foreground italic">{t.note}</span>}
-                              {t.merged.length > 0 && (
-                                <span className="text-muted-foreground">Also includes “{t.merged.join("”, “")}”</span>
-                              )}
-                            </label>
+                              </label>
+                            </Tip>
                           </td>
                           <td className="p-2 text-right align-top font-mono tabular-nums">{n(t.matched)}</td>
                           {!replace && <td className="p-2 text-right align-top font-mono tabular-nums">{t.new ? n(t.new) : "–"}</td>}
@@ -395,11 +434,14 @@ export function ImportDialog({
                     })}
                   </tbody>
                 </table>
+                <TipHost handle={rowTips} />
               </div>
             )}
             {pendingFonts > 0 && (
               <label className="flex items-start gap-2 text-xs">
-                <Checkbox checked={keep} onCheckedChange={(on) => setKeep(!!on)} className="mt-0.5" />
+                <Tip tip={keep ? "Leaves out the tags of fonts that aren't in your library" : "Keeps their tags, for when you add those fonts"}>
+                  <Checkbox checked={keep} onCheckedChange={(on) => setKeep(!!on)} className="mt-0.5" />
+                </Tip>
                 <span>
                   Remember the tags of fonts that aren't in your library yet. They'll have them when you add the fonts, for
                   example from Google Fonts.
@@ -426,28 +468,43 @@ export function ImportDialog({
 
         <DialogFooter>
           {preview && !restoring && (
-            <Button variant="ghost" className="mr-auto" onClick={() => setPreview(null)} disabled={applying}>
-              Back
-            </Button>
+            <Tip tip="Goes back to the list of sources" disabledReason={applying && "Wait: Fontface is still importing"}>
+              <Button variant="ghost" className="mr-auto aria-disabled:opacity-50" onClick={() => setPreview(null)} disabled={applying} focusableWhenDisabled>
+                Back
+              </Button>
+            </Tip>
           )}
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
           {preview && (
-            <Button
-              variant={replace ? "destructive" : "default"}
-              onClick={apply}
-              disabled={!chosen.size || applying || loading}
-              aria-describedby={replace && syncOn ? "import-replace-sync" : undefined}
+            <Tip
+              tip={!restoring ? "Brings in the ticked tags and puts them on your fonts" : replace ? "Replaces your tags with the ticked ones from the backup" : "Adds the ticked tags from the backup to yours"}
+              disabledReason={
+                applying
+                  ? `Wait: Fontface is still ${restoring ? "restoring" : "importing"}`
+                  : loading
+                    ? "Wait: Fontface is still reading the backup"
+                    : !chosen.size && "Tick at least one tag first"
+              }
             >
-              {applying
-                ? restoring
-                  ? "Restoring…"
-                  : "Importing…"
-                : replace
-                  ? "Replace my tags"
-                  : `${restoring ? "Add" : "Import"} ${n(chosen.size)} ${chosen.size === 1 ? "tag" : "tags"}`}
-            </Button>
+              <Button
+                variant={replace ? "destructive" : "default"}
+                onClick={apply}
+                disabled={!chosen.size || applying || loading}
+                focusableWhenDisabled
+                className="aria-disabled:opacity-50"
+                aria-describedby={replace && syncOn ? "import-replace-sync" : undefined}
+              >
+                {applying
+                  ? restoring
+                    ? "Restoring…"
+                    : "Importing…"
+                  : replace
+                    ? "Replace my tags"
+                    : `${restoring ? "Add" : "Import"} ${n(chosen.size)} ${chosen.size === 1 ? "tag" : "tags"}`}
+              </Button>
+            </Tip>
           )}
         </DialogFooter>
       </DialogContent>

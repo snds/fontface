@@ -9,8 +9,9 @@ import { summarize } from "@/fontState";
 import { previewCase, styleCss } from "@/previewStyle";
 import { usePreviewStyle } from "@/components/PreviewStyle";
 import { StateControl } from "@/components/ActivationSwitch";
-import { CopiesBadge, FacePreview, SampleBadge } from "@/components/FacePreview";
+import { CopiesBadge, FacePreview, SampleBadge, sampleWhy } from "@/components/FacePreview";
 import { PreviewText } from "@/components/PreviewText";
+import { createTipHandle, ROW_TIP_DELAY, Tip, TipHost, type TipHandle } from "@/components/Tip";
 import { FaceStateMessage, paragraphText, SectionTitle, waterfallText } from "./parts";
 
 const WATERFALL = [12, 16, 24, 36, 48, 72, 96];
@@ -52,6 +53,8 @@ export function SpecimenTab({ family, face, previewText, variation, features, sl
   const state = useFontFace(font, true);
   const listRef = useRef<HTMLUListElement>(null);
   const near = useNearLines(listRef, family.faces);
+  // One tooltip for every "All styles" line (a family can have dozens).
+  const [tips] = useState(createTipHandle);
   const { profile } = usePreviewProfile(font);
   const pageFace = faceName(font);
   const fontFamily = `"${pageFace}"`;
@@ -118,6 +121,7 @@ export function SpecimenTab({ family, face, previewText, variation, features, sl
 
       <section aria-label="All styles">
         <SectionTitle>All styles</SectionTitle>
+        <TipHost handle={tips} />
         <ul ref={listRef} className="flex flex-col">
           {family.faces.map((f) => (
             <StyleLine
@@ -127,6 +131,7 @@ export function SpecimenTab({ family, face, previewText, variation, features, sl
               chosen={f.key === face.key}
               previewText={previewText}
               busy={f.copies.some((c) => busy.has(c.path))}
+              tips={tips}
               onChoose={onChoose}
               onActivate={onActivate}
             />
@@ -184,6 +189,7 @@ function StyleLine({
   chosen,
   previewText,
   busy,
+  tips,
   onChoose,
   onActivate,
 }: {
@@ -192,6 +198,7 @@ function StyleLine({
   chosen: boolean;
   previewText: string;
   busy: boolean;
+  tips: TipHandle;
   onChoose: (faceKey: string) => void;
   onActivate: (ids: number[], active: boolean, scope?: ActivationMode | null) => void;
 }) {
@@ -199,41 +206,51 @@ function StyleLine({
   const preview = usePreviewProfile(font);
   const label = `${face.style}${font.variable ? " (Variable)" : ""}`;
   const stateId = useId();
+  // The marks inside the line (copies, a sample instead of the name) have no tooltips of their
+  // own here, since a tooltip's trigger never goes inside another's: the line's says it all.
+  const what = chosen ? "This is the style shown above and in the other tabs" : "Shows this style above and in the other tabs";
+  const why = sampleWhy(preview.profile, "full");
+  const copies = face.copies.length > 1 ? `It's in ${face.copies.length} files. The Info tab lists them.` : null;
+  const tip = why || copies ? [`${what}.`, why, copies].filter(Boolean).join(" ") : what;
   return (
     // Right-click a line for that style's menu (see FontPage).
     <li data-face-key={face.key} className="flex items-center gap-3 border-b py-1.5 last:border-b-0">
-      <button
-        type="button"
-        aria-pressed={chosen}
-        aria-label={label}
-        onClick={() => onChoose(face.key)}
-        className={cn(
-          "flex min-w-0 flex-1 flex-col items-stretch gap-0.5 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-          chosen ? "bg-accent" : "hover:bg-muted/50",
-        )}
-      >
-        <span className="flex min-w-0 items-center gap-2 text-xs">
-          <span className="truncate font-medium">{label}</span>
-          <span className="shrink-0 font-mono text-muted-foreground">
-            {font.weight}
-            {font.italic ? " · italic" : ""}
+      {/* A big target the pointer crosses on its way elsewhere: its tooltip waits longer. */}
+      <Tip handle={tips} tip={tip} delay={ROW_TIP_DELAY} align="start" contentClassName="max-w-xs">
+        <button
+          type="button"
+          aria-pressed={chosen}
+          aria-label={label}
+          onClick={() => onChoose(face.key)}
+          className={cn(
+            "flex min-w-0 flex-1 flex-col items-stretch gap-0.5 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+            chosen ? "bg-accent" : "hover:bg-muted/50",
+          )}
+        >
+          <span className="flex min-w-0 items-center gap-2 text-xs">
+            <span className="truncate font-medium">{label}</span>
+            <span className="shrink-0 font-mono text-muted-foreground">
+              {font.weight}
+              {font.italic ? " · italic" : ""}
+            </span>
+            <CopiesBadge face={face} tip={false} />
+            <SampleBadge profile={preview.profile} row="full" tip={false} />
           </span>
-          <CopiesBadge face={face} />
-          <SampleBadge profile={preview.profile} row="full" />
-        </span>
-        {near ? (
-          <FacePreview font={font} preview={preview} typed={previewText} own="full" size={STYLE_SIZE} />
-        ) : (
-          // Holds the line's height until its preview loads.
-          <span aria-hidden className="block" style={{ height: STYLE_SIZE * ROW_HEIGHT }} />
-        )}
-      </button>
+          {near ? (
+            <FacePreview font={font} preview={preview} typed={previewText} own="full" size={STYLE_SIZE} tip={false} />
+          ) : (
+            // Holds the line's height until its preview loads.
+            <span aria-hidden className="block" style={{ height: STYLE_SIZE * ROW_HEIGHT }} />
+          )}
+        </button>
+      </Tip>
       <StateControl
         state={summarize([face])}
         single
         label={`Activate ${face.family} ${face.style}`}
         busy={busy}
         srId={stateId}
+        tipHandle={tips}
         onSwitch={(on, scope) => onActivate(activationIds([face], on), on, scope)}
       />
     </li>

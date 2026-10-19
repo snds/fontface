@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CONTEXT, DROPDOWN, ROW_TIP_DELAY, Tip, TipItem } from "@/components/Tip";
+import { IS_MAC } from "@/components/TitleBar";
 import { cn } from "@/lib/utils";
 import { BUILTIN_HINT, facesByTag, tagSwitchProgress } from "@/tagActions";
 import { colorVar } from "./api";
@@ -12,7 +13,7 @@ import { openTagDialog } from "./dialogs";
 import { DragLayer, dropTarget, pressToDrag, useDrag } from "./drag";
 import { isOpen, setOpen, toggleOpen, useOpenRows } from "./expanded";
 import { flatten, GROUP_LABELS, parentOf, useTagIndex, type TagGroup, type TagNode } from "./model";
-import { CONTEXT, DROPDOWN, openMenuFromKeyboard, TagMenuItems, TipItem } from "./menus";
+import { openMenuFromKeyboard, TagMenuItems } from "./menus";
 import { GROUP_ROWS, revealTag, tagOpenId as openId } from "./reveal";
 import { useOrganize } from "./store";
 import { useTagRun } from "./switching";
@@ -27,29 +28,19 @@ const rowClass = (selected: boolean, dropping: boolean) =>
     dropping && "bg-primary/10 ring-2 ring-primary ring-inset",
   );
 
-/** Design-system tooltips on the section's controls (never the native `title`). */
-const TIP_DELAY = 600;
+// Design-system tooltips on the section's controls (never the native `title`): components/Tip.tsx.
 
-function HeaderAction({ icon, label, tip, onClick }: { icon: string; label: string; tip: string; onClick?: () => void }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={label} onClick={onClick} />}>
-        <Icon name={icon} size={16} />
-      </TooltipTrigger>
-      <TooltipContent>{tip}</TooltipContent>
-    </Tooltip>
-  );
-}
+/** Option-click on macOS, Alt-click on Windows. */
+const ALT_CLICK = IS_MAC ? "Option-click" : "Alt-click";
 
 /** A plain text button (the empty section's links) with a tooltip saying more. */
 function TextAction({ tip, onClick, children }: { tip: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <Tooltip>
-      <TooltipTrigger delay={TIP_DELAY} render={<button className="text-left hover:text-foreground" onClick={onClick} />}>
+    <Tip tip={tip} contentClassName="max-w-64">
+      <button className="text-left hover:text-foreground" onClick={onClick}>
         {children}
-      </TooltipTrigger>
-      <TooltipContent className="max-w-64">{tip}</TooltipContent>
-    </Tooltip>
+      </button>
+    </Tip>
   );
 }
 
@@ -141,51 +132,45 @@ function TagRow({
           {...dropTarget(`tag:${node.tag.id}`)}
         >
           {hasChildren ? (
-            <Tooltip>
-              <TooltipTrigger
-                delay={TIP_DELAY}
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="-ml-1 size-5 shrink-0"
-                    aria-label={open ? `Hide tags in ${node.label}` : `Show tags in ${node.label}`}
-                    aria-expanded={open}
-                    data-no-drag=""
-                    onClick={(e) => (e.altKey ? setOpenDeep(node, !open) : toggleOpen(openId(node.tag.id)))}
-                  />
-                }
+            // Right opens the row and Left closes it (onKeyDown above), from anywhere in the row.
+            <Tip
+              tip={`${open ? "Hides" : "Shows"} the tags inside “${node.label}”. ${ALT_CLICK} to ${open ? "close" : "open"} every level.`}
+              shortcut={open ? "Left" : "Right"}
+              contentClassName="max-w-64"
+            >
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="-ml-1 size-5 shrink-0"
+                aria-label={open ? `Hide tags in ${node.label}` : `Show tags in ${node.label}`}
+                aria-expanded={open}
+                data-no-drag=""
+                onClick={(e) => (e.altKey ? setOpenDeep(node, !open) : toggleOpen(openId(node.tag.id)))}
               >
                 <Icon name="chevron_right" size={16} className={cn("transition-transform", open && "rotate-90")} />
-              </TooltipTrigger>
-              <TooltipContent className="max-w-64">
-                {open ? `Hide the tags inside “${node.label}”.` : `Show the tags inside “${node.label}”.`} Option-click to {open ? "close" : "open"} every level.
-              </TooltipContent>
-            </Tooltip>
+              </Button>
+            </Tip>
           ) : (
             <span className="w-4 shrink-0" aria-hidden />
           )}
-          <Tooltip>
-            <TooltipTrigger
-              delay={800}
-              render={
-                <button
-                  className={cn("flex min-w-0 flex-1 items-center gap-2", builtin && !selected && "text-muted-foreground")}
-                  aria-current={selected ? "page" : undefined}
-                  aria-description={builtin ? "Built-in, read-only" : undefined}
-                  data-tag-link=""
-                  onClick={() => onView(target)}
-                />
-              }
+          {/* Fonts drop on the row and the row drags (pressToDrag above), so the name's tooltip
+              says so; built-in tags do neither. */}
+          <Tip
+            tip={`Shows the fonts in “${path}”. ${builtin ? "Built-in, read-only." : "Drop fonts on it to tag them, or drag it into another tag."}`}
+            delay={ROW_TIP_DELAY}
+            contentClassName="max-w-64"
+          >
+            <button
+              className={cn("flex min-w-0 flex-1 items-center gap-2", builtin && !selected && "text-muted-foreground")}
+              aria-current={selected ? "page" : undefined}
+              data-tag-link=""
+              onClick={() => onView(target)}
             >
               {/* Built-in: an outlined label, so it reads as not yours at a glance. */}
               <Icon name="label" size={18} filled={!builtin} style={{ color: colorVar(node.tag.color) }} />
               <span className="truncate">{node.label}</span>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-64">
-              Show the fonts in “{path}”.{builtin && " Built-in, read-only."}
-            </TooltipContent>
-          </Tooltip>
+            </button>
+          </Tip>
           {run ? (
             // Short, so the name keeps its room; the toast has the full count.
             <span className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground tabular-nums" aria-hidden>
@@ -198,28 +183,22 @@ function TagRow({
           {run && <span className="sr-only">{tagSwitchProgress(node.tag.name, run.on, run.done, run.total).detail}</span>}
           <TagSwitch tag={node.tag} set={set} />
           <DropdownMenu open={menu} onOpenChange={setMenu}>
-            <Tooltip>
-              <TooltipTrigger
-                delay={TIP_DELAY}
+            <Tip tip={`Opens the menu for “${node.label}”: turn on or off, ${builtin ? "export" : "rename, move, delete"}…`} contentClassName="max-w-64">
+              <DropdownMenuTrigger
                 render={
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`More for ${node.tag.name}`}
-                        data-no-drag=""
-                        // Invisible until hover or focus, but always there for keyboard and VoiceOver users.
-                        className={cn("opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100", menu && "opacity-100")}
-                      />
-                    }
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`More for ${node.tag.name}`}
+                    data-no-drag=""
+                    // Invisible until hover or focus, but always there for keyboard and VoiceOver users.
+                    className={cn("opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100", menu && "opacity-100")}
                   />
                 }
               >
                 <Icon name="more_horiz" size={16} />
-              </TooltipTrigger>
-              <TooltipContent>More for “{node.label}”: turn on or off, {builtin ? "export" : "rename, move, delete"}…</TooltipContent>
-            </Tooltip>
+              </DropdownMenuTrigger>
+            </Tip>
             <DropdownMenuContent className="w-auto min-w-44">
               <TagMenuItems kit={DROPDOWN} tag={node.tag} set={set} />
             </DropdownMenuContent>
@@ -290,7 +269,6 @@ function TagGroupList({
   const dragging = !!drag;
   const [hovered, setHovered] = useState(false);
   const listId = useId();
-  const hintId = useId();
   const total = useMemo(() => flatten(nodes).length, [nodes]);
 
   // Hovering a closed heading while dragging opens it, so the tags inside can be reached.
@@ -317,23 +295,19 @@ function TagGroupList({
 
   return (
     <div data-tags-group={group}>
-      <Tooltip>
-        <TooltipTrigger
-          delay={TIP_DELAY}
-          render={
-            <button
-              type="button"
-              className="flex h-6 w-full items-center gap-1 rounded-md pr-1 pl-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
-              aria-expanded={open}
-              aria-controls={open ? listId : undefined}
-              aria-describedby={hintId}
-              data-group-heading=""
-              onClick={() => setOpen(openId, !open, startsOpen)}
-              onKeyDown={onKeyDown}
-              onPointerEnter={() => setHovered(true)}
-              onPointerLeave={() => setHovered(false)}
-            />
-          }
+      {/* The tooltip is also the heading's description (Tip puts it beside the button, so it
+          isn't part of the name too). Right opens and Left closes, as in a tree. */}
+      <Tip tip={`${open ? "Hides" : "Shows"} ${group === "builtin" ? "the built-in tags" : "your tags"}. ${hint}`} shortcut={open ? "Left" : "Right"} contentClassName="max-w-72">
+        <button
+          type="button"
+          className="flex h-6 w-full items-center gap-1 rounded-md pr-1 pl-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+          aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          data-group-heading=""
+          onClick={() => setOpen(openId, !open, startsOpen)}
+          onKeyDown={onKeyDown}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
         >
           <Icon name="chevron_right" size={16} className={cn("transition-transform", open && "rotate-90")} />
           <span className="flex min-w-0 flex-1 items-center gap-1">
@@ -344,14 +318,8 @@ function TagGroupList({
             {n(total)}
           </span>
           <span className="sr-only">, {total === 1 ? "1 tag" : `${n(total)} tags`}</span>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-72">{hint}</TooltipContent>
-      </Tooltip>
-      {/* The heading's description, read once. Outside the button so it isn't part of the name
-          too; `hidden` still lets aria-describedby read it. */}
-      <span id={hintId} hidden>
-        {hint}
-      </span>
+        </button>
+      </Tip>
       {open && (
         <div id={listId} role="group" aria-label={GROUP_LABELS[group]}>
           {rows}
@@ -422,25 +390,26 @@ export function TagsSection({
       <div className="flex items-center justify-between pr-1">
         <div className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Tags</div>
         <span className="flex items-center">
-          <HeaderAction icon="add" label="New tag" tip="Make a new tag" onClick={() => openTagDialog({ kind: "create" })} />
+          {/* Their names already say what the tooltips do, so the tooltips aren't descriptions too. */}
+          <Tip tip="Makes a new tag" describe={false}>
+            <Button variant="ghost" size="icon-xs" aria-label="New tag" onClick={() => openTagDialog({ kind: "create" })}>
+              <Icon name="add" size={16} />
+            </Button>
+          </Tip>
           <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger
-                delay={TIP_DELAY}
-                render={<DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="More for tags: import, export, open or close all" />} />}
-              >
+            <Tip tip="Opens the menu to import, export, or open or close all tags" describe={false}>
+              <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="More for tags: import, export, open or close all" />}>
                 <Icon name="more_horiz" size={16} />
-              </TooltipTrigger>
-              <TooltipContent>More for tags: import, export, open or close all</TooltipContent>
-            </Tooltip>
+              </DropdownMenuTrigger>
+            </Tip>
             <DropdownMenuContent align="end" className="w-auto min-w-48">
-              <TipItem kit={DROPDOWN} tip="Bring in tags from Finder, this Mac's font collections, another font manager's backup, or a Fontface tags file." onClick={() => openTagDialog({ kind: "import" })}>
+              <TipItem kit={DROPDOWN} tip="Brings in tags from Finder, this Mac's font collections, another font manager's backup, or a Fontface tags file" onClick={() => openTagDialog({ kind: "import" })}>
                 <Icon name="download" size={16} />
                 Import tags…
               </TipItem>
               <TipItem
                 kit={DROPDOWN}
-                tip={index.tags.length ? "Save all your tags to a file, to Finder tags, or to this Mac's font collections." : "There are no tags to export yet."}
+                tip={index.tags.length ? "Saves all your tags to a file, to Finder tags, or to this Mac's font collections" : "There are no tags to export yet. Make one first."}
                 disabled={!index.tags.length}
                 onClick={() => openTagDialog({ kind: "export" })}
               >
@@ -452,7 +421,7 @@ export function TagsSection({
                   <DropdownMenuSeparator />
                   <TipItem
                     kit={DROPDOWN}
-                    tip="Show the tags inside every tag."
+                    tip="Shows the tags inside every tag"
                     onClick={() => {
                       groups.forEach((g) => toggleOpen(openId(g.tag.id), true));
                       // Open the group headings too, so every tag is in sight. (Close all leaves
@@ -463,7 +432,7 @@ export function TagsSection({
                     <Icon name="unfold_more" size={16} />
                     Open all tags
                   </TipItem>
-                  <TipItem kit={DROPDOWN} tip="Hide the tags inside other tags." onClick={() => groups.forEach((g) => toggleOpen(openId(g.tag.id), false))}>
+                  <TipItem kit={DROPDOWN} tip="Hides the tags inside other tags" onClick={() => groups.forEach((g) => toggleOpen(openId(g.tag.id), false))}>
                     <Icon name="unfold_less" size={16} />
                     Close all tags
                   </TipItem>
@@ -475,17 +444,17 @@ export function TagsSection({
       </div>
       {loaded && index.tags.length === 0 && (
         <div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
-          <TextAction tip="Make your first tag. Then drag fonts onto it, or use a font's right-click menu." onClick={() => openTagDialog({ kind: "create" })}>
+          <TextAction tip="Makes your first tag. Then drag fonts onto it, or use a font's right-click menu." onClick={() => openTagDialog({ kind: "create" })}>
             Create a tag…
           </TextAction>
-          <TextAction tip="Bring in tags from Finder, this Mac's font collections, or another font manager's backup." onClick={() => openTagDialog({ kind: "import" })}>
+          <TextAction tip="Brings in tags from Finder, this Mac's font collections, or another font manager's backup" onClick={() => openTagDialog({ kind: "import" })}>
             Import tags…
           </TextAction>
         </div>
       )}
       {loaded && mine.length === 0 && hiddenBuiltin > 0 && (
         <div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
-          <TextAction tip="Make your own tag. Then drag fonts onto it, or use a font's right-click menu." onClick={() => openTagDialog({ kind: "create" })}>
+          <TextAction tip="Makes your own tag. Then drag fonts onto it, or use a font's right-click menu." onClick={() => openTagDialog({ kind: "create" })}>
             Create a tag…
           </TextAction>
           <p>

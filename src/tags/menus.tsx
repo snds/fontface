@@ -1,37 +1,11 @@
-import { useId } from "react";
 import { toast } from "sonner";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuGroup,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import {
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-} from "@/components/ui/dropdown-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useStateWording } from "@/components/ActivationSwitch";
+import { CONTEXT, TipItem, type Kit } from "@/components/Tip";
 import type { ActivationMode } from "@/api";
 import { otherMode } from "@/fontActions";
 import type { Face } from "@/library";
-import { cn } from "@/lib/utils";
 import { useSettings } from "@/settings/useSettings";
 import { canNestIn, tagEditStates, tagSwitchStates, type TagActionState } from "@/tagActions";
 import { COLOR_NAMES, PALETTE, colorVar, type Tag, type TagColor } from "./api";
@@ -40,91 +14,6 @@ import { moveTag, moveToGroup } from "./drag";
 import { parentOf, useTagIndex } from "./model";
 import { recolorTag, setLocationColor } from "./store";
 import { switchTag } from "./switching";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-/** The same menu items work in a right-click menu and in a "…" menu. */
-export interface Kit {
-  Item: React.ComponentType<any>;
-  Group: React.ComponentType<any>;
-  Label: React.ComponentType<any>;
-  Separator: React.ComponentType<any>;
-  Sub: React.ComponentType<any>;
-  SubTrigger: React.ComponentType<any>;
-  SubContent: React.ComponentType<any>;
-  RadioGroup: React.ComponentType<any>;
-  RadioItem: React.ComponentType<any>;
-}
-/* eslint-enable @typescript-eslint/no-explicit-any */
-
-export const DROPDOWN: Kit = {
-  Item: DropdownMenuItem,
-  Group: DropdownMenuGroup,
-  Label: DropdownMenuLabel,
-  Separator: DropdownMenuSeparator,
-  Sub: DropdownMenuSub,
-  SubTrigger: DropdownMenuSubTrigger,
-  SubContent: DropdownMenuSubContent,
-  RadioGroup: DropdownMenuRadioGroup,
-  RadioItem: DropdownMenuRadioItem,
-};
-
-export const CONTEXT: Kit = {
-  Item: ContextMenuItem,
-  Group: ContextMenuGroup,
-  Label: ContextMenuLabel,
-  Separator: ContextMenuSeparator,
-  Sub: ContextMenuSub,
-  SubTrigger: ContextMenuSubTrigger,
-  SubContent: ContextMenuSubContent,
-  RadioGroup: ContextMenuRadioGroup,
-  RadioItem: ContextMenuRadioItem,
-};
-
-/** How long the pointer rests on a menu item before its tooltip shows, so moving down a menu
- *  doesn't flash one per item. */
-const MENU_TIP_DELAY = 500;
-
-/**
- * A menu item (or submenu trigger, with `as`) with a design-system tooltip: what it does, or,
- * when it's greyed out, why. The tip is also the item's description for screen readers. A
- * greyed-out item still takes the pointer, so its tooltip shows. Submenu triggers put the tip
- * above, so it doesn't cover the submenu.
- */
-export function TipItem({
-  kit,
-  tip,
-  as = "Item",
-  disabled,
-  className,
-  children,
-  ...rest
-}: {
-  kit: Kit;
-  tip: string;
-  as?: "Item" | "SubTrigger";
-  disabled?: boolean;
-  className?: string;
-  children: React.ReactNode;
-} & Record<string, unknown>) {
-  const Item = kit[as];
-  const id = useId();
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        delay={MENU_TIP_DELAY}
-        render={<Item disabled={disabled} aria-describedby={id} className={cn(disabled && "data-disabled:pointer-events-auto data-disabled:opacity-50", className)} {...rest} />}
-      >
-        {children}
-        <span id={id} hidden>
-          {tip}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side={as === "SubTrigger" ? "top" : "right"} className="max-w-64">
-        {tip}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
 
 /** A menu item for one of a tag's actions (tagActions.ts says if it can run, and its words). */
 function ActionItem({ kit, state, icon, onClick, variant }: { kit: Kit; state: TagActionState; icon: string; onClick: (e: React.MouseEvent) => void; variant?: "destructive" }) {
@@ -137,23 +26,25 @@ function ActionItem({ kit, state, icon, onClick, variant }: { kit: Kit; state: T
 }
 
 /** A "Color" submenu with the palette as radio items. `tip`: the trigger's tooltip (with
- *  `disabled`, why it's greyed out). */
+ *  `disabled`, why it's greyed out); `pickTip`: each color's. */
 function ColorSub({
   kit,
   value,
   defaultColor,
   onPick,
-  tip = "Change its color.",
+  tip,
+  pickTip,
   disabled,
 }: {
   kit: Kit;
   value: TagColor;
   defaultColor?: TagColor;
   onPick: (c: TagColor) => void;
-  tip?: string;
+  tip: string;
+  pickTip: (c: TagColor) => string;
   disabled?: boolean;
 }) {
-  const { Sub, SubContent, RadioGroup, RadioItem } = kit;
+  const { Sub, SubContent, RadioGroup } = kit;
   return (
     <Sub>
       <TipItem kit={kit} as="SubTrigger" tip={tip} disabled={disabled}>
@@ -163,11 +54,11 @@ function ColorSub({
       <SubContent className="min-w-40">
         <RadioGroup value={value} onValueChange={(c: TagColor) => onPick(c)}>
           {PALETTE.map((c) => (
-            <RadioItem key={c} value={c}>
+            <TipItem kit={kit} as="RadioItem" key={c} value={c} tip={pickTip(c)}>
               <span className="size-3 rounded-full" style={{ background: colorVar(c) }} aria-hidden />
               {COLOR_NAMES[c]}
               {c === defaultColor && <span className="text-muted-foreground">(default)</span>}
-            </RadioItem>
+            </TipItem>
           ))}
         </RadioGroup>
       </SubContent>
@@ -221,7 +112,7 @@ function MoveSub({ kit, tag, state }: { kit: Kit; tag: Tag; state: TagActionStat
       <SubContent className="max-h-[min(26rem,var(--available-height))] min-w-48 overflow-y-auto">
         {parent && (
           <>
-            <TipItem kit={kit} tip={`Take it out of “${parent}”.`} onClick={() => moveTag(tag, null, { builtinHidden, follow: true })}>
+            <TipItem kit={kit} tip={`Takes it out of “${parent}”, to the top level`} onClick={() => moveTag(tag, null, { builtinHidden, follow: true })}>
               <Icon name="vertical_align_top" size={16} />
               Top level
             </TipItem>
@@ -232,7 +123,7 @@ function MoveSub({ kit, tag, state }: { kit: Kit; tag: Tag; state: TagActionStat
           <TipItem
             kit={kit}
             key={n.tag.id}
-            tip={`Put it inside “${n.tag.name}”.`}
+            tip={`Puts it inside “${n.tag.name}”`}
             style={{ paddingLeft: 6 + n.depth * 14 }}
             onClick={() => moveTag(tag, n.tag, { builtinHidden, follow: true })}
           >
@@ -290,6 +181,7 @@ export function TagMenuItems({ kit, tag, set }: { kit: Kit; tag: Tag; set: reado
         kit={kit}
         value={tag.color}
         tip={edit.color.tip}
+        pickTip={(c) => (c === tag.color ? `“${tag.name}” is ${COLOR_NAMES[c]} now` : `Changes “${tag.name}” to ${COLOR_NAMES[c]}`)}
         disabled={!edit.color.enabled}
         onPick={(c) => recolorTag(tag.id, c).catch(failed("change the color"))}
       />
@@ -299,6 +191,20 @@ export function TagMenuItems({ kit, tag, set }: { kit: Kit; tag: Tag; set: reado
       <Separator />
       <ActionItem kit={kit} state={edit.delete} icon="delete" variant="destructive" onClick={() => openTagDialog({ kind: "delete", tag })} />
     </>
+  );
+}
+
+/** What a source's color is for: its icon in the sidebar, and the dots that mark where each font
+ *  in a list lives. */
+const LOCATION_COLOR_TIP = "Changes the color of its icon and of the dots that mark its fonts";
+
+/** "Locate…", for a folder that can't be found. */
+function LocateItem({ onLocate }: { onLocate: () => void }) {
+  return (
+    <TipItem kit={CONTEXT} tip="Points Fontface at where the folder moved, then rescans it" onClick={onLocate}>
+      <Icon name="folder_open" size={16} />
+      Locate…
+    </TipItem>
   );
 }
 
@@ -314,28 +220,27 @@ function LocationItems({
   defaultColor: TagColor;
   onLocate?: () => void;
 }) {
-  const { Item, Separator } = CONTEXT;
+  const { Separator } = CONTEXT;
   // Picking the default goes back to following it, rather than fixing that color in place.
   const pick = (c: TagColor) => setLocationColor(location, c === defaultColor ? null : c).catch(failed("change the color"));
+  const pickTip = (c: TagColor) =>
+    c === color ? `Its dots are ${COLOR_NAMES[c]} now` : c === defaultColor ? `Goes back to its default color, ${COLOR_NAMES[c]}` : `Changes its dots to ${COLOR_NAMES[c]}`;
   return (
     <>
       {onLocate && (
         <>
-          <Item onClick={onLocate}>
-            <Icon name="folder_open" size={16} />
-            Locate…
-          </Item>
+          <LocateItem onLocate={onLocate} />
           <Separator />
         </>
       )}
-      <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={pick} />
+      <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={pick} tip={LOCATION_COLOR_TIP} pickTip={pickTip} />
       {color !== defaultColor && (
         <>
           <Separator />
-          <Item onClick={() => setLocationColor(location, null).catch(failed("reset the color"))}>
+          <TipItem kit={CONTEXT} tip={`Goes back to its default color, ${COLOR_NAMES[defaultColor]}`} onClick={() => setLocationColor(location, null).catch(failed("reset the color"))}>
             <Icon name="restart_alt" size={16} />
             Use default color ({COLOR_NAMES[defaultColor]})
-          </Item>
+          </TipItem>
         </>
       )}
     </>
@@ -346,6 +251,8 @@ function LocationItems({
 export interface MenuAction {
   icon: string;
   label: string;
+  /** Its tooltip: what it does. */
+  tip: string;
   onClick: () => void;
   destructive?: boolean;
 }
@@ -378,12 +285,12 @@ export function LocationMenu({
   children: React.ReactNode;
 }) {
   if (disabled && !before.length && !after.length && !onLocate) return <>{children}</>;
-  const { Item, Separator } = CONTEXT;
+  const { Separator } = CONTEXT;
   const action = (a: MenuAction) => (
-    <Item key={a.label} variant={a.destructive ? "destructive" : undefined} onClick={a.onClick}>
+    <TipItem kit={CONTEXT} key={a.label} tip={a.tip} variant={a.destructive ? "destructive" : undefined} onClick={a.onClick}>
       <Icon name={a.icon} size={16} />
       {a.label}
-    </Item>
+    </TipItem>
   );
   return (
     <ContextMenu>
@@ -394,12 +301,7 @@ export function LocationMenu({
         {before.map(action)}
         {before.length > 0 && (!disabled || onLocate) && <Separator />}
         {disabled ? (
-          onLocate && (
-            <Item onClick={onLocate}>
-              <Icon name="folder_open" size={16} />
-              Locate…
-            </Item>
-          )
+          onLocate && <LocateItem onLocate={onLocate} />
         ) : (
           <LocationItems location={location} color={color} defaultColor={defaultColor} onLocate={onLocate} />
         )}

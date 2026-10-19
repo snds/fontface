@@ -80,7 +80,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Toaster } from "@/components/ui/sonner";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { SETTINGS_BUTTON_ID, Sidebar, scanStatus } from "@/components/Sidebar";
 import { LIBRARY_SEARCH_ID, Toolbar } from "@/components/Toolbar";
@@ -95,6 +95,7 @@ import { ViewOptions } from "@/components/ViewOptions";
 import { PreviewStyleContext, usePreviewStyleValue } from "@/components/PreviewStyle";
 import { FontPage } from "@/components/fontPage/FontPage";
 import { BackButton } from "@/components/fontPage/PageHeader";
+import { Tip, TIP_DELAY, TIP_INSTANT_WINDOW } from "@/components/Tip";
 import { StateWordingContext, type SwitchWording } from "@/components/ActivationSwitch";
 import { GOOGLE_SEARCH_ID, GoogleFontsPanel } from "@/components/GoogleFontsPanel";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
@@ -1327,6 +1328,7 @@ export default function App() {
             title: `Compare ${name} with…`,
             multiple: true,
             confirm: "Compare",
+            confirmTip: "Opens Compare with the fonts you picked",
             // Picking its own family again would only show it once.
             exclude: first.face.key === first.family.representative.key ? [first.family.id] : [],
             onPick: (families) => {
@@ -1546,7 +1548,8 @@ export default function App() {
       <StateWordingContext.Provider value={stateWording}>
       <FontActionsContext.Provider value={fontActionsApi}>
       <FontPickerContext.Provider value={openPicker}>
-      <TooltipProvider>
+      {/* One timing for every tooltip in the app (components/Tip.tsx). */}
+      <TooltipProvider delay={TIP_DELAY} timeout={TIP_INSTANT_WINDOW}>
         <div className="relative h-full">
           {/* While settings are open, the library stays as it was, hidden and out of reach underneath. */}
           <div inert={settingsOpen} className={cn("grid h-full grid-cols-[240px_1fr]", settingsOpen && "invisible")}>
@@ -1828,15 +1831,17 @@ export default function App() {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                onClick={() => {
-                  if (pendingRemoval) removeFolder(pendingRemoval);
-                  setPendingRemoval(null);
-                }}
-              >
-                Remove
-              </AlertDialogAction>
+              <Tip tip="Turns off its fonts and takes the folder out of your library. Files stay on disk.">
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    if (pendingRemoval) removeFolder(pendingRemoval);
+                    setPendingRemoval(null);
+                  }}
+                >
+                  Remove
+                </AlertDialogAction>
+              </Tip>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -1861,18 +1866,14 @@ function BrowseButton({ service, newPurchases, onBrowse }: { service: CatalogPag
   const google = service === "google";
   const fresh = !google && newPurchases > 0;
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            id={BROWSE_ID}
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            aria-label={google ? "Browse Google Fonts" : `Browse purchases${fresh ? `, ${newPurchases.toLocaleString()} new ${newPurchases === 1 ? "download" : "downloads"}` : ""}`}
-            onClick={() => onBrowse(service)}
-          />
-        }
+    <Tip tip={google ? "Opens Google Fonts, to browse and download free fonts" : "Opens Purchases, to add fonts you bought and review new downloads"}>
+      <Button
+        id={BROWSE_ID}
+        variant="outline"
+        size="sm"
+        className="shrink-0"
+        aria-label={google ? "Browse Google Fonts" : `Browse purchases${fresh ? `, ${newPurchases.toLocaleString()} new ${newPurchases === 1 ? "download" : "downloads"}` : ""}`}
+        onClick={() => onBrowse(service)}
       >
         <Icon name={google ? "travel_explore" : "storefront"} size={16} />
         <span className="@max-[1000px]/toolbar:hidden">Browse</span>
@@ -1881,9 +1882,8 @@ function BrowseButton({ service, newPurchases, onBrowse }: { service: CatalogPag
             {newPurchases.toLocaleString()}
           </span>
         )}
-      </TooltipTrigger>
-      <TooltipContent>{google ? "Browse and download Google Fonts" : "Review new downloads, import fonts you bought, and manage watched folders"}</TooltipContent>
-    </Tooltip>
+      </Button>
+    </Tip>
   );
 }
 
@@ -1912,10 +1912,12 @@ function EmptyPlace({
             ? "Browse Google Fonts to download free fonts. They're added here and turned on."
             : "Browse your purchases to add fonts you bought, from your downloads or from a zip or folder."}
         </p>
-        <Button onClick={() => onBrowse(view.id as CatalogPageEntry["service"])}>
-          <Icon name={google ? "travel_explore" : "storefront"} size={16} />
-          {google ? "Browse Google Fonts" : "Browse Purchases"}
-        </Button>
+        <Tip tip={google ? "Opens the Google Fonts catalog, to download free fonts" : "Opens Purchases, to add fonts you bought"}>
+          <Button onClick={() => onBrowse(view.id as CatalogPageEntry["service"])}>
+            <Icon name={google ? "travel_explore" : "storefront"} size={16} />
+            {google ? "Browse Google Fonts" : "Browse Purchases"}
+          </Button>
+        </Tip>
       </div>
     );
   }
@@ -1940,10 +1942,12 @@ function EmptyPlace({
       <Icon name="font_download" size={40} weight={300} className="text-muted-foreground" />
       <h2 className="text-lg font-semibold">{view.kind === "yours" && !libraryEmpty ? "No fonts of your own yet" : "No fonts here yet"}</h2>
       <p className="max-w-sm text-sm text-muted-foreground">Add a folder of fonts. Fontface reads them where they are. Nothing is copied or moved.</p>
-      <Button onClick={onAddFolder}>
-        <Icon name="create_new_folder" size={16} />
-        Add Folder…
-      </Button>
+      <Tip tip="Picks a folder of fonts to add to your library">
+        <Button onClick={onAddFolder}>
+          <Icon name="create_new_folder" size={16} />
+          Add Folder…
+        </Button>
+      </Tip>
     </div>
   );
 }

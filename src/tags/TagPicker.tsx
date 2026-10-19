@@ -3,7 +3,9 @@ import { toast } from "sonner";
 import type { Face } from "@/library";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { createTipHandle, Tip, TipHost } from "@/components/Tip";
 import { cn } from "@/lib/utils";
+import { BUILTIN_FONTS_TIP } from "@/tagActions";
 import { colorVar } from "./api";
 import { fold, GROUP_LABELS, tagCoverage, useTagIndex, type TagNode } from "./model";
 import { createTag, setFaceTags } from "./store";
@@ -27,12 +29,17 @@ export async function applyTags(tagIds: number[], faces: Face[], on: boolean) {
 /**
  * Pick tags for some fonts: type to filter, Enter or click to add or remove, or create a new
  * tag from what you typed. A tick means every chosen font has the tag; a dash means some do.
+ *
+ * Each row's tooltip says what Enter or a click does to it. The rows share one tooltip (there
+ * can be hundreds). Focus stays in the box, so moving the highlight with the arrow keys shows
+ * the highlighted row's tooltip, as moving focus would.
  */
 export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocus?: boolean }) {
   const index = useTagIndex();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
+  const [tips] = useState(createTipHandle);
   const coverage = useMemo(() => tagCoverage(faces, index), [faces, index]);
 
   const q = tidy(query);
@@ -80,7 +87,11 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      setActive((a) => (Math.min(a, count - 1) + (e.key === "ArrowDown" ? 1 : -1) + count) % Math.max(1, count));
+      if (!count) return;
+      const next = (at + (e.key === "ArrowDown" ? 1 : -1) + count) % count;
+      setActive(next);
+      // Every row is mounted, so its tooltip can open now.
+      tips.open(optionId(next));
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (count) choose(at);
@@ -94,46 +105,56 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [at]);
   const what = faces.length === 1 ? "this style" : `${faces.length.toLocaleString()} styles`;
+  const these = faces.length === 1 ? "this style" : `the ${faces.length.toLocaleString()} styles`;
 
   /** One tag in the list. `pos` is its place among all the options, for the keyboard highlight. */
   const option = (node: TagNode, pos: number) => {
     const n = coverage.get(node.tag.id) ?? 0;
     const state = n === 0 ? false : n === faces.length ? true : "mixed";
     const locked = node.tag.builtin;
+    const name = node.tag.name;
+    // What Enter or a click does (`toggle`): a tag only some have goes on the rest.
+    const tip =
+      state === true
+        ? `Takes “${name}” off ${these}`
+        : state === "mixed"
+          ? `“${name}” is on ${n} of ${faces.length} styles. Adds it to the other ${faces.length - n}.`
+          : `Adds “${name}” to ${these}`;
     // In a multi-select list "selected" means the fonts have the tag; the highlight is
     // conveyed by aria-activedescendant on the input.
     return (
-      <div
-        key={node.tag.id}
-        id={optionId(pos)}
-        role="option"
-        aria-selected={state === true}
-        aria-disabled={locked || undefined}
-        title={node.tag.name}
-        className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", pos === at && "bg-accent", locked && "text-muted-foreground")}
-        style={{ paddingLeft: q ? undefined : 8 + node.depth * 14 }}
-        onMouseEnter={() => setActive(pos)}
-        onClick={() => toggle(node.tag.id)}
-      >
-        <Icon name="label" size={16} filled={!locked} style={{ color: colorVar(node.tag.color) }} />
-        <span className="flex-1 truncate">
-          {q ? node.tag.name : node.label}
-          {state === "mixed" && <span className="sr-only">, on {n} of {faces.length} styles</span>}
-          {locked && <span className="sr-only">, built-in, read-only</span>}
-        </span>
-        {locked && <Icon name="lock" size={14} aria-hidden />}
-        {state === "mixed" && (
-          <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={`${n} of ${faces.length} styles`}>
-            {n}/{faces.length}
+      <Tip key={node.tag.id} handle={tips} tip={tip} shortcut="Enter" disabledReason={locked && BUILTIN_FONTS_TIP} side="right" contentClassName="max-w-64">
+        <div
+          id={optionId(pos)}
+          role="option"
+          aria-selected={state === true}
+          aria-disabled={locked || undefined}
+          className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", pos === at && "bg-accent", locked && "text-muted-foreground")}
+          style={{ paddingLeft: q ? undefined : 8 + node.depth * 14 }}
+          onMouseEnter={() => setActive(pos)}
+          onClick={() => toggle(node.tag.id)}
+        >
+          <Icon name="label" size={16} filled={!locked} style={{ color: colorVar(node.tag.color) }} />
+          <span className="flex-1 truncate">
+            {q ? node.tag.name : node.label}
+            {state === "mixed" && <span className="sr-only">, on {n} of {faces.length} styles</span>}
+            {locked && <span className="sr-only">, built-in, read-only</span>}
           </span>
-        )}
-        <Icon
-          name={state === true ? "check_box" : state === "mixed" ? "indeterminate_check_box" : "check_box_outline_blank"}
-          size={18}
-          filled={state !== false}
-          className={state === false ? "text-muted-foreground" : "text-foreground"}
-        />
-      </div>
+          {locked && <Icon name="lock" size={14} aria-hidden />}
+          {/* The tooltip says what this is ("on 2 of 5 styles"). */}
+          {state === "mixed" && (
+            <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+              {n}/{faces.length}
+            </span>
+          )}
+          <Icon
+            name={state === true ? "check_box" : state === "mixed" ? "indeterminate_check_box" : "check_box_outline_blank"}
+            size={18}
+            filled={state !== false}
+            className={state === false ? "text-muted-foreground" : "text-foreground"}
+          />
+        </div>
+      </Tip>
     );
   };
 
@@ -151,8 +172,11 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
         onChange={(e) => {
           setQuery(e.target.value);
           setActive(0);
+          // Typing isn't moving the highlight: no tooltip over the list as it changes.
+          tips.close();
         }}
         onKeyDown={onKeyDown}
+        onBlur={() => tips.close()}
       />
       <div id={listId} role="listbox" aria-multiselectable aria-label="Tags" className="-mx-1 max-h-72 overflow-y-auto">
         {groups.map((g) => {
@@ -176,25 +200,28 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
           );
         })}
         {canCreate && (
-          <div
-            id={optionId(createAt)}
-            role="option"
-            aria-selected={false}
-            className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", at === createAt && "bg-accent")}
-            onMouseEnter={() => setActive(createAt)}
-            onClick={create}
-          >
-            <Icon name="add" size={16} className="text-muted-foreground" />
-            <span className="truncate">
-              Create “<span className="font-medium">{q}</span>”
-            </span>
-          </div>
+          <Tip handle={tips} tip={`Makes the tag “${q}” and adds it to ${these}`} shortcut="Enter" side="right" contentClassName="max-w-64">
+            <div
+              id={optionId(createAt)}
+              role="option"
+              aria-selected={false}
+              className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", at === createAt && "bg-accent")}
+              onMouseEnter={() => setActive(createAt)}
+              onClick={create}
+            >
+              <Icon name="add" size={16} className="text-muted-foreground" />
+              <span className="truncate">
+                Create “<span className="font-medium">{q}</span>”
+              </span>
+            </div>
+          </Tip>
         )}
         {count === 0 && !lockedParent && <p className="px-2 py-1.5 text-xs text-muted-foreground">No tags yet. Type a name to create one.</p>}
         {lockedParent && (
           <p className="px-2 py-1.5 text-xs text-muted-foreground">“{lockedParent.name}” is a built-in tag, so new tags can't go inside it.</p>
         )}
       </div>
+      <TipHost handle={tips} />
       <p className="px-0.5 text-[11px] text-muted-foreground">
         Nest tags with “/”, as in Sci-Fi/Star Trek. Changes apply to {what}.
       </p>

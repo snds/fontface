@@ -262,6 +262,7 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
           busy={family.switchable.some((face) => face.copies.some((c) => busy.has(c.path)))}
           tabIndex={tab}
           srId={`${id}-state`}
+          tipHandle={actions.tips}
           onSwitch={(on, scope) => onActivate(activationIds(family.switchable, on), on, scope)}
         />
       </div>

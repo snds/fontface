@@ -4,10 +4,10 @@ import { faceName, useFontFace } from "@/fontLoader";
 import { isSampleKind, kindFor, missingCharacters, useProfileWait, type ProfileState } from "@/previewProfiles";
 import { Badge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icon";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { applyCase } from "@/previewStyle";
 import { usePreviewStyle } from "./PreviewStyle";
 import { PreviewText } from "./PreviewText";
+import { ROW_TIP_DELAY, Tip } from "./Tip";
 
 // A font's one-line preview and the small marks beside it, shared by the library rows and the
 // font page's "All styles" list.
@@ -35,6 +35,7 @@ export function FacePreview({
   own,
   size,
   family,
+  tip = true,
 }: {
   font: FontSummary;
   preview: ProfileState;
@@ -42,6 +43,9 @@ export function FacePreview({
   own: "family" | "full";
   size: number;
   family?: string;
+  /** false: no tooltip on "Preview unavailable" and the like, inside a control that has its
+   *  own tooltip (a trigger never goes inside another). */
+  tip?: boolean;
 }) {
   const state = useFontFace(font);
   const { profile, pending } = preview;
@@ -50,13 +54,21 @@ export function FacePreview({
   const unavailable = UNAVAILABLE[state];
   if (unavailable) {
     // One line, cut short with "…" where it doesn't fit (a card in Tiles, a Table cell) rather
-    // than wrapping out of a fixed-height preview area; the whole sentence shows on hover and is
-    // still all there for screen readers.
-    return (
-      <div className="flex min-w-0 items-center gap-1.5 py-1 text-xs text-muted-foreground italic" title={unavailable.text}>
+    // than wrapping out of a fixed-height preview area; the whole sentence shows on hover (only
+    // rows in this state mount a tooltip) and is still all there for screen readers.
+    const line = (
+      <div className="flex min-w-0 items-center gap-1.5 py-1 text-xs text-muted-foreground italic">
         <Icon name={unavailable.icon} size={14} />
         <span className="min-w-0 truncate">{unavailable.text}</span>
       </div>
+    );
+    if (!tip) return line;
+    return (
+      // A wide target the pointer crosses on its way down a list: it waits a little longer, and
+      // lines up with the words at its start (the row is wider than they are).
+      <Tip tip={unavailable.text} describe={false} delay={ROW_TIP_DELAY} align="start">
+        {line}
+      </Tip>
     );
   }
   const name = own === "family" ? font.family : font.fullName || `${font.family} ${font.subfamily}`;
@@ -80,24 +92,34 @@ export function FacePreview({
   );
 }
 
+/** Why a row shows a sample of characters (SampleBadge's tooltip), or null when it doesn't. */
+export function sampleWhy(profile: PreviewInfo | undefined, row: "family" | "full"): string | null {
+  if (!isSampleKind(profile, row) || !profile?.label) return null;
+  return kindFor(profile, row) === "expert"
+    ? "An expert set: extra characters (fractions, ligatures, small capitals and the like) that go with another font. This shows the characters it has."
+    : "This font can't draw its name, so this shows characters it does have.";
+}
+
 /** "Symbols", "Expert set", a script name or "Partial set", for rows previewed by a sample.
  *  `row`: a family row goes by the family name, a style row by its full name. `id` goes on the
- *  badge, so a list row can point its description at it. */
-export function SampleBadge({ profile, row, id }: { profile: PreviewInfo | undefined; row: "family" | "full"; id?: string }) {
-  if (!isSampleKind(profile, row) || !profile?.label) return null;
-  const why =
-    kindFor(profile, row) === "expert"
-      ? "An expert set: extra characters (fractions, ligatures, small capitals and the like) that go with another font. This shows the characters it has."
-      : "This font can't draw its name, so this shows characters it does have.";
+ *  badge, so a list row can point its description at it. `tip` false: no tooltip of its own,
+ *  inside a control whose tooltip says why instead (sampleWhy). */
+export function SampleBadge({ profile, row, id, tip = true }: { profile: PreviewInfo | undefined; row: "family" | "full"; id?: string; tip?: boolean }) {
+  const why = sampleWhy(profile, row);
+  if (!why || !profile?.label) return null;
+  // The span keeps a click from reaching the row (it would select it).
+  const badge = (
+    <span className="shrink-0" onClick={(e) => e.stopPropagation()}>
+      <Badge id={id} variant="outline" className="text-muted-foreground">
+        {profile.label}
+      </Badge>
+    </span>
+  );
+  if (!tip) return badge;
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="shrink-0" onClick={(e) => e.stopPropagation()} />}>
-        <Badge id={id} variant="outline" className="text-muted-foreground">
-          {profile.label}
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">{why}</TooltipContent>
-    </Tooltip>
+    <Tip tip={why} describe={false} contentClassName="max-w-xs">
+      {badge}
+    </Tip>
   );
 }
 
@@ -109,41 +131,53 @@ export function MissingHint({ text, profile, srId }: { text: string; profile: Pr
   const missing = missingCharacters(applyCase(text, options.case), profile);
   if (!missing.length) return null;
   const list = missing.join(" ");
+  // Screen readers hear the list in the mark's own words; the tooltip says what it means.
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex shrink-0 items-center text-muted-foreground" onClick={(e) => e.stopPropagation()} />}>
+    <Tip tip={`Not in this font: ${list}. Those characters show in another font, or as boxes or blanks.`} describe={false} contentClassName="max-w-xs">
+      <span className="inline-flex shrink-0 items-center text-muted-foreground" onClick={(e) => e.stopPropagation()}>
         <Icon name="font_download_off" size={14} />
         <span className="sr-only" id={srId}>
           Not in this font: {list}.
         </span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        Not in this font: {list}. Those characters show in another font, or as boxes or blanks.
-      </TooltipContent>
-    </Tooltip>
+      </span>
+    </Tip>
   );
 }
 
 /** "×3" badge for a face that exists as several files; hover lists where. Screen readers hear
- *  "3 copies" (`srId` goes on that text). */
-export function CopiesBadge({ face, srId }: { face: Face; srId?: string }) {
+ *  "3 copies" (`srId` goes on that text). `tip` false: no tooltip of its own, inside a control
+ *  whose tooltip says it instead. */
+export function CopiesBadge({ face, srId, tip = true }: { face: Face; srId?: string; tip?: boolean }) {
   if (face.copies.length < 2) return null;
+  // The span keeps a click from reaching the row (it would select it).
+  const badge = (
+    <span onClick={(e) => e.stopPropagation()}>
+      <Badge variant="outline" className="font-mono">
+        <span aria-hidden>×{face.copies.length}</span>
+        <span className="sr-only" id={srId}>
+          {face.copies.length} copies
+        </span>
+      </Badge>
+    </span>
+  );
+  if (!tip) return badge;
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span onClick={(e) => e.stopPropagation()} />}>
-        <Badge variant="outline" className="font-mono">
-          <span aria-hidden>×{face.copies.length}</span>
-          <span className="sr-only" id={srId}>
-            {face.copies.length} copies
-          </span>
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-md">
-        <div className="mb-1 font-medium">{face.copies.length} copies of this font</div>
-        {face.copies.map((c) => (
-          <div key={c.id} className="truncate font-mono text-[11px]">{c.path}</div>
-        ))}
-      </TooltipContent>
-    </Tooltip>
+    <Tip
+      tip={
+        // One line each: the heading, then every copy's path.
+        <div className="flex min-w-0 flex-col">
+          <div className="mb-1 font-medium">{face.copies.length} copies of this font</div>
+          {face.copies.map((c) => (
+            <div key={c.id} className="truncate font-mono text-[11px]">
+              {c.path}
+            </div>
+          ))}
+        </div>
+      }
+      describe={false}
+      contentClassName="max-w-md"
+    >
+      {badge}
+    </Tip>
   );
 }

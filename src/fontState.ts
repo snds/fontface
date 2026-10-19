@@ -182,7 +182,7 @@ export function stateDetails(
   if (s.lock === "installed") {
     return [
       s.macos > 0
-        ? "Installed in macOS's font folders, some as part of macOS. Always on while they're there."
+        ? "In macOS Fonts, some as part of macOS. Always on while they're there."
         : "Installed in a Library Fonts folder. Always on while it's there.",
     ];
   }
@@ -206,7 +206,7 @@ export function stateDetails(
     out.push(single ? "Turned on by another app." : `${styles(s.elsewhere)} ${s.elsewhere === 1 ? "was" : "were"} turned on by another app.`);
   }
   if (s.locked) {
-    const why = s.macos === s.locked ? "part of macOS" : "installed in macOS's font folders";
+    const why = s.macos === s.locked ? "part of macOS" : "in macOS Fonts";
     out.push(`${styles(s.locked)} ${are(s.locked)} always on (${why}).`);
   }
   return out;

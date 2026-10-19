@@ -4,9 +4,10 @@ import { Icon } from "@/components/ui/icon";
 import { ChoiceGroup } from "./ChoiceGroup";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { dragRegion, NO_DRAG, useTitleBar } from "./TitleBar";
+import { shortcutSaid, tipSaid } from "@/tips";
+import { Tip, TipShortcut } from "./Tip";
+import { dragRegion, IS_MAC, NO_DRAG, useTitleBar } from "./TitleBar";
 import { LayoutSwitch } from "./ViewOptions";
 
 /** The search field's id, so ⌘F can focus it (also from a font page). */
@@ -35,11 +36,17 @@ interface Props {
   browse?: React.ReactNode;
 }
 
-const STATUS: { value: StatusFilter; label: string }[] = [
-  { value: "any", label: "All" },
-  { value: "active", label: "Active" },
-  { value: "inactive", label: "Inactive" },
+const STATUS: { value: StatusFilter; label: string; tip: string }[] = [
+  { value: "any", label: "All", tip: "Shows every font, on or off" },
+  { value: "active", label: "Active", tip: "Shows only fonts that are on" },
+  { value: "inactive", label: "Inactive", tip: "Shows only fonts that are off" },
 ];
+
+/** Cmd+= and Cmd+- (Ctrl on Windows) step the preview size (App, and View › Bigger and Smaller
+ *  Preview). */
+const BIGGER = "Mod+=";
+const SMALLER = "Mod+-";
+const SIZE_TIP = "Sets the preview size";
 
 export function Toolbar({
   query,
@@ -77,28 +84,23 @@ export function Toolbar({
       {/* All / Active / Inactive and Variable narrow whatever view is selected in the sidebar. */}
       <div className="flex shrink-0 items-center gap-1.5">
         {showStatus && <ChoiceGroup label="Show fonts" value={status} options={STATUS} onChange={onStatus} />}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                aria-pressed={variableOnly}
-                onClick={() => onVariableOnly(!variableOnly)}
-                className={cn(
-                  "flex h-7.5 items-center gap-1 rounded-lg border px-2 text-xs whitespace-nowrap",
-                  variableOnly
-                    ? "bg-secondary font-medium text-secondary-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              />
-            }
+        <Tip tip={variableOnly ? "Shows every font again, not only variable ones" : "Shows only variable fonts"}>
+          <button
+            type="button"
+            aria-pressed={variableOnly}
+            onClick={() => onVariableOnly(!variableOnly)}
+            className={cn(
+              "flex h-7.5 items-center gap-1 rounded-lg border px-2 text-xs whitespace-nowrap",
+              variableOnly
+                ? "bg-secondary font-medium text-secondary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
           >
             <Icon name="line_weight" size={16} />
             {/* The name stays for screen readers when only the icon shows. */}
             <span className="@max-[960px]/toolbar:sr-only">Variable</span>
-          </TooltipTrigger>
-          <TooltipContent>Show only variable fonts</TooltipContent>
-        </Tooltip>
+          </button>
+        </Tip>
       </div>
       <div className="relative w-56 min-w-36 @max-[800px]/toolbar:min-w-32">
         <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />
@@ -128,13 +130,25 @@ export function Toolbar({
         {...NO_DRAG}
       >
         <Icon name="format_size" size={16} className="text-muted-foreground" />
-        <Slider
-          min={10}
-          max={128}
-          value={[size]}
-          onValueChange={(v) => onSize(Array.isArray(v) ? v[0] : v)}
-          aria-label="Preview size"
-        />
+        {/* Two shortcuts, smaller then bigger, as the slider runs. */}
+        <Tip
+          tip={
+            <>
+              {SIZE_TIP}
+              <TipShortcut shortcut={SMALLER} />
+              <TipShortcut shortcut={BIGGER} />
+            </>
+          }
+          description={tipSaid(SIZE_TIP, `${shortcutSaid(SMALLER, IS_MAC)}, ${shortcutSaid(BIGGER, IS_MAC)}`)}
+        >
+          <Slider
+            min={10}
+            max={128}
+            value={[size]}
+            onValueChange={(v) => onSize(Array.isArray(v) ? v[0] : v)}
+            aria-label="Preview size"
+          />
+        </Tip>
         <span className="w-11 shrink-0 text-right font-mono text-xs text-muted-foreground tabular-nums">{size}px</span>
       </div>
       {browse}

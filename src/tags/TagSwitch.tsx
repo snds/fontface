@@ -3,7 +3,7 @@ import { useStateWording } from "@/components/ActivationSwitch";
 import { IS_MAC } from "@/components/TitleBar";
 import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tip } from "@/components/Tip";
 import { switchScope } from "@/fontActions";
 import { stateWords, summarize, switchLook } from "@/fontState";
 import type { Face } from "@/library";
@@ -31,16 +31,16 @@ export function TagSwitch({ tag, set }: { tag: Tag; set: readonly Face[] }) {
   const descId = useId();
   if (!set.length) return <span className="w-6 shrink-0" aria-hidden />;
   const progress = run && tagSwitchProgress(tag.name, run.on, run.done, run.total);
-  const tip = progress ? `${progress.title} ${progress.detail} done.` : tagSwitchTip(tag.name, state, { mode, untilQuit, mac: IS_MAC });
+  const tip = progress ? `${progress.title} ${progress.detail} done` : tagSwitchTip(tag.name, state, { mode, untilQuit, mac: IS_MAC });
   if (state.lock) {
+    // Not a control: only says why there's no switch ("Always on" for screen readers).
     return (
-      <Tooltip>
-        <TooltipTrigger render={<span className="flex w-6 shrink-0 justify-center text-muted-foreground" data-no-drag="" />}>
+      <Tip tip={tip} describe={false} contentClassName="max-w-xs">
+        <span className="flex w-6 shrink-0 justify-center text-muted-foreground" data-no-drag="">
           <Icon name="lock" size={14} />
           <span className="sr-only">Always on</span>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-xs">{tip}</TooltipContent>
-      </Tooltip>
+        </span>
+      </Tip>
     );
   }
   const { checked, partial, dim } = switchLook(state);
@@ -59,27 +59,23 @@ export function TagSwitch({ tag, set }: { tag: Tag; set: readonly Face[] }) {
         if (e.detail > 0) alt.current = e.altKey;
       }}
     >
-      <Tooltip>
-        <TooltipTrigger
-          delay={600}
-          render={
-            <Switch
-              size="sm"
-              checked={checked}
-              disabled={!!run}
-              aria-busy={!!run}
-              aria-label={`All fonts in “${tag.name}”`}
-              aria-describedby={descId}
-              className={cn("data-checked:bg-active", partial && "data-unchecked:bg-active/40 dark:data-unchecked:bg-active/40", dim && "data-checked:bg-active/45")}
-              onCheckedChange={(on) => {
-                void switchTag(tag, set, on, switchScope(on, alt.current, mode), { mode, untilQuit });
-                alt.current = false;
-              }}
-            />
-          }
+      {/* The words change with the state (and while it runs, say how far it is); the switch stays
+          put in the tree, so it keeps focus. Its state words come first in its description. */}
+      <Tip tip={tip} contentClassName="max-w-xs">
+        <Switch
+          size="sm"
+          checked={checked}
+          disabled={!!run}
+          aria-busy={!!run}
+          aria-label={`All fonts in “${tag.name}”`}
+          aria-describedby={descId}
+          className={cn("data-checked:bg-active", partial && "data-unchecked:bg-active/40 dark:data-unchecked:bg-active/40", dim && "data-checked:bg-active/45")}
+          onCheckedChange={(on) => {
+            void switchTag(tag, set, on, switchScope(on, alt.current, mode), { mode, untilQuit });
+            alt.current = false;
+          }}
         />
-        <TooltipContent className="max-w-xs">{tip}</TooltipContent>
-      </Tooltip>
+      </Tip>
       <span id={descId} hidden>
         {run ? "working" : stateWords(state, { untilQuit })}
       </span>

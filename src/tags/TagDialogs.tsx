@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Tip } from "@/components/Tip";
 import type { Tag, TagColor } from "./api";
 import { ColorSwatches } from "./ColorSwatches";
 import { openTagDialog, useTagDialog, type TagDialog } from "./dialogs";
@@ -152,6 +153,9 @@ function NameDialog({
 
   const creating = dialog?.kind === "create";
   const count = dialog?.kind === "create" ? dialog.faces?.length ?? 0 : 0;
+  // Why the button is greyed out. It stays focusable, so its tooltip can say so; Return in the
+  // box doesn't submit then either (a greyed-out button cancels its click).
+  const blocked = !name.trim() ? "Type a name first" : saving ? (creating ? "Wait: Fontface is still making the tag" : "Wait: Fontface is still renaming the tag") : null;
   return (
     <Dialog open={!!dialog} onOpenChange={(o) => !o && close()}>
       <DialogContent>
@@ -199,9 +203,21 @@ function NameDialog({
             <Button type="button" variant="outline" onClick={close}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!name.trim() || saving}>
-              {creating ? "Create" : "Rename"}
-            </Button>
+            <Tip
+              tip={
+                creating
+                  ? count
+                    ? `Makes the tag and adds it to the ${count === 1 ? "chosen style" : `${count.toLocaleString()} chosen styles`}`
+                    : "Makes the tag"
+                  : "Saves the new name. Tags inside it move with it."
+              }
+              shortcut="Enter"
+              disabledReason={blocked}
+            >
+              <Button type="submit" disabled={!!blocked} focusableWhenDisabled className="aria-disabled:opacity-50">
+                {creating ? "Create" : "Rename"}
+              </Button>
+            </Tip>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -227,20 +243,22 @@ function DeleteDialog({ tag, families, onDeleted }: { tag: Tag | null; families:
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            variant="destructive"
-            onClick={async () => {
-              if (!tag) return;
-              close();
-              try {
-                onDeleted(await deleteTag(tag.id));
-              } catch (e) {
-                toast.error("Couldn't delete the tag", { description: String(e) });
-              }
-            }}
-          >
-            Delete
-          </AlertDialogAction>
+          <Tip tip={nested > 0 ? "Deletes the tag and the tags inside it. The fonts stay." : "Deletes the tag. The fonts stay in your library."}>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={async () => {
+                if (!tag) return;
+                close();
+                try {
+                  onDeleted(await deleteTag(tag.id));
+                } catch (e) {
+                  toast.error("Couldn't delete the tag", { description: String(e) });
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </Tip>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 
 /** The ids that tie a row's control to its label and description. */
@@ -217,7 +218,14 @@ export function TextSetting({
   );
 }
 
-/** A button that asks first. The question names what will happen; the action button repeats the verb. */
+/**
+ * A button that asks first. The question names what will happen; the action button repeats the
+ * verb. `title` is the question (the dialog's title), not a tooltip: `tip` is the button's
+ * tooltip, `confirmTip` the dialog's action button's (what happens once you confirm), and
+ * `disabledReason` what the button's tooltip says while it's greyed out (keep the button
+ * focusable then: `focusableWhenDisabled` and `className="aria-disabled:opacity-50"`, see
+ * components/Tip.tsx).
+ */
 export function ConfirmButton({
   label,
   icon,
@@ -225,6 +233,9 @@ export function ConfirmButton({
   description,
   confirm,
   disabled,
+  tip,
+  confirmTip,
+  disabledReason,
   variant = "outline",
   onConfirm,
   ...props
@@ -235,16 +246,42 @@ export function ConfirmButton({
   description: React.ReactNode;
   confirm: string;
   disabled?: boolean;
+  /** The button's tooltip: what happens (after you confirm). */
+  tip?: string;
+  /** The dialog's action button's tooltip: what it does. */
+  confirmTip?: string;
+  /** Shown instead of `tip` while it's disabled: why, and what would turn it on. */
+  disabledReason?: string;
   variant?: "outline" | "destructive";
   onConfirm: () => void;
 } & Omit<React.ComponentProps<typeof Button>, "onClick" | "variant">) {
   const [open, setOpen] = useState(false);
+  const button = (
+    <Button size="sm" variant={variant} disabled={disabled} onClick={() => setOpen(true)} {...props}>
+      {icon && <Icon name={icon} size={16} />}
+      {label}
+    </Button>
+  );
+  const action = (
+    <AlertDialogAction
+      variant="destructive"
+      onClick={() => {
+        setOpen(false);
+        onConfirm();
+      }}
+    >
+      {confirm}
+    </AlertDialogAction>
+  );
   return (
     <>
-      <Button size="sm" variant={variant} disabled={disabled} onClick={() => setOpen(true)} {...props}>
-        {icon && <Icon name={icon} size={16} />}
-        {label}
-      </Button>
+      {tip ? (
+        <Tip tip={tip} disabledReason={disabled && disabledReason}>
+          {button}
+        </Tip>
+      ) : (
+        button
+      )}
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -253,15 +290,7 @@ export function ConfirmButton({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                setOpen(false);
-                onConfirm();
-              }}
-            >
-              {confirm}
-            </AlertDialogAction>
+            {confirmTip ? <Tip tip={confirmTip}>{action}</Tip> : action}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

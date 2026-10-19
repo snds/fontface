@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
 import { StateControl, useStateWording } from "./ActivationSwitch";
 import { CopiesBadge, FacePreview, MissingHint, SampleBadge } from "./FacePreview";
+import { Tip } from "./Tip";
 import { activeInSight, describedBy, rowKey, RowTagButton, useKeepFocus, type DisplayProps, type ListView, type Row } from "./library/LibraryPane";
 
 /**
@@ -177,19 +178,21 @@ function FamilyRow(props: RowProps & { family: Family }) {
           // Lines the name up with family rows' names.
           <span className="size-6 shrink-0" aria-hidden />
         ) : (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={isOpen ? `Collapse ${family.name}` : `Expand ${family.name}`}
-            aria-expanded={isOpen}
-            tabIndex={tab}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleExpanded(family.id);
-            }}
-          >
-            <Icon name="chevron_right" size={18} className={cn("transition-transform", isOpen && "rotate-90")} />
-          </Button>
+          <Tip handle={actions.tips} tip={isOpen ? "Hides this family's styles" : "Lists this family's styles under it"}>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={isOpen ? `Collapse ${family.name}` : `Expand ${family.name}`}
+              aria-expanded={isOpen}
+              tabIndex={tab}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleExpanded(family.id);
+              }}
+            >
+              <Icon name="chevron_right" size={18} className={cn("transition-transform", isOpen && "rotate-90")} />
+            </Button>
+          </Tip>
         )}
         <span className="truncate text-sm font-semibold">{family.name}</span>
         <LocationDots copies={copies} locations={locations} srId={`${props.id}-places`} />
@@ -228,6 +231,7 @@ function FamilyRow(props: RowProps & { family: Family }) {
           busy={family.switchable.some((face) => face.copies.some((c) => busy.has(c.path)))}
           tabIndex={tab}
           srId={`${props.id}-state`}
+          tipHandle={actions.tips}
           onSwitch={(on, scope) => onActivate(activationIds(family.switchable, on), on, scope)}
         />
       </div>
@@ -289,6 +293,7 @@ function FaceRow(props: RowProps & { face: Face }) {
           busy={face.copies.some((c) => busy.has(c.path))}
           tabIndex={tab}
           srId={`${props.id}-state`}
+          tipHandle={actions.tips}
           onSwitch={(on, scope) => onActivate(activationIds([face], on), on, scope)}
         />
       </div>

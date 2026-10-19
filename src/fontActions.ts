@@ -1,5 +1,6 @@
 import type { ActivationMode, FontSummary, LibraryLayout, SortKey, SortOrder } from "./api.ts";
-import type { Face, Family } from "./library.ts";
+import { INSTALLED_LABEL, type Face, type Family } from "./library.ts";
+import { switchLook, type StateSummary } from "./fontState.ts";
 import { LAYOUTS, SORTS, stepSize } from "./viewOptions.ts";
 
 /**
@@ -123,6 +124,25 @@ export function optionClickHint(mode: ActivationMode, mac: boolean, untilQuit = 
   return untilQuit ? `${click} to turn on until you quit Fontface.` : `${click} to turn on until you log out.`;
 }
 
+/** A font switch's tooltip while it's working on a request (it ignores clicks till then). */
+export const SWITCH_BUSY_TIP = "Wait: Fontface is still switching these fonts";
+
+/**
+ * What a font's switch says it will do (its tooltip): turn the style or the family's styles off,
+ * or on, with Option-click's other way. `single`: one style, else a family. Locked styles (in
+ * macOS Fonts) aren't counted: the switch doesn't change them.
+ */
+export function switchTip(s: StateSummary, single: boolean, { mode, mac, untilQuit = false }: { mode: ActivationMode; mac: boolean; untilQuit?: boolean }): string {
+  const { checked, partial } = switchLook(s);
+  const count = (n: number) => `${n.toLocaleString()} ${n === 1 ? "style" : "styles"}`;
+  const all = s.total === 1 ? (single ? "this style" : "its 1 style") : `all ${count(s.total)}`;
+  if (checked) return `Turns off ${all}`;
+  const hint = optionClickHint(mode, mac, untilQuit);
+  const rest = s.total - s.wanted;
+  if (partial) return `Turns on the other ${rest === 1 ? "style" : count(rest)}. ${hint}`;
+  return `Turns on ${all}. ${hint}`;
+}
+
 // --------------------------------------------------------------------------- the actions
 
 /** Styles that can be switched (not in an OS font folder). */
@@ -176,6 +196,66 @@ export function fontActionStates(target: FontTarget | null, ctx: ActionContext):
       "Remove from Library…",
     ),
   };
+}
+
+/**
+ * What a font action does, for its menu item's tooltip, or, when it's greyed out (`enabled`
+ * false), why and what would make it work. `mode` and `untilQuit` are the saved activation
+ * mode's (Settings › Activation): Turn On keeps fonts on that way, the other Turn On the other
+ * way. `mac`: Finder, else Explorer.
+ */
+export function actionTip(
+  id: FontActionId,
+  enabled: boolean,
+  target: FontTarget,
+  { mode, untilQuit = false, mac }: { mode: ActivationMode; untilQuit?: boolean; mac: boolean },
+): string {
+  const one = target.items.length === 1 ? target.items[0] : null;
+  const style = !!one && (one.kind === "style" || !!one.family.ungroupedFrom || one.family.faces.length === 1);
+  const subject = !one ? "the selected fonts" : style ? "this style" : "this family";
+  const it = one ? "it" : "them";
+  const its = one ? "it's" : "they're";
+  const page = target.where === "page";
+  // Turning on and off only changes styles outside the OS's own font folders.
+  const locked = target.faces.length > 0 && target.faces.every((f) => f.installed);
+  const until = (m: ActivationMode) => (m === "persistent" ? `until you turn ${it} off` : untilQuit ? "until you quit Fontface" : "until you log out");
+  const already = (state: "on" | "off") => (locked ? `Always on: ${its} in ${INSTALLED_LABEL}` : `${one ? "It's" : "They're"} already ${state}`);
+  switch (id) {
+    case "open":
+      if (enabled) return "Opens this font's page";
+      return page ? "This font's page is already open" : "Select just one font to open its page";
+    case "info":
+      if (!enabled) return "Select just one font to see its details";
+      return page ? `Shows ${style ? "this style's" : "this font's"} details on the Info tab` : "Opens this font's page on the Info tab";
+    case "turnOn":
+    case "turnOnOther":
+      return enabled ? `Turns ${subject} on ${until(id === "turnOn" ? mode : otherMode(mode))}` : already("on");
+    case "turnOff":
+      return enabled ? `Turns ${subject} off` : already("off");
+    case "tags":
+      return enabled ? `Adds or removes tags on ${subject}` : "Select a font to tag it";
+    case "compare":
+      if (!enabled) return "Select a font to compare it";
+      return one ? `Picks fonts to compare ${subject} with` : "Shows the selected fonts side by side";
+    case "pair":
+      if (!enabled) return "Select one or two fonts to pair them";
+      return one ? `Picks a body font to go with ${subject}` : "Pairs them: the first as heading, the second as body text";
+    case "familyGroup":
+      return enabled ? `Opens Family groups, to see or change how ${subject} ${one ? "is" : "are"} grouped` : "Select a font to see its family group";
+    case "reveal": {
+      // A family shows the file of the style it stands for (its preview, or the page's style).
+      const where = mac ? "Finder" : "Explorer";
+      if (!enabled) return "Select just one font to show its file";
+      return style ? `Shows its font file in ${where}` : `Shows one of this family's files in ${where}`;
+    }
+    case "copyPostScript":
+      if (!enabled) return `${one ? "It has" : "They have"} no PostScript name to copy`;
+      return postScriptNames(target).length > 1 ? "Copies their PostScript names, one per line" : "Copies its PostScript name to the clipboard";
+    case "remove":
+      return enabled
+        ? `Stops listing ${subject} and turns ${it} off, after asking. Nothing is deleted.`
+        : "Only fonts in your own folders can be removed from the library";
+  }
 }
 
 // ------------------------------------------------------------------------ keyboard

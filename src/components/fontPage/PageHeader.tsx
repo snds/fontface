@@ -7,15 +7,15 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/compon
 import { Icon } from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tip } from "@/components/Tip";
 import { summarize } from "@/fontState";
 import { StateControl } from "@/components/ActivationSwitch";
 import { FontActionItems } from "@/components/FontActions";
-import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
+import { dragRegion, useTitleBar } from "@/components/TitleBar";
 import { TagPicker } from "@/tags/TagPicker";
 
-const BACK_KEYS = IS_MAC ? "⌘[" : "Alt+Left";
-const BACK_ARIA_KEYS = IS_MAC ? "Meta+[" : "Alt+ArrowLeft";
+/** Back: Cmd+[ on macOS, Alt+Left on Windows (App runs it). */
+export const BACK_SHORTCUT = { mac: "Mod+[", other: "Alt+Left" };
 
 /** A style's name in its family (grouping by name may have worked it out), with "(Variable)". */
 export const styleLabel = (face: Face) => `${face.style}${face.primary.variable ? " (Variable)" : ""}`;
@@ -23,16 +23,13 @@ export const styleLabel = (face: Face) => `${face.style}${face.primary.variable 
 /** The Back button at the left of a page's top row. */
 export function BackButton({ placeName, onBack }: { placeName: string; onBack: () => void }) {
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<Button variant="ghost" size="icon-sm" aria-label={`Back to ${placeName}`} aria-keyshortcuts={BACK_ARIA_KEYS} onClick={onBack} />}
-      >
+    // Its name says the same as the tooltip, so the tooltip adds no description (the shortcut is
+    // on aria-keyshortcuts).
+    <Tip tip={`Goes back to ${placeName}`} shortcut={BACK_SHORTCUT} describe={false}>
+      <Button variant="ghost" size="icon-sm" aria-label={`Back to ${placeName}`} onClick={onBack}>
         <Icon name="arrow_back" size={20} />
-      </TooltipTrigger>
-      <TooltipContent>
-        Back to {placeName} ({BACK_KEYS})
-      </TooltipContent>
-    </Tooltip>
+      </Button>
+    </Tip>
   );
 }
 
@@ -70,6 +67,8 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
   // Cmd+T opens Tags here: only an ask for this page that's newer than the last one seen (an
   // ask for a font page opened over this one leaves it alone; the first render isn't one).
   const [tagsOpen, setTagsOpen] = useState(false);
+  // Each button's tooltip stays away while its own popup is open.
+  const [moreOpen, setMoreOpen] = useState(false);
   const seenAsk = useRef(tagsAsk ?? 0);
   useEffect(() => {
     if (!newTagsAsk(seenAsk.current, tagsAsk)) return;
@@ -92,9 +91,11 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
           onValueChange={(key) => typeof key === "string" && onChoose(key)}
           items={family.faces.map((f) => ({ value: f.key, label: styleLabel(f) }))}
         >
-          <SelectTrigger size="sm" aria-label="Style" className="max-w-56 min-w-24">
-            <SelectValue />
-          </SelectTrigger>
+          <Tip tip="Picks which style this page shows">
+            <SelectTrigger size="sm" aria-label="Style" className="max-w-56 min-w-24">
+              <SelectValue />
+            </SelectTrigger>
+          </Tip>
           <SelectContent className="max-h-80">
             {family.faces.map((f) => (
               <SelectItem key={f.key} value={f.key}>
@@ -116,18 +117,24 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
         onSwitch={(on, scope) => onActivate(activationIds(family.switchable, on), on, scope)}
       />
       <Popover open={tagsOpen} onOpenChange={setTagsOpen}>
-        <PopoverTrigger render={<Button variant="ghost" size="sm" aria-label={`Tags for ${family.name}`} aria-keyshortcuts={IS_MAC ? "Meta+T" : "Control+T"} />}>
-          <Icon name="sell" size={16} />
-          <span className="@max-[640px]/pagehead:hidden">Tags</span>
-        </PopoverTrigger>
+        {/* The tooltip puts Cmd+T on aria-keyshortcuts. */}
+        <Tip tip="Adds or removes this family's tags" shortcut="Mod+T" hide={tagsOpen}>
+          <PopoverTrigger render={<Button variant="ghost" size="sm" aria-label={`Tags for ${family.name}`} />}>
+            <Icon name="sell" size={16} />
+            <span className="@max-[640px]/pagehead:hidden">Tags</span>
+          </PopoverTrigger>
+        </Tip>
         <PopoverContent align="end" className="w-80">
           <TagPicker faces={family.faces} />
         </PopoverContent>
       </Popover>
-      <DropdownMenu>
-        <DropdownMenuTrigger render={<Button id={FONT_PAGE_MORE_ID} variant="ghost" size="icon-sm" aria-label="More" />}>
-          <Icon name="more_horiz" size={18} />
-        </DropdownMenuTrigger>
+      <DropdownMenu onOpenChange={setMoreOpen}>
+        <Tip tip="Shows more actions: Compare, Pair, Family Group and others" hide={moreOpen}>
+          {/* The id is on the trigger, so the tooltip, the menu and the button share it. */}
+          <DropdownMenuTrigger id={FONT_PAGE_MORE_ID} render={<Button variant="ghost" size="icon-sm" aria-label="More" />}>
+            <Icon name="more_horiz" size={18} />
+          </DropdownMenuTrigger>
+        </Tip>
         <DropdownMenuContent align="end" className="min-w-56">
           <FontActionItems kind="dropdown" target={pageTarget(family, face)} only={MORE} returnTo={FONT_PAGE_MORE_ID} />
         </DropdownMenuContent>

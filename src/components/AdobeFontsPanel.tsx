@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { PreviewText } from "./PreviewText";
+import { createTipHandle, Tip, TipHost } from "./Tip";
 import { PageHeader } from "./TitleBar";
 
 const LINKS = {
@@ -40,6 +41,8 @@ interface Props {
 export function AdobeFontsPanel({ previewText, onStatus }: Props) {
   const [status, setStatus] = useState<AdobeStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  // One tooltip shared by the list's rows (there can be hundreds).
+  const [tips] = useState(createTipHandle);
 
   const load = async () => {
     setLoading(true);
@@ -70,10 +73,12 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader icon="cloud" title="Adobe Fonts">
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          <Icon name="refresh" size={16} className={cn(loading && "animate-spin")} />
-          Refresh
-        </Button>
+        <Tip tip="Checks again which Adobe Fonts Creative Cloud has turned on" disabledReason={loading && "Wait: Fontface is still checking Creative Cloud"}>
+          <Button variant="outline" size="sm" onClick={load} disabled={loading} focusableWhenDisabled className="aria-disabled:opacity-50">
+            <Icon name="refresh" size={16} className={cn(loading && "animate-spin")} />
+            Refresh
+          </Button>
+        </Tip>
       </PageHeader>
 
       <div className="flex flex-col gap-3 border-b px-4 py-3">
@@ -83,14 +88,18 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
           Adobe's font files.
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => open(LINKS.browse)}>
-            <Icon name="open_in_new" size={16} />
-            Browse Adobe Fonts
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => open(LINKS.mine)}>
-            <Icon name="open_in_new" size={16} />
-            My Adobe Fonts
-          </Button>
+          <Tip tip="Opens fonts.adobe.com in your browser, to find fonts to turn on">
+            <Button size="sm" variant="outline" onClick={() => open(LINKS.browse)}>
+              <Icon name="open_in_new" size={16} />
+              Browse Adobe Fonts
+            </Button>
+          </Tip>
+          <Tip tip="Opens your fonts on fonts.adobe.com, to turn them on or off">
+            <Button size="sm" variant="outline" onClick={() => open(LINKS.mine)}>
+              <Icon name="open_in_new" size={16} />
+              My Adobe Fonts
+            </Button>
+          </Tip>
         </div>
       </div>
 
@@ -106,10 +115,12 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
       ) : !status.appInstalled && status.faces.length === 0 ? (
         <Empty icon="cloud_off" title="Creative Cloud isn't installed">
           <p>Install the Creative Cloud desktop app and sign in to use Adobe Fonts. Fonts it turns on will show up here.</p>
-          <Button className="mt-3" onClick={() => open(LINKS.app)}>
-            <Icon name="open_in_new" size={16} />
-            Get Creative Cloud
-          </Button>
+          <Tip tip="Opens Adobe's Creative Cloud download page in your browser">
+            <Button className="mt-3" onClick={() => open(LINKS.app)}>
+              <Icon name="open_in_new" size={16} />
+              Get Creative Cloud
+            </Button>
+          </Tip>
         </Empty>
       ) : status.faces.length === 0 ? (
         <Empty icon="font_download_off" title="No Adobe Fonts are turned on">
@@ -129,10 +140,12 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
                   <Icon name="lock" size={12} />
                   Creative Cloud
                 </Badge>
-                <Button size="xs" variant="ghost" onClick={() => open(LINKS.search(family))}>
-                  <Icon name="open_in_new" size={14} />
-                  Adobe Fonts
-                </Button>
+                <Tip handle={tips} tip={`Finds ${family} on fonts.adobe.com, in your browser`}>
+                  <Button size="xs" variant="ghost" onClick={() => open(LINKS.search(family))}>
+                    <Icon name="open_in_new" size={14} />
+                    Adobe Fonts
+                  </Button>
+                </Tip>
               </div>
               {/* Drawn by the OS through the font's registered name. Nothing is read from Adobe's files. */}
               {/* Fitted from the canvas's measurement of the drawn text, never from the file. */}
@@ -147,6 +160,7 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
           ))}
         </div>
       )}
+      <TipHost handle={tips} />
     </div>
   );
 }

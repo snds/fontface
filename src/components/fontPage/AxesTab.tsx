@@ -7,6 +7,7 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Tip } from "@/components/Tip";
 import { FactsMessage, type FactsState } from "./parts";
 
 interface Props {
@@ -59,9 +60,11 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
               }}
               items={[...named.map((n, i) => ({ value: String(i), label: n.name })), { value: CUSTOM, label: "Custom" }]}
             >
-              <SelectTrigger size="sm" aria-labelledby={`${id}-named`} className="min-w-40">
-                <SelectValue />
-              </SelectTrigger>
+              <Tip tip="Sets every axis to one of the font's named styles">
+                <SelectTrigger size="sm" aria-labelledby={`${id}-named`} className="min-w-40">
+                  <SelectValue />
+                </SelectTrigger>
+              </Tip>
               <SelectContent className="max-h-80">
                 {named.map((n, i) => (
                   <SelectItem key={`${n.name}-${i}`} value={String(i)}>
@@ -81,14 +84,20 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
         <span className="flex-1" />
         {hidden > 0 && (
           <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={showHidden} onCheckedChange={(on) => setShowHidden(on)} />
+            <Tip tip={showHidden ? "Hides the fine-tuning axes again" : "Shows the fine-tuning axes the font's maker hid"}>
+              <Checkbox checked={showHidden} onCheckedChange={(on) => setShowHidden(on)} />
+            </Tip>
             Show hidden axes ({hidden})
           </label>
         )}
-        <Button variant="outline" size="sm" disabled={!changed} onClick={() => onSet({})}>
-          <Icon name="restart_alt" size={16} />
-          Reset
-        </Button>
+        {/* Stays focusable once every axis is back at its default (focus doesn't fall out of the
+            page, and the tooltip says why it's greyed out). */}
+        <Tip tip="Puts every axis back to its default" disabledReason={!changed && "Nothing to reset yet: every axis is at its default"}>
+          <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={() => onSet({})}>
+            <Icon name="restart_alt" size={16} />
+            Reset
+          </Button>
+        </Tip>
       </div>
       {facts.status !== "ready" || facts.answer.unread ? <FactsMessage state={facts} retry={retry} what="named styles" /> : null}
       <p className="-mt-2 text-xs text-muted-foreground">Changes show in Specimen, Characters and OpenType too, for this style.</p>
@@ -151,15 +160,17 @@ function AxisRow({ axis, value, onChange }: { axis: Axis; value: number; onChang
         }}
         className="w-24 text-right font-mono tabular-nums"
       />
-      <Slider
-        className="col-span-2"
-        min={axis.min}
-        max={axis.max}
-        step={(axis.max - axis.min) / 200 || 1}
-        value={[value]}
-        onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
-        aria-label={name}
-      />
+      <Tip tip={`Sets ${name}, from ${tidy(axis.min)} to ${tidy(axis.max)}`}>
+        <Slider
+          className="col-span-2"
+          min={axis.min}
+          max={axis.max}
+          step={(axis.max - axis.min) / 200 || 1}
+          value={[value]}
+          onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
+          aria-label={name}
+        />
+      </Tip>
       <div className="col-span-2 flex justify-between font-mono text-[11px] text-muted-foreground tabular-nums">
         <span>{tidy(axis.min)}</span>
         <span>Default {tidy(axis.default)}</span>

@@ -5,7 +5,7 @@ import type { FaceState } from "@/fontLoader";
 import type { Face } from "@/library";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tip } from "@/components/Tip";
 import { BUILTIN_FONTS_TIP } from "@/tagActions";
 import { colorVar } from "@/tags/api";
 import { leafOf, useTagIndex } from "@/tags/model";
@@ -92,6 +92,11 @@ export function useFontFacts(fontId: number, enabled: boolean, refresh = ""): { 
 /** The file's facts, if they were read. */
 export const factsOf = (state: FactsState) => (state.status === "ready" ? state.answer.facts : null);
 
+/** Check again's tooltip: an online-only file is read once it has downloaded; any other try
+ *  reads it again now. */
+export const checkAgainTip = (cloud: boolean) =>
+  cloud ? "Reads the file again, once your cloud drive has downloaded it" : "Tries reading the file's details again";
+
 /**
  * Why the file's details aren't here: "Download to see details" for an online-only file (with
  * Check again, for once it has downloaded), or what stopped it. Nothing while it's read or once
@@ -112,13 +117,22 @@ export function FactsMessage({ state, retry, what = "details" }: { state: FactsS
         <span className="text-xs text-muted-foreground">{words.text}</span>
       </span>
       {(cloud || unread === "missing" || unread === "changed" || state.status === "error") && (
-        <Button variant="outline" size="sm" onClick={retry}>
-          <Icon name="refresh" size={16} />
-          Check again
-        </Button>
+        <Tip tip={checkAgainTip(cloud)}>
+          <Button variant="outline" size="sm" onClick={retry}>
+            <Icon name="refresh" size={16} />
+            Check again
+          </Button>
+        </Tip>
       )}
     </div>
   );
+}
+
+/** A tag chip's remove button: which styles it comes off (only those that have it). */
+function removeTagTip(name: string, has: number, total: number): string {
+  if (total === 1) return `Takes “${name}” off this font`;
+  if (has === total) return `Takes “${name}” off all ${total} styles`;
+  return has === 1 ? `Takes “${name}” off the one style that has it` : `Takes “${name}” off the ${has} styles that have it`;
 }
 
 /**
@@ -146,27 +160,31 @@ export function TagChipsRow({ faces }: { faces: Face[] }) {
               background: `color-mix(in oklch, ${colorVar(t.color)} var(--tag-tint), transparent)`,
               border: partial ? `1px dashed ${colorVar(t.color)}` : undefined,
             }}
-            title={partial ? `${t.name}: on ${n} of ${faces.length} styles` : t.name}
           >
             <span className="size-2 rounded-full" style={{ background: colorVar(t.color) }} aria-hidden />
-            <span>
-              {t.name.includes("/") && <span className="text-muted-foreground">{t.name.slice(0, t.name.lastIndexOf("/") + 1)}</span>}
-              {leafOf(t.name)}
-              {partial && <span className="sr-only">, on {n} of {faces.length} styles</span>}
-            </span>
+            {/* A dashed tag says, on hover, how many styles have it (screen readers hear it in
+                the name). The full name always shows, so a tag on every style needs no tooltip. */}
+            <Tip tip={`On ${n} of ${faces.length} styles`} describe={false} hide={!partial}>
+              <span>
+                {t.name.includes("/") && <span className="text-muted-foreground">{t.name.slice(0, t.name.lastIndexOf("/") + 1)}</span>}
+                {leafOf(t.name)}
+                {partial && <span className="sr-only">, on {n} of {faces.length} styles</span>}
+              </span>
+            </Tip>
             {t.builtin ? (
-              // Built-in tags are read-only: a lock where the remove button would be.
-              <Tooltip>
-                <TooltipTrigger render={<span className="flex size-5 items-center justify-center text-muted-foreground" />}>
+              // Built-in tags are read-only: a lock where the remove button would be (not a control).
+              <Tip tip={BUILTIN_FONTS_TIP} describe={false} contentClassName="max-w-64">
+                <span className="flex size-5 items-center justify-center text-muted-foreground">
                   <Icon name="lock" size={12} />
                   <span className="sr-only">Built-in, read-only</span>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-64">{BUILTIN_FONTS_TIP}</TooltipContent>
-              </Tooltip>
+                </span>
+              </Tip>
             ) : (
-              <Button variant="ghost" size="icon-xs" className="size-5 rounded-full" aria-label={`Remove tag ${t.name}`} onClick={() => applyTags([t.id], on, false)}>
-                <Icon name="close" size={14} />
-              </Button>
+              <Tip tip={removeTagTip(t.name, n, faces.length)}>
+                <Button variant="ghost" size="icon-xs" className="size-5 rounded-full" aria-label={`Remove tag ${t.name}`} onClick={() => applyTags([t.id], on, false)}>
+                  <Icon name="close" size={14} />
+                </Button>
+              </Tip>
             )}
           </li>
         );

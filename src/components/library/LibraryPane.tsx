@@ -15,6 +15,7 @@ import { uniqueFaces, useTagIndex, type TagIndex } from "@/tags/model";
 import { TagPicker } from "@/tags/TagPicker";
 import { FontActionItems, useFontActions } from "../FontActions";
 import { FontList } from "../FontList";
+import { createTipHandle, Tip, TipHost, type TipHandle } from "../Tip";
 import { IS_MAC } from "../TitleBar";
 import { FontTable } from "./FontTable";
 import { FontTiles } from "./FontTiles";
@@ -67,6 +68,9 @@ export interface RowActions {
   onRowDoubleClick: (e: React.MouseEvent, row: Row) => void;
   /** The list has keyboard focus and shows where it is. */
   ring: boolean;
+  /** The list's one shared tooltip, for its rows' buttons and switches (Tip's `handle`), so
+   *  each row mounts none of its own. */
+  tips: TipHandle;
 }
 
 /** What a layout tells the pane about itself, on every render. */
@@ -207,6 +211,8 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
    *  even when it's scrolled away and the event lands on the list. */
   const menuOnActive = useRef(false);
   const adapter = useRef<LayoutAdapter>(NO_ADAPTER);
+  // One tooltip for every row's controls (TipHost, below), whichever layout draws them.
+  const [tips] = useState(createTipHandle);
 
   // An item's own control (a switch, the expand button) with keyboard focus. Virtualized rows
   // come and go: one scrolled out of the drawn ones takes its control with it, and a reload can
@@ -291,6 +297,7 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
     selection,
     targetsFor,
     ring: focused && keyboard,
+    tips,
     onRowClick: (e, key) => {
       sel.click(key, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey });
     },
@@ -507,6 +514,7 @@ export function LibraryPane({ ref, layout, families, allFamilies, resetKey, orde
           )}
         </ContextMenuContent>
       </ContextMenu>
+      <TipHost handle={tips} />
     </div>
   );
 }
@@ -520,23 +528,31 @@ function BulkBar({ faces, rows, target, onClear }: { faces: Face[]; rows: number
         {rows.toLocaleString()} selected · {faces.length.toLocaleString()} {faces.length === 1 ? "style" : "styles"}
       </span>
       {actions && target && (
-        <Button id={COMPARE_BUTTON_ID} variant="outline" size="sm" onClick={() => actions.run("compare", target, { returnTo: COMPARE_BUTTON_ID })}>
-          <Icon name="compare" size={16} />
-          Compare
-        </Button>
+        <Tip tip="Shows the selected fonts side by side">
+          <Button id={COMPARE_BUTTON_ID} variant="outline" size="sm" onClick={() => actions.run("compare", target, { returnTo: COMPARE_BUTTON_ID })}>
+            <Icon name="compare" size={16} />
+            Compare
+          </Button>
+        </Tip>
       )}
       <Popover>
-        <PopoverTrigger render={<Button variant="outline" size="sm" />}>
-          <Icon name="sell" size={16} />
-          Tags…
-        </PopoverTrigger>
+        {/* ⌘T opens the same tag picker for the selection (as a dialog). */}
+        <Tip tip="Adds or removes tags on the selected fonts" shortcut="Mod+T">
+          <PopoverTrigger render={<Button variant="outline" size="sm" />}>
+            <Icon name="sell" size={16} />
+            Tags…
+          </PopoverTrigger>
+        </Tip>
         <PopoverContent align="end" className="w-80">
           <TagPicker faces={faces} />
         </PopoverContent>
       </Popover>
-      <Button variant="ghost" size="sm" onClick={onClear}>
-        Clear
-      </Button>
+      {/* Esc in the list clears it too. */}
+      <Tip tip="Clears the selection" shortcut="Esc">
+        <Button variant="ghost" size="sm" onClick={onClear}>
+          Clear
+        </Button>
+      </Tip>
     </div>
   );
 }
@@ -545,22 +561,26 @@ function BulkBar({ faces, rows, target, onClear }: { faces: Face[]; rows: number
 export function RowTagButton({ rowKey: key, actions, label, tabIndex }: { rowKey: string; actions: RowActions; label: string; tabIndex: number }) {
   const [open, setOpen] = useState(false);
   const faces = open ? actions.targetsFor(key) : [];
+  // Like the button itself: the selection, if this row is one of several selected.
+  const several = actions.selection.keys.size > 1 && actions.selection.keys.has(key);
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Tags for ${label}`}
-            tabIndex={tabIndex}
-            onClick={(e) => e.stopPropagation()}
-            className={open ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"}
-          />
-        }
-      >
-        <Icon name="sell" size={16} />
-      </PopoverTrigger>
+      <Tip handle={actions.tips} tip={several ? "Adds or removes tags on the selected fonts" : "Adds or removes tags on this font"} hide={open}>
+        <PopoverTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Tags for ${label}`}
+              tabIndex={tabIndex}
+              onClick={(e) => e.stopPropagation()}
+              className={open ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"}
+            />
+          }
+        >
+          <Icon name="sell" size={16} />
+        </PopoverTrigger>
+      </Tip>
       <PopoverContent align="end" className="w-80" onClick={(e) => e.stopPropagation()}>
         {open && <TagPicker faces={faces} />}
       </PopoverContent>
