@@ -960,3 +960,152 @@ test("merging writes the rule for the name a style was placed by (Face.name)", (
   const choices = new Map<string, FaceChoice>([[keyOf("House-A-Rama-Kingpin"), { faceKey: keyOf("House-A-Rama-Kingpin"), family: null, style: null }]]);
   assert.deepEqual(shape(groupFamilies(fonts, { byName: true, choices })), ["House-A-Rama: Regular, Tenpin", "House-A-Rama-Kingpin: Regular"]);
 });
+
+/**
+ * Turning "Group families by name" off only ever splits families, by the fonts' own names:
+ * - I1: every family with it off lies inside one family with it on (off refines on);
+ * - I2: no style is alone with it off while it's in one family with it on with a family (off)
+ *   that one of its copies names, or one whose styles have a copy carrying its name.
+ */
+function offRefinesOn(fonts: FontSummary[]) {
+  const on = groupFamilies(fonts, ON);
+  const off = groupFamilies(fonts, OFF);
+  const onOf = new Map(on.flatMap((f) => f.faces.map((x) => [x.key, f.name] as const)));
+  for (const f of off) assert.equal(new Set(f.faces.map((x) => onOf.get(x.key))).size, 1, `${f.name} (off) lies inside one family on`);
+  for (const f of off) {
+    if (f.faces.length !== 1) continue;
+    const x = f.faces[0];
+    for (const g of off) {
+      if (g === f || !g.faces.some((y) => onOf.get(y.key) === onOf.get(x.key))) continue;
+      const named = x.copies.some((c) => c.family === g.name) || g.faces.some((y) => y.copies.some((c) => c.family === f.name));
+      assert.ok(!named, `${x.primary.postscriptName} is alone off, though it's with ${g.name} on and a copy names one for the other`);
+    }
+  }
+}
+
+test("with grouping off, a style's other copies still keep its family together (M3-r3-1: MorganAvec, Engine)", () => {
+  const morgan = [
+    font("MorganAvec", "Regular", { postscriptName: "MorganAvec-Regular" }),
+    font("MorganAvec", "Bold", { postscriptName: "MorganAvec-Bold", weight: 700 }),
+    ...copies("MorganAvec-RegularPi", ["MorganAvec-RegularPi", "Regular"], ["MorganAvec", "Regular"]),
+    // A name grouping by name merges (Bold, Caps): with it off, its copy still brings it back.
+    ...copies("MorganAvec-BoldCaps", ["MorganAvec-BoldCaps", "Regular"], ["MorganAvec", "Bold"], { weight: 700 }),
+  ];
+  const engine = [
+    font("Engine", "Regular", { postscriptName: "Engine-Regular" }),
+    font("Engine", "Bold", { postscriptName: "Engine-Bold", weight: 700 }),
+    ...copies("Engine-LightLF", ["Engine-LightLF", "Regular"], ["Engine", "Medium"]),
+  ];
+  const fonts = [...morgan, ...engine];
+  for (const options of [OFF, ON]) {
+    const families = groupFamilies(fonts, options);
+    assert.deepEqual(shape(families), ["Engine: Light LF, Regular, Bold", "MorganAvec: Regular, Regular Pi, Bold, Bold Caps"], `grouping ${options.byName ? "on" : "off"}`);
+    for (const other of variants(fonts)) assert.deepEqual(shape(groupFamilies(other, options)), shape(families), "whatever the order, folders or copy on");
+  }
+  const caps = groupFamilies(fonts, OFF)[1].faces.find((f) => f.key === keyOf("MorganAvec-BoldCaps"))!;
+  assert.deepEqual([caps.groupedBy, caps.name], ["own", "MorganAvec"], "the fonts' own names: its other copy's");
+  // Nothing to suggest for it any more; a name with no such copy still is.
+  const lone = [...morgan, font("MorganAvec-ItalicCaps", "Regular", { postscriptName: "MorganAvec-ItalicCaps", italic: true })];
+  assert.deepEqual(
+    suggestionsOf(lone, OFF).map((s) => [s.into, s.sources.map((src) => [src.family.name, src.reason])]),
+    [["MorganAvec", [["MorganAvec-ItalicCaps", "strong"]]]],
+  );
+  for (const f of [fonts, lone]) offRefinesOn(f);
+});
+
+test("with grouping off, a family is never joined that grouping on keeps it out of, and a lone style keeps its company (M3-r3-1)", () => {
+  // LTUnivers-CondThin's other copy says LTUnivers, but grouping by name lists it in
+  // LTUnivers-Cond: off, it stays under its own name rather than join LTUnivers (I1).
+  const univers = [
+    font("LTUnivers", "Normal", { postscriptName: "LTUnivers-Normal" }),
+    font("LTUnivers", "Bold", { postscriptName: "LTUnivers-Bold", weight: 700 }),
+    ...copies("LTUnivers-CondThin", ["LTUnivers-CondThin", "Regular"], ["LTUnivers", "Normal"], { weight: 100 }),
+    font("LTUnivers-CondBold", "Regular", { postscriptName: "LTUnivers-CondBold", weight: 700 }),
+  ];
+  assert.deepEqual(shape(groupFamilies(univers, OFF)), ["LTUnivers: Normal, Bold", "LTUnivers-CondBold: Regular", "LTUnivers-CondThin: Regular"]);
+  // Sansation-Light's files say Sansation (Light) and Sansation Light (Light); its Light Italic
+  // has only the second. Off, the Light stays with its Light Italic rather than leave it alone.
+  const sansation = [
+    font("Sansation", "Regular", { postscriptName: "Sansation-Regular" }),
+    font("Sansation", "Bold", { postscriptName: "Sansation-Bold", weight: 700 }),
+    ...copies("Sansation-Light", ["Sansation", "Light"], ["Sansation Light", "Light"], { weight: 300 }),
+    font("Sansation Light", "Light Italic", { postscriptName: "Sansation-LightItalic", weight: 300, italic: true }),
+  ];
+  assert.deepEqual(shape(groupFamilies(sansation, OFF)), ["Sansation: Regular, Bold", "Sansation Light: Light, Light Italic"]);
+  assert.deepEqual(shape(groupFamilies(sansation, ON)), ["Sansation: Light, Regular, Bold, Light Italic"]);
+  // A style whose other family has styles of its own stays where its better names put it.
+  const hoefler = [
+    font("Hoefler Text", "Regular", { postscriptName: "HoeflerText-Regular" }),
+    ...copies("HoeflerText-Italic", ["Hoefler Text", "Italic"], ["HoeflerText", "Medium Italic"], { italic: true }),
+    font("HoeflerText", "Medium", { postscriptName: "HoeflerText-Roman", weight: 500 }),
+    font("HoeflerText", "Bold", { postscriptName: "HoeflerText-Bold", weight: 700 }),
+  ];
+  assert.deepEqual(shape(groupFamilies(hoefler, OFF)), ["Hoefler Text: Regular, Italic", "HoeflerText: Medium, Bold"]);
+  for (const fonts of [univers, sansation, hoefler]) {
+    for (const other of variants(fonts)) assert.deepEqual(shape(groupFamilies(other, OFF)), shape(groupFamilies(fonts, OFF)), "whatever the order, folders or copy on");
+    offRefinesOn(fonts);
+  }
+  // The M3 fixtures above hold it too.
+  const house = [
+    font("House-A-Rama", "Regular", { postscriptName: "House-A-Rama" }),
+    ...copies("House-A-Rama-Kingpin", ["House-A-Rama-Kingpin", "Regular"], ["House-A-Rama", "Medium"]),
+    font("House-A-Rama-Strike", "Regular", { postscriptName: "House-A-Rama-Strike" }),
+  ];
+  offRefinesOn(house);
+  offRefinesOn(["One", "Two", "Three"].flatMap((n) => copies(`Barcode-${n}`, [`Barcode-${n}`, "Regular"], ["Barcode", "Medium"])));
+});
+
+test("a style's label comes from the copy whose names agree with its PostScript name, inside its family (M3-r3-3)", () => {
+  // ZeitgeistExpertMT-Cameo has a family-folder copy (Zeitgeist MT, Regular) whose names don't
+  // spell the font: its own copy's do, and has every word of Zeitgeist MT.
+  const zeitgeist = [
+    font("Zeitgeist MT", "Regular", { postscriptName: "ZeitgeistMT" }),
+    ...copies("ZeitgeistExpertMT-Cameo", ["ZeitgeistExpertMT-Cameo", "Regular"], ["Zeitgeist MT", "Regular"]),
+    ...copies("ZeitgeistExpertMT", ["ZeitgeistExpertMT", "Regular"], ["Zeitgeist MT", "Regular"]),
+  ];
+  const lido = [
+    font("Lido STF CE", "Normal", { postscriptName: "LidoSTFCE" }),
+    font("Lido STF CE", "Bold", { postscriptName: "LidoSTFCE-Bold", weight: 700 }),
+    ...copies("LidoSTFCondCE-Bold", ["LidoSTFCondCE-Bold", "Regular"], ["Lido STF CE", "Normal"], { weight: 700 }),
+  ];
+  for (const options of [ON, OFF]) {
+    const families = groupFamilies([...zeitgeist, ...lido], options);
+    assert.deepEqual(shape(families), ["Lido STF CE: Condensed Bold, Normal, Bold", "Zeitgeist MT: Expert Cameo, Regular, Expert"], "no second Regular or Normal");
+    for (const other of variants([...zeitgeist, ...lido])) assert.deepEqual(shape(groupFamilies(other, options)), shape(families), "whichever copy is shown");
+  }
+  assert.equal(styleLabel("ZeitgeistExpertMT-Cameo", "Regular", "Zeitgeist MT"), "Expert Cameo", "the words it has besides the family's");
+  assert.equal(styleLabel("LidoSTFCondCE-Bold", "Regular", "Lido STF CE"), "Condensed Bold");
+  assert.equal(styleLabel("Times New Roman", "Regular", "New York"), "Times New Roman", "not every word of the family: its own name first");
+  assert.equal(styleLabel("Helvetica Neue", "Bold", "Neue"), "Helvetica Neue Bold", "the family's first word must start it");
+  // A copy whose names agree but name another family doesn't rename the style away from its
+  // family: XyzBold, moved into Foo by your choice, is Foo's Bold, from its "Foo" copy.
+  const foo = [font("Foo", "Regular", { postscriptName: "Foo-Regular" }), ...copies("XyzBold", ["XyzBold", "Regular"], ["Foo", "Bold"], { weight: 700 })];
+  const choices = new Map<string, FaceChoice>([[keyOf("XyzBold"), { faceKey: keyOf("XyzBold"), family: "Foo", style: null }]]);
+  assert.deepEqual(shape(groupFamilies(foo, { byName: true, choices })), ["Foo: Regular, Bold"]);
+});
+
+test("a numbered name is suggested for the longest name left that's a family, with its width word as the reason (F1, M3-r3-2)", () => {
+  const into = (fonts: FontSummary[]) => suggestionsOf(fonts).map((s) => `${s.into} <- ${s.sources.map((src) => `${src.family.name} (${reasonText(src)})`).join(", ")}`);
+  const numbered = (family: string, ps: string) => [
+    font(`${family} 2 Bold`, "Regular", { postscriptName: `${ps}2-Bold`, weight: 700 }),
+    font(`${family} 2 Italic`, "Regular", { postscriptName: `${ps}2-Italic`, italic: true }),
+  ];
+  const times = font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT" });
+  const shadows = font("Shadows Into Light", "Regular", { postscriptName: "ShadowsIntoLight" });
+  const tnr = "Times New Roman <- Times New Roman 2 Bold (Numbered style), Times New Roman 2 Italic (Numbered style)";
+  const sil = "Shadows Into Light <- Shadows Into Light 2 Bold (Numbered style), Shadows Into Light 2 Italic (Numbered style)";
+  assert.deepEqual(into([times, ...numbered("Times New Roman", "TimesNewRoman")]), [tnr], "not a new Times New");
+  assert.deepEqual(into([shadows, ...numbered("Shadows Into Light", "ShadowsIntoLight")]), [sil], "not a new Shadows Into");
+  // No such family: the style words before the number that are part of the name stay.
+  assert.deepEqual(into(numbered("Times New Roman", "TimesNewRoman")), [tnr]);
+  assert.deepEqual(into(numbered("Shadows Into Light", "ShadowsIntoLight")), [sil]);
+  for (const fonts of [[times, ...numbered("Times New Roman", "TimesNewRoman")], numbered("Shadows Into Light", "ShadowsIntoLight")]) {
+    assert.equal(groupFamilies(fonts, ON).length, fonts.length, "still never merged automatically");
+  }
+  // Joining MINI 7 takes Condensed off, not the number: that's the reason given.
+  const mini = [font("MINI 7", "Regular", { postscriptName: "MINI7" }), font("MINI 7 Condensed", "Regular", { postscriptName: "MINI7Condensed" }), font("MINI 7 Extended", "Regular", { postscriptName: "MINI7Extended" })];
+  assert.deepEqual(into(mini), ["MINI 7 <- MINI 7 Condensed (Width word “Condensed”), MINI 7 Extended (Width word “Extended”)"]);
+  assert.deepEqual(into([font("Foo 2", "Regular", { postscriptName: "Foo2" }), font("Foo 2 Condensed", "Regular", { postscriptName: "Foo2-Condensed" })]), ["Foo 2 <- Foo 2 Condensed (Width word “Condensed”)"]);
+  assert.deepEqual([widen("MINI 7 Condensed").word, widen("MINI 7 Condensed").kind], ["Condensed", "width"], "the outermost word");
+  assert.deepEqual(widen("MINI 7 Condensed").steps.map((s) => s.base), ["MINI 7", "MINI"]);
+});

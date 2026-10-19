@@ -367,7 +367,7 @@ export interface Library {
 export function groupLibrary(fonts: FontSummary[], grouping: GroupingOptions = BY_NAME): Library {
   const index = new NameIndex(grouping.choices);
   const faces = groupFaces(fonts, index);
-  const plan = planByName(faces, grouping.rules, grouping.choices, index);
+  const plan = planByName(faces, grouping.rules, grouping.choices, index, grouping.byName);
   const byFamily = new Map<string, Face[]>();
   // Faces come mostly A to Z: a face's family is mostly the one before's, so no lookup for those.
   let lastFamily: string | undefined;
