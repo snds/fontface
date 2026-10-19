@@ -17,6 +17,7 @@ import {
   rowLabel,
   rowPlan,
   switchFaces,
+  turnOnFaces,
   switchIds,
   yoursFirstTip,
   type Holding,
@@ -615,11 +616,13 @@ export function GoogleFontsPanel({
   /** What the font actions work on for a row: the family's styles you have, else nothing. */
   const targetFor = (key: string | null): FontTarget | null => {
     const fam = familyOfKey(key);
-    const faces = fam ? switchFaces(holdings.get(fam.id)) : [];
+    const holding = fam ? holdings.get(fam.id) : undefined;
+    const faces = switchFaces(holding);
     const face = openFace(faces);
     const family = face && familyOfFace(face.key);
     if (!fam || !face || !family) return null;
-    return { where: "list", items: [{ rowKey: rowKeyOf(fam.id), family, face, kind: "family" }], faces };
+    // Turning on from the font menu or the Font menu picks the same copies as the row's switch.
+    return { where: "list", items: [{ rowKey: rowKeyOf(fam.id), family, face, kind: "family" }], faces, onFaces: turnOnFaces(holding) };
   };
   const selected = selection.keys.size === 1 ? [...selection.keys][0] : null;
   const selectedTarget = useMemo(() => targetFor(selected), [selected, holdings, byId, familyOfFace]); // eslint-disable-line react-hooks/exhaustive-deps

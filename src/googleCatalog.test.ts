@@ -19,10 +19,11 @@ import {
   rowPlan,
   switchFaces,
   switchIds,
+  turnOnFaces,
   yoursFirstTip,
   type CatalogFamily,
 } from "./googleCatalog.ts";
-import { groupFamilies, type Face } from "./library.ts";
+import { activationIds, groupFamilies, type Face } from "./library.ts";
 
 const GOOGLE = "/Users/me/Library/Application Support/fontface/Services/Google Fonts";
 
@@ -129,12 +130,14 @@ test("a downloaded style with a copy of yours too: Remove counts only the downlo
   const mine = font("Lora", "Regular", { path: "/Users/me/Fonts/Lora-VariableFont_wght.ttf", postscriptName: "Lora-Regular", mtime: 2 });
   const h = holdingsOf([fam("lora", "Lora", { installed: downloadedAt("Lora") })], facesOf([google, mine])).get("lora")!;
   assert.deepEqual(removalWords("Lora", h), [
-    "Fontface turns off its 1 downloaded font file and deletes them from its Google Fonts folder.",
+    "Fontface turns off its 1 downloaded font file and deletes it from its Google Fonts folder.",
     "Your own copy of Lora stays in your library, as it is.",
   ]);
   // On: Google's copy, not yours (as Get turned it on). Off: every copy, so the style goes off.
   assert.deepEqual(switchIds(h, true), [google.id]);
   assert.deepEqual(switchIds(h, false).sort(), [google.id, mine.id].sort());
+  // The font menu and the Font menu turn on the same copy as the switch (FontTarget.onFaces).
+  assert.deepEqual(activationIds(turnOnFaces(h), true), [google.id]);
   // Your copy alone (nothing downloaded): the switch works on it, as the library's does.
   const yours = holdingsOf([fam("lora", "Lora")], facesOf([mine])).get("lora")!;
   assert.deepEqual(switchIds(yours, true), [mine.id]);
@@ -243,7 +246,7 @@ test("Remove's confirmation counts the downloaded files and leaves your copy alo
   const one = HOLDINGS.get("inter")!.downloaded.slice(0, 1);
   const both = { downloaded: one, yours: HOLDINGS.get("roboto")!.yours, files: new Set(one.flatMap((f) => f.copies.map((c) => c.path))) };
   assert.deepEqual(removalWords("Inter", both), [
-    "Fontface turns off its 1 downloaded font file and deletes them from its Google Fonts folder.",
+    "Fontface turns off its 1 downloaded font file and deletes it from its Google Fonts folder.",
     "Your own copy of Inter stays in your library, as it is.",
   ]);
   assert.deepEqual(removalWords("Inter", undefined), ["Fontface turns off its downloaded files and deletes them from its Google Fonts folder."]);
@@ -291,4 +294,18 @@ test("a refresh that fails still lets the waiting load go ahead", async () => {
   network.reject(new Error("offline"));
   await assert.rejects(refresh.result, /offline/);
   assert.equal(await after.result, "saved");
+  // The waiting load, the newest one, can still say the Refresh failed.
+  assert.ok(after.newest());
+  assert.match(String(after.waited()?.error), /offline/);
+  assert.equal(refresh.waited(), null, "the refresh waited for nothing");
+});
+
+test("a load that waited for a refresh knows what it answered", async () => {
+  const network = later<{ stale: boolean }>();
+  const load = catalogLoader((refresh) => (refresh ? network.promise : Promise.resolve({ stale: false })));
+  load(true);
+  const after = load(false);
+  network.resolve({ stale: true });
+  assert.deepEqual(await after.result, { stale: false });
+  assert.deepEqual(after.waited(), { value: { stale: true } }, "the refresh couldn't reach the catalog: the view still says so");
 });

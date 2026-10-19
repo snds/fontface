@@ -1374,7 +1374,9 @@ export default function App() {
       case "turnOnOther": {
         const scope = scopeOf(action, activationMode);
         const until = (scope ?? activationMode) === "temporary" ? (untilQuit ? " until you quit Fontface" : " until logout") : "";
-        void setActivation(activationIds(switchable, true), true, undefined, scope).then((on) => on.size && announce(`Turned on ${name}${until}`));
+        // On Google Fonts, a downloaded family's own copies (FontTarget.onFaces).
+        const turnOn = target.onFaces ? target.onFaces.filter((f) => !f.installed) : switchable;
+        void setActivation(activationIds(turnOn, true), true, undefined, scope).then((on) => on.size && announce(`Turned on ${name}${until}`));
         return;
       }
       case "turnOff":

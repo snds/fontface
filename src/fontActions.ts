@@ -66,6 +66,9 @@ export interface FontTarget {
   items: TargetItem[];
   /** Every style covered: turning on and off, tags, family groups and removing work on these. */
   faces: Face[];
+  /** What turning on uses, when it isn't `faces`: on Google Fonts, a downloaded family's own
+   *  copies, never a copy of yours with the same PostScript name (googleCatalog.turnOnFaces). */
+  onFaces?: Face[];
 }
 
 /** The font page's target: its family (shown in its chosen style), or one style of it (a line

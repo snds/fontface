@@ -56,11 +56,18 @@ export function useGoogleView({
 
   const reload = useCallback(
     (refresh = false) => {
-      const { result, newest } = load(refresh);
+      const { result, newest, waited } = load(refresh);
       setLoading(true);
       setError(null);
       result
-        .then((c) => newest() && setCatalog(c))
+        .then((c) => {
+          if (!newest()) return;
+          // A Refresh this load waited for, that couldn't reach the catalog: still said, though
+          // this load read the saved copy after it.
+          const before = waited();
+          setCatalog(before?.value?.stale ? { ...c, stale: true } : c);
+          if (before && "error" in before && before.error !== undefined) setError(String(before.error));
+        })
         .catch((e) => newest() && setError(String(e)))
         .finally(() => newest() && setLoading(false));
     },

@@ -16,14 +16,23 @@ import { activationIds, type Face } from "./library.ts";
  * network). Each load says whether it's still the newest one asked for (`newest`): only that one
  * should land. A load asked for while a refresh is under way (after a download, or each step of
  * Update all) waits for the refresh, then asks: asked at once, it would get the older saved copy
- * first and, being newer, drop the refresh's answer.
+ * first and, being newer, drop the refresh's answer. What came of the refresh it waited for
+ * (`waited`) goes with it, so the newest load can still say that a Refresh failed.
  */
 export function catalogLoader<T>(ask: (refresh: boolean) => Promise<T>) {
   let seq = 0;
-  let refreshing: Promise<unknown> | null = null;
-  return (refresh = false): { result: Promise<T>; newest: () => boolean } => {
+  let refreshing: Promise<T> | null = null;
+  return (refresh = false): { result: Promise<T>; newest: () => boolean; waited: () => Waited<T> | null } => {
     const my = ++seq;
-    const result = (refreshing ?? Promise.resolve()).catch(() => {}).then(() => ask(refresh));
+    let waited: Waited<T> | null = null;
+    const before = refreshing;
+    const result = (before
+      ? before.then(
+          (value) => void (waited = { value }),
+          (error: unknown) => void (waited = { error }),
+        )
+      : Promise.resolve()
+    ).then(() => ask(refresh));
     if (refresh) {
       refreshing = result;
       const done = () => {
@@ -31,9 +40,12 @@ export function catalogLoader<T>(ask: (refresh: boolean) => Promise<T>) {
       };
       result.then(done, done);
     }
-    return { result, newest: () => my === seq };
+    return { result, newest: () => my === seq, waited: () => waited };
   };
 }
+
+/** What came of a refresh a load waited for: its answer, or why it failed. */
+export type Waited<T> = { value: T; error?: undefined } | { value?: undefined; error: unknown };
 
 // ------------------------------------------------------------------------------ filters
 
@@ -152,15 +164,21 @@ export const switchFaces = (h: Holding | undefined): Face[] => (!h ? [] : h.down
  * of yours with the same PostScript name (as Get turns it on).
  */
 export function switchIds(h: Holding | undefined, on: boolean): number[] {
+  return activationIds(on ? turnOnFaces(h) : switchFaces(h), on);
+}
+
+/**
+ * The styles turning a family on uses (its row switch, the font menu, the Font menu): for a
+ * download, each style with only Google's copy, so a copy of yours with the same PostScript
+ * name is never the one turned on; else the switch's styles as they are.
+ */
+export function turnOnFaces(h: Holding | undefined): Face[] {
   const faces = switchFaces(h);
-  if (!on || !h?.downloaded.length) return activationIds(faces, on);
-  return activationIds(
-    faces.map((face) => {
-      const here = face.copies.filter((c) => h.files.has(c.path));
-      return here.length ? { ...face, primary: here[0], copies: here } : face;
-    }),
-    true,
-  );
+  if (!h?.downloaded.length) return faces;
+  return faces.map((face) => {
+    const here = face.copies.filter((c) => h.files.has(c.path));
+    return here.length ? { ...face, primary: here[0], copies: here } : face;
+  });
 }
 
 /** Some style of the family is on now (for the Active filter). Fonts the OS always keeps on
@@ -317,7 +335,7 @@ export function rowLabel(f: CatalogFamily, plan: RowPlan, h: Holding | undefined
 export function removalWords(family: string, h: Holding | undefined): string[] {
   const files = h?.files.size ?? 0;
   const what = files ? `its ${files.toLocaleString("en-US")} downloaded font ${files === 1 ? "file" : "files"}` : "its downloaded files";
-  const out = [`Fontface turns off ${what} and deletes them from its Google Fonts folder.`];
+  const out = [`Fontface turns off ${what} and deletes ${files === 1 ? "it" : "them"} from its Google Fonts folder.`];
   const yoursToo = !!h && (h.yours.length > 0 || h.downloaded.some((face) => face.copies.some((c) => !h.files.has(c.path))));
   if (yoursToo) out.push(`Your own copy of ${family} stays in your library, as it is.`);
   return out;
