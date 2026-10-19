@@ -1,5 +1,5 @@
-import type { FontFeature, FontScript } from "./api.ts";
-import type { FeatureValues } from "./previewStyle.ts";
+import type { FontFeature, FontScript, PreviewCase } from "./api.ts";
+import { previewCase, type FeatureValues } from "./previewStyle.ts";
 
 /**
  * The font page's OpenType tab: plain names for the features a face has, the groups they're
@@ -241,6 +241,12 @@ export function describeFeature(f: FontFeature, missing?: string): FeatureView {
   const sample = known?.ownSample ? (fixed ?? f.sample) : (f.sample ?? fixed);
   return { tag, label, detail, group, defaultOn: !!known?.on, sample, switchable: group !== "vertical" };
 }
+
+/** The sample a feature's row draws, in the View options' case `mode`. Always as it is: a
+ *  sample holds the characters its feature changes ("a à á", "fi fl", "Small Caps"), and other
+ *  letters would show no change at all. */
+export const featureSampleText = (feature: FeatureView, mode: PreviewCase): string | undefined =>
+  feature.sample && previewCase(feature.sample, mode, { sample: true });
 
 /** The face's features in their groups (empty groups left out), each group in a steady order:
  *  the order of `KNOWN`, then by tag. */

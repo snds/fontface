@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import type { FontFeature } from "./api.ts";
 import {
   describeFeature,
+  featureSampleText,
   FEATURE_SLACK,
   featureSlack,
   groupFeatures,
@@ -61,7 +62,9 @@ test("a feature's sample keeps its case, whatever case the View options set", ()
     ...["a à á â ã ä å ā ă ą", "J", "I", "fi fl", "a g y"].map((s) => describeFeature(f("cv07", { sample: s })).sample),
   ].filter((s): s is string => !!s);
   assert.ok(samples.includes("Small Caps") && samples.includes("CAPITALS") && samples.includes("fi fl ff ffi"));
-  for (const c of PREVIEW_CASES) for (const s of samples) assert.equal(previewCase(s, c.id, { sample: true }), s, `${c.id}: ${s}`);
+  // What each feature's row draws, in every case the View options offer.
+  for (const c of PREVIEW_CASES) for (const s of samples) assert.equal(featureSampleText({ ...describeFeature(f("cv07")), sample: s }, c.id), s, `${c.id}: ${s}`);
+  assert.equal(featureSampleText(describeFeature(f("salt")), "upper"), undefined, "no sample, nothing drawn");
   // Treated as words, they'd change, and their switches would show nothing: "SMALL CAPS" has no
   // lowercase for small capitals to change, "capitals" no capitals, "A À Á" not the variant's a.
   assert.equal(previewCase("Small Caps", "upper", {}), "SMALL CAPS");

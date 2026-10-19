@@ -114,34 +114,40 @@ fn a_font_without_layout_tables_has_no_features() {
 }
 
 #[test]
-fn apple_features_are_noted_beside_opentype_kerning_but_not_beside_substitutions() {
+fn apple_features_are_noted_beside_any_opentype_features() {
     let morx = vec![0, 2, 0, 0, 0, 0, 0, 0];
     // Athelas Bold Italic: `morx`, and a GPOS table with only kerning.
     let kern_only = layout_table(&[(*b"latn", vec![])], &[FeatureSpec::new(b"kern", &[])], &[]);
     let f = facts(&FontBuilder::new().named("Kerned").chars("ab").raw_table(b"morx", morx.clone()).raw_table(b"GPOS", kern_only).build());
     assert_eq!(f.features.iter().map(|x| x.tag.as_str()).collect::<Vec<_>>(), ["kern"]);
     assert!(f.apple_features, "its other features are in morx, like its sibling styles'");
-    // OpenType substitutions too: the tab lists them, with no note.
+    // OpenType substitutions too (Marion Bold's fractions, beside the `morx` all its styles
+    // have): the tab lists them, and still notes the others, as its sibling styles' pages do.
     let mut b = FontBuilder::new().named("Both");
     let a = b.char('a' as u32, None);
     let a2 = b.glyph(Shape::bar(300, 500), None);
     let gsub = layout_table(&[(*b"latn", vec![])], &[FeatureSpec::new(b"salt", &[0])], &[single_lookup(&[(a, a2)])]);
-    assert!(!facts(&b.raw_table(b"morx", morx).raw_table(b"GSUB", gsub).build()).apple_features);
+    let both = facts(&b.raw_table(b"morx", morx).raw_table(b"GSUB", gsub).build());
+    assert_eq!(both.features.iter().map(|x| x.tag.as_str()).collect::<Vec<_>>(), ["salt"]);
+    assert!(both.apple_features);
 }
 
 #[cfg(target_os = "macos")]
 #[test]
-fn every_style_of_athelas_notes_its_apple_features() {
-    let Ok(data) = std::fs::read("/System/Library/Fonts/Supplemental/Athelas.ttc") else { return };
-    for face in 0..4 {
-        let Ok(f) = read_facts_with(&data, face, no_languages) else { continue };
-        assert!(f.apple_features, "face {face}: {:?}", f.features.iter().map(|x| &x.tag).collect::<Vec<_>>());
+fn every_style_of_athelas_and_marion_notes_its_apple_features() {
+    // Athelas Bold Italic has GPOS kerning too, and Marion Bold GSUB fractions.
+    for file in ["Athelas.ttc", "Marion.ttc"] {
+        let Ok(data) = std::fs::read(format!("/System/Library/Fonts/Supplemental/{file}")) else { continue };
+        for face in 0..4 {
+            let Ok(f) = read_facts_with(&data, face, no_languages) else { continue };
+            assert!(f.apple_features, "{file} face {face}: {:?}", f.features.iter().map(|x| &x.tag).collect::<Vec<_>>());
+        }
     }
 }
 
 /// A raw `GSUB`: one script (`latn`, its default language using feature 0), then the lookup
-/// list and the feature list as given (each with offsets from its own start). The lookup list
-/// goes first, so a big feature list never pushes it past a 16-bit offset.
+/// list and the feature list as given (each with offsets from its own start). The shorter one
+/// goes first, so the bigger one never pushes it past a 16-bit offset.
 fn gsub_with(lookup_list: &[u8], feature_list: &[u8]) -> Vec<u8> {
     let be = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
     // ScriptList: one record (the Script 8 bytes in); Script: default LangSys 4 bytes in, no
@@ -149,13 +155,50 @@ fn gsub_with(lookup_list: &[u8], feature_list: &[u8]) -> Vec<u8> {
     let mut script_list = be(&[1]);
     script_list.extend(b"latn");
     script_list.extend(be(&[8, 4, 0, 0, 0xFFFF, 1, 0]));
-    let lookups_at = 10 + script_list.len();
-    let features_at = lookups_at + lookup_list.len();
+    let first = 10 + script_list.len();
+    let lookups_first = lookup_list.len() <= feature_list.len();
+    let (lookups_at, features_at) =
+        if lookups_first { (first, first + lookup_list.len()) } else { (first + feature_list.len(), first) };
     let mut t = be(&[1, 0, 10, features_at as u16, lookups_at as u16]);
     t.extend(script_list);
-    t.extend(lookup_list);
-    t.extend(feature_list);
+    if lookups_first {
+        t.extend(lookup_list);
+        t.extend(feature_list);
+    } else {
+        t.extend(feature_list);
+        t.extend(lookup_list);
+    }
     t
+}
+
+/// A raw `GSUB` of `count` features with tags of their own ("xaaa"…), each using its own run of
+/// four lookups, which are all `lookup`: no two features share a sample, so each is worked out.
+fn many_features_gsub(count: usize, lookup: &[u8]) -> Vec<u8> {
+    let be = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let lookups = count + 3;
+    let mut lookup_list = be(&[lookups as u16]);
+    lookup_list.extend(std::iter::repeat_n(((2 + 2 * lookups) as u16).to_be_bytes(), lookups).flatten());
+    lookup_list.extend(lookup);
+    let mut feature_list = be(&[count as u16]);
+    for k in 0..count {
+        let letter = |n: usize| b'a' + (n % 26) as u8;
+        feature_list.extend([b'x', letter(k / 676), letter(k / 26), letter(k)]);
+        feature_list.extend(be(&[(2 + 6 * count + 12 * k) as u16]));
+    }
+    for k in 0..count as u16 {
+        feature_list.extend(be(&[0, 4, k, k + 1, k + 2, k + 3]));
+    }
+    gsub_with(&lookup_list, &feature_list)
+}
+
+/// A single substitution lookup of 64 subtables, which are all one: its coverage `coverage`.
+fn wide_lookup(coverage: &[u8]) -> Vec<u8> {
+    let be = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let mut lookup = be(&[1, 0, 64]);
+    lookup.extend(be(&[6 + 2 * 64; 64]));
+    lookup.extend(be(&[1, 6, 1]));
+    lookup.extend(coverage);
+    lookup
 }
 
 #[test]
@@ -208,6 +251,42 @@ fn a_lookup_with_thousands_of_subtables_gives_a_sample_quickly() {
     assert_eq!(f.features.len(), 1);
     assert_eq!(f.features[0].sample.as_deref(), Some("A B C D E F G H I J"), "letters first, in order, each once");
     assert!(start.elapsed() < std::time::Duration::from_secs(2), "took {:?}", start.elapsed());
+}
+
+#[test]
+fn thousands_of_features_share_one_limit_on_the_work_their_samples_take() {
+    let be = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    // Each feature's lookups cover 400 glyphs 64 times over, four times: 102,400 glyphs for
+    // each of 2,048 features.
+    let full = wide_lookup(&be(&[2, 1, 1, 400, 0]));
+    // Each subtable's coverage is 30,000 empty ranges (each one ends before it starts).
+    let mut empty = be(&[2, 30_000]);
+    empty.extend(std::iter::repeat_n(be(&[2, 1, 0]), 30_000).flatten());
+    let empty = wide_lookup(&empty);
+    for (what, lookup) in [("full", full), ("empty", empty)] {
+        let gsub = many_features_gsub(2048, &lookup);
+        let start = std::time::Instant::now();
+        let f = facts(&FontBuilder::new().named("Many").chars("ab").raw_table(b"GSUB", gsub).build());
+        assert_eq!(f.features.len(), 2048, "{what}: every feature is listed");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "{what} took {:?}", start.elapsed());
+    }
+}
+
+#[test]
+fn features_with_the_same_lookups_get_the_same_sample() {
+    let mut b = FontBuilder::new().named("Same");
+    let a = b.char('a' as u32, None);
+    let g = b.char('g' as u32, None);
+    let a2 = b.glyph(Shape::bar(300, 500), None);
+    let g2 = b.glyph(Shape::bar(300, 600), None);
+    let gsub = layout_table(
+        &[(*b"latn", vec![])],
+        &[FeatureSpec::new(b"salt", &[0]), FeatureSpec::new(b"ss01", &[0]), FeatureSpec::new(b"ss02", &[1])],
+        &[single_lookup(&[(a, a2), (g, g2)]), single_lookup(&[(g, g2)])],
+    );
+    let f = facts(&b.raw_table(b"GSUB", gsub).build());
+    let samples: Vec<(&str, Option<&str>)> = f.features.iter().map(|x| (x.tag.as_str(), x.sample.as_deref())).collect();
+    assert_eq!(samples, [("salt", Some("a g")), ("ss01", Some("a g")), ("ss02", Some("g"))]);
 }
 
 #[test]

@@ -1,9 +1,9 @@
 import { useId } from "react";
-import type { FontSummary, PreviewInfo } from "@/api";
+import type { FontSummary, PreviewCase, PreviewInfo } from "@/api";
 import { faceName, useFontFace } from "@/fontLoader";
 import { featureSettings, styleCss, type FeatureValues } from "@/previewStyle";
 import { fittingText, PANGRAM } from "@/sampleText";
-import { groupFeatures, isOn, languageChoices, scriptsLine, type FeatureView, type Toggles } from "@/openType";
+import { featureSampleText, groupFeatures, isOn, languageChoices, scriptsLine, type FeatureView, type Toggles } from "@/openType";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -146,7 +146,7 @@ export function OpenTypeTab(props: Props) {
               <Icon name="info" size={16} className="mt-0.5 shrink-0" />
               {data.features.length === 0
                 ? "This font keeps its features in Apple's own format (AAT) rather than OpenType, so they can't be switched here. macOS apps that offer typography settings can use them."
-                : "This font keeps its other features in Apple's own format (AAT) rather than OpenType, so only the ones below can be switched here. macOS apps that offer typography settings can use the others."}
+                : "This font also has features in Apple's own format (AAT). Those can't be switched here, but macOS apps that offer typography settings can use them."}
             </p>
           )}
           {data.features.length === 0 && !data.appleFeatures && <p className="text-sm text-muted-foreground">This style has no OpenType features.</p>}
@@ -168,6 +168,7 @@ export function OpenTypeTab(props: Props) {
                     ready={state === "ready"}
                     lang={lang}
                     variation={variation}
+                    caseMode={look.options.case}
                     onToggle={(on) => onToggle(f.tag, on, f.defaultOn)}
                   />
                 ))}
@@ -194,6 +195,7 @@ function FeatureRow({
   ready,
   lang,
   variation,
+  caseMode,
   onToggle,
 }: {
   feature: FeatureView;
@@ -203,12 +205,11 @@ function FeatureRow({
   ready: boolean;
   lang: string | undefined;
   variation: string | undefined;
+  caseMode: PreviewCase;
   onToggle: (on: boolean) => void;
 }) {
   const id = useId();
-  // Drawn as it is, never in the View options' case: a sample holds the characters its feature
-  // changes ("a à á", "fi fl", "Small Caps"), and other letters would show no change at all.
-  const sample = feature.sample;
+  const sample = featureSampleText(feature, caseMode);
   return (
     <li className="flex min-h-11 items-center gap-3 border-b py-1.5 last:border-b-0">
       <Switch

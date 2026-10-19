@@ -28,9 +28,11 @@ pub const MAX_LOOKUPS: usize = 16;
 const MAX_SUBTABLES: usize = 64;
 /// At most this many covered glyphs per subtable are looked at for a sample.
 const MAX_COVERED: usize = 400;
-/// At most this many glyphs in all are looked at for one feature's sample, however its lookups
-/// are built. Far more than any real font's features need.
-const MAX_GLYPHS: usize = 200_000;
+/// At most this many steps (subtables, coverage ranges, glyphs and ligatures looked at) are
+/// taken for all of a face's samples together, however its tables are built: a crafted table
+/// with thousands of features can't make the page wait. Real fonts take far fewer: 11,000 at
+/// most among macOS's own 865 faces with layout tables (Noto Sans Myanmar).
+const SAMPLE_BUDGET: usize = 400_000;
 /// A ligature of more glyphs than this isn't a sample anyone could read: left out.
 const MAX_COMPONENTS: u16 = 15;
 /// At most this many ligatures are collected to choose a sample from.
@@ -232,15 +234,24 @@ pub fn features(face: &Face, name: &[u8]) -> (Vec<Feature>, Vec<Script>) {
         }
     }
 
+    // In tag order, so which samples a face's budget covers never changes from one read to the
+    // next. Features that use the same lookups have the same sample: worked out once.
     let table = face.tables().gsub;
-    for (tag, feature) in by_tag.iter_mut() {
+    let mut budget = SAMPLE_BUDGET;
+    let mut by_lookups: HashMap<&[u16], Option<String>> = HashMap::new();
+    let mut tagged: Vec<([u8; 4], Feature)> = by_tag.into_iter().collect();
+    tagged.sort_by(|a, b| a.0.cmp(&b.0));
+    for (tag, feature) in tagged.iter_mut() {
         if let Some(chars) = variant_chars.get(tag) {
             feature.sample = sample_of_chars(chars.iter().copied());
         } else if let (Some(table), Some(list)) = (table, lookups.get(tag)) {
-            feature.sample = lookup_sample(&table, list, glyph_chars.get_or_init(|| reverse_cmap(face)));
+            feature.sample = by_lookups
+                .entry(list)
+                .or_insert_with(|| lookup_sample(&table, list, glyph_chars.get_or_init(|| reverse_cmap(face)), &mut budget))
+                .clone();
         }
     }
-    let mut features: Vec<Feature> = by_tag.into_values().collect();
+    let mut features: Vec<Feature> = tagged.into_iter().map(|(_, f)| f).collect();
     features.sort_by(|a, b| a.tag.cmp(&b.tag));
 
     let mut scripts: Vec<Script> = Vec::new();
@@ -295,21 +306,34 @@ fn reverse_cmap(face: &Face) -> HashMap<u16, char> {
     map
 }
 
-fn covered(coverage: &Coverage, limit: usize) -> Vec<GlyphId> {
+/// Up to `limit` of the glyphs a coverage table lists, each charged to `budget`, and so is each
+/// range looked at. At most `limit` ranges are: each real one lists a glyph or more, so only
+/// empty ones (a damaged or crafted table's) are left.
+fn covered(coverage: &Coverage, limit: usize, budget: &mut usize) -> Vec<GlyphId> {
     let mut out = Vec::new();
+    let mut steps = 0usize;
     match coverage {
-        Coverage::Format1 { glyphs } => out.extend((*glyphs).into_iter().take(limit)),
+        Coverage::Format1 { glyphs } => {
+            out.extend((*glyphs).into_iter().take(limit.min(*budget)));
+            steps = out.len();
+        }
         Coverage::Format2 { records } => {
-            for r in (*records).into_iter() {
+            'records: for r in (*records).into_iter().take(limit) {
+                if out.len() >= limit || steps >= *budget {
+                    break;
+                }
+                steps += 1;
                 for g in r.start.0..=r.end.0 {
-                    if out.len() >= limit {
-                        return out;
+                    if out.len() >= limit || steps >= *budget {
+                        break 'records;
                     }
                     out.push(GlyphId(g));
+                    steps += 1;
                 }
             }
         }
     }
+    *budget = budget.saturating_sub(steps);
     out
 }
 
@@ -354,35 +378,40 @@ fn sample_of_chars(chars: impl Iterator<Item = char>) -> Option<String> {
 
 /// What a substitution feature changes: the ligatures it forms ("fi fl ffi"), else the
 /// characters its lookups cover. Every loop is capped (`MAX_LOOKUPS` lookups, `MAX_SUBTABLES`
-/// subtables each, `MAX_GLYPHS` glyphs in all), and only the best characters so far are kept,
-/// so a damaged or crafted table can't make this slow or big.
-fn lookup_sample(table: &LayoutTable, lookups: &[u16], chars: &HashMap<u16, char>) -> Option<String> {
+/// subtables each, and every step charged to the face's `budget`), and only the best characters
+/// so far are kept, so a damaged or crafted table can't make this slow or big.
+fn lookup_sample(table: &LayoutTable, lookups: &[u16], chars: &HashMap<u16, char>, budget: &mut usize) -> Option<String> {
     let mut ligatures: Vec<String> = Vec::new();
     let mut singles = BestChars::default();
-    let mut budget = MAX_GLYPHS;
     'lookups: for &index in lookups.iter().take(MAX_LOOKUPS) {
+        if *budget == 0 {
+            break;
+        }
         let Some(lookup) = table.lookups.get(index) else { continue };
         for subtable in lookup.subtables.into_iter::<SubstitutionSubtable>().take(MAX_SUBTABLES) {
-            if budget == 0 {
+            if *budget == 0 {
                 break 'lookups;
             }
+            *budget -= 1;
             match subtable {
                 SubstitutionSubtable::Ligature(lig) => {
                     if ligatures.len() >= MAX_LIGATURES {
                         continue;
                     }
-                    let firsts = covered(&lig.coverage, MAX_COVERED);
-                    budget = budget.saturating_sub(firsts.len());
-                    'sets: for (i, set) in lig.ligature_sets.into_iter().enumerate().take(MAX_COVERED) {
-                        let Some(first) = firsts.get(i).and_then(|g| chars.get(&g.0)) else { continue };
+                    // A ligature set belongs to the covered glyph at its place: sets past the
+                    // last one covered have no first character, so they aren't looked at.
+                    let firsts = covered(&lig.coverage, MAX_COVERED, budget);
+                    'sets: for (set, first) in lig.ligature_sets.into_iter().zip(firsts.iter()) {
+                        let Some(first) = chars.get(&first.0) else { continue };
                         for l in set.into_iter().take(8) {
-                            if budget == 0 {
+                            if *budget == 0 {
                                 break 'sets;
                             }
+                            *budget -= 1;
                             if l.components.len() > MAX_COMPONENTS {
                                 continue;
                             }
-                            budget = budget.saturating_sub(l.components.len() as usize);
+                            *budget = budget.saturating_sub(l.components.len() as usize);
                             let rest: Option<String> = l.components.into_iter().map(|g| chars.get(&g.0).copied()).collect();
                             if let Some(rest) = rest {
                                 let text = format!("{first}{rest}");
@@ -397,8 +426,7 @@ fn lookup_sample(table: &LayoutTable, lookups: &[u16], chars: &HashMap<u16, char
                     }
                 }
                 other => {
-                    let glyphs = covered(&other.coverage(), MAX_COVERED.min(budget));
-                    budget -= glyphs.len();
+                    let glyphs = covered(&other.coverage(), MAX_COVERED, budget);
                     glyphs.iter().filter_map(|g| chars.get(&g.0)).for_each(|&c| singles.offer(c));
                 }
             }
