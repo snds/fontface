@@ -252,7 +252,10 @@ function FaceRow(props: RowProps & { face: Face }) {
   const { active, attrs } = optionProps(props, label, describedBy(props.id, ["state", "copies", "added"]));
   const tab = active ? 0 : -1;
   return (
-    <div {...attrs} className={cn(attrs.className, "pl-12")}>
+    // Inset one step (the chevron and its gap) past the family's name and preview, with a rail
+    // under the family's chevron, so the styles read as the family's. One line of preview, so
+    // the inset never changes the row's height.
+    <div {...attrs} className={cn(attrs.className, "relative pl-20 before:absolute before:inset-y-0 before:left-7 before:w-px before:bg-border")}>
       <div className="mb-1 flex items-center gap-2">
         <span className="truncate text-sm font-medium">
           {face.style}

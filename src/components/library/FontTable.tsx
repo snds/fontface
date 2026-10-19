@@ -428,6 +428,8 @@ function TableRow(props: RowProps) {
             // Several rows selected: a bar at the left edge, on the on/off cell, which stays at
             // the left while the table scrolls sideways (and would cover a bar on the row).
             several && c.def.id === "state" && "shadow-[inset_3px_0_0_var(--primary)]",
+            // A style row: a rail under its family's chevron, as in Rows.
+            face && c.def.id === "name" && "relative before:absolute before:inset-y-0 before:left-5 before:w-px before:bg-border",
           )}
           style={pinStyle(c.def.id)}
         >
@@ -506,7 +508,8 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
     }
     case "name":
       return (
-        <span className={cn("flex min-w-0 items-center gap-1", face && "pl-6")}>
+        // A style's name sits one step (the chevron and its gap) past its family's.
+        <span className={cn("flex min-w-0 items-center gap-1", face && "pl-14")}>
           {expandable ? (
             <Button
               variant="ghost"
