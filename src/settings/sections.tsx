@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
 import { api, type AppSettings, type FontSummary, type PurchasesStatus, type RemovedFile, type SidebarSections, type TagBackup, type TurnOffAllReport } from "@/api";
-import { formatBytes } from "@/familyFacts";
-import { refreshGooglePreviews } from "@/googlePreviewStore";
+import { previewCacheButton } from "@/googlePreviews";
+import { refreshGooglePreviews, useGooglePreviewAnswers } from "@/googlePreviewStore";
 import { INSTALLED_LABEL } from "@/library";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
 import { IS_MAC } from "@/components/TitleBar";
@@ -120,6 +120,17 @@ function useOutsideState(onPurchasesChanged: () => void) {
     loadPreviewCache();
     getVersion().then(setVersion, () => {});
   }, [loadPurchases, loadBackups, loadPreviewCache]);
+
+  // The Google Fonts page stays open under Settings, and its rows keep saving preview files (more
+  // of them once previews are turned on, or after Clear). The size is read again once their
+  // answers settle for a moment.
+  const answers = useGooglePreviewAnswers();
+  const answersAtOpen = useRef(answers);
+  useEffect(() => {
+    if (answers === answersAtOpen.current) return;
+    const timer = setTimeout(loadPreviewCache, 500);
+    return () => clearTimeout(timer);
+  }, [answers, loadPreviewCache]);
 
   const setWatching = async (on: boolean) => {
     setPurchases((p) => p && { ...p, watching: on });
@@ -383,24 +394,23 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             label: "Preview cache",
             description: "The small preview files Fontface keeps, so previews show again without going online. Clearing it doesn't touch fonts you downloaded.",
             keywords: "google fonts preview cache clear delete empty storage disk space",
-            control: (ids) => (
-              // Stays focusable when it disables itself after clearing.
-              <Button
-                size="sm"
-                variant="outline"
-                aria-describedby={ids.description}
-                disabled={outside.clearingCache || outside.previewCache === 0}
-                focusableWhenDisabled
-                onClick={outside.clearPreviewCache}
-              >
-                <Icon name={outside.clearingCache ? "progress_activity" : "delete_sweep"} size={16} className={cn(outside.clearingCache && "animate-spin")} />
-                {outside.previewCache === null
-                  ? "Clear preview cache"
-                  : outside.previewCache === 0
-                    ? "Preview cache is empty"
-                    : `Clear preview cache (${formatBytes(outside.previewCache)})`}
-              </Button>
-            ),
+            control: (ids) => {
+              const button = previewCacheButton(outside.previewCache, outside.clearingCache);
+              return (
+                // Stays focusable while it's busy clearing.
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-describedby={ids.description}
+                  disabled={button.disabled}
+                  focusableWhenDisabled
+                  onClick={outside.clearPreviewCache}
+                >
+                  <Icon name={outside.clearingCache ? "progress_activity" : "delete_sweep"} size={16} className={cn(outside.clearingCache && "animate-spin")} />
+                  {button.label}
+                </Button>
+              );
+            },
           },
         ],
       },

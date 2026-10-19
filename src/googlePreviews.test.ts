@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   answerKey,
+  describesRowFile,
   failNote,
   familyKey,
   fileStatus,
@@ -13,11 +14,14 @@ import {
   onlineChoice,
   outsideAlphabet,
   parsePreviewPath,
+  previewCacheButton,
   previewFilePath,
   remoteFaceName,
+  RETRY_OFF_MS,
   RETRY_OFFLINE_MS,
   rowSource,
   wantsAlphabet,
+  yourCopyNote,
   type CatalogRef,
   type MatchFont,
 } from "./googlePreviews.ts";
@@ -145,14 +149,25 @@ test("answers are kept per family, catalog version and kind", () => {
   assert.notEqual(answerKey("inter", "2024-01-02", "row"), answerKey("inter", "2024-01-02", "alphabet"));
 });
 
-test("files and final failures are kept for the session; the rest are asked again in a minute", () => {
+test("files and final failures are kept for the session; the rest are asked again", () => {
   const now = 1_000;
   assert.equal(keepAnswerUntil({ state: "ready", path: "google/a/b/name" }, now), Infinity);
   assert.equal(keepAnswerUntil({ state: "unavailable" }, now), Infinity);
   assert.equal(keepAnswerUntil({ state: "tooLarge" }, now), Infinity);
   assert.equal(keepAnswerUntil({ state: "offline" }, now), now + RETRY_OFFLINE_MS);
-  assert.equal(keepAnswerUntil({ state: "off" }, now), now + RETRY_OFFLINE_MS);
   assert.equal(keepAnswerUntil(null, now), now + RETRY_OFFLINE_MS, "the call itself failed");
+  assert.ok(RETRY_OFFLINE_MS <= 30_000, "no longer than Rust's first pause after network trouble");
+});
+
+test("an 'off' answer is asked again in a moment, not kept for a minute, and isn't shown as off", () => {
+  // Turning previews on shows at once and saves a moment later: rows on the page underneath can
+  // ask before Rust has the new setting, and hear "off".
+  const now = 1_000;
+  assert.equal(keepAnswerUntil({ state: "off" }, now), now + RETRY_OFF_MS);
+  assert.ok(RETRY_OFF_MS <= 2_000);
+  // Meanwhile the row waits, as for any answer still to come: no "off in Settings" note.
+  assert.deepEqual(fileStatus({ state: "off" }, "loading"), { kind: "waiting" });
+  assert.deepEqual(onlineChoice(fileStatus({ state: "off" }, "loading")), { draw: "loading" });
 });
 
 test("the alphabet: printable ASCII and Latin-1", () => {
@@ -197,5 +212,30 @@ test("what an online row draws, and never two fonts at once", () => {
 });
 
 test("every failure has a plain explanation", () => {
-  for (const why of ["off", "offline", "unavailable", "tooLarge", "error"] as const) assert.ok(failNote(why).endsWith("."));
+  for (const why of ["offline", "unavailable", "tooLarge", "error"] as const) assert.ok(failNote(why).endsWith("."));
+  assert.ok(!/minutes|minute/.test(failNote("offline")), "no promise about when: the wait grows while Google stays out of reach");
+});
+
+test("the line under an online row follows its file, not whether the font has loaded", () => {
+  assert.equal(describesRowFile({ kind: "waiting" }), false, "no answer yet");
+  assert.equal(describesRowFile({ kind: "loading" }), true, "still loading after the preview's wait: the line stays");
+  assert.equal(describesRowFile({ kind: "ready" }), true);
+  assert.equal(describesRowFile({ kind: "failed", why: "offline" }), false);
+  assert.equal(describesRowFile({ kind: "failed", why: "error" }), false);
+  // A ready answer's file: the same whether its font is loading or loaded.
+  const ready = { state: "ready" as const, path: "google/inter/2024/name" };
+  assert.equal(describesRowFile(fileStatus(ready, "loading")), describesRowFile(fileStatus(ready, "ready")));
+});
+
+test("'Your copy' explains itself in words, for hover and screen readers alike", () => {
+  const note = yourCopyNote("Inter-Regular.otf");
+  assert.ok(note.includes("Inter-Regular.otf") && note.includes("your library") && note.includes("different version"));
+  assert.ok(note.endsWith("."));
+});
+
+test("the cache's size never disables Clear: only clearing does", () => {
+  assert.deepEqual(previewCacheButton(null, false), { label: "Clear preview cache", disabled: false }, "not read yet");
+  assert.deepEqual(previewCacheButton(0, false), { label: "Clear preview cache", disabled: false }, "read as empty, maybe a while ago");
+  assert.deepEqual(previewCacheButton(4.2 * 1024 * 1024, false), { label: "Clear preview cache (4.2 MB)", disabled: false });
+  assert.equal(previewCacheButton(12_345, true).disabled, true);
 });

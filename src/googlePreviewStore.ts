@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { api, type GooglePreview, type GooglePreviewKind } from "./api";
+import { listen } from "@tauri-apps/api/event";
+import { api, type AppSettings, type GooglePreview, type GooglePreviewKind } from "./api";
 import { answerKey, keepAnswerUntil, RETRY_OFFLINE_MS } from "./googlePreviews";
 import { TaskPool } from "./previewQueue";
 
@@ -8,7 +9,9 @@ import { TaskPool } from "./previewQueue";
 //   6 from Google at once too), newest rows first, rows that scrolled away before their turn
 //   dropped (previewQueue.ts's TaskPool);
 // - kept for the session per family, catalog version and kind. "offline" and other answers that
-//   aren't final are asked again after a minute, by rows still showing the family;
+//   aren't final are asked again after a while (googlePreviews.ts, keepAnswerUntil), by rows
+//   still showing the family; "off" in a moment, and at once when Rust says the switch is saved
+//   (`listenForPreviewSetting`);
 // - a file that was ready but then wouldn't load as a font (the cache may have let it go since)
 //   is asked for once more.
 // Rows read them with `useGooglePreview`, which re-renders them when an answer arrives.
@@ -58,7 +61,7 @@ async function ask(key: string, { id, kind }: PreviewRequest): Promise<void> {
   try {
     answer = await api.googlePreview(id, kind);
   } catch {
-    // The call itself failed: no preview for now, asked again in a minute (keepAnswerUntil).
+    // The call itself failed: no preview for now, asked again later (keepAnswerUntil).
   }
   inFlight.delete(key);
   const now = Date.now();
@@ -126,8 +129,36 @@ export function refreshGooglePreviews(): void {
   changed();
 }
 
-/** Whether a family couldn't reach Google in the last minute (for the page's one-line note).
- *  It clears a minute after the last such answer: by then rows still on screen have asked again. */
+/**
+ * Listens for "settings-changed", which Rust sends once a settings change is saved. The switch
+ * for online previews shows at once and saves a moment later, so rows on the Google Fonts page
+ * (still there under Settings) can ask before Rust has the new setting, and hear "off". Once
+ * previews are saved as on, those rows ask again. Returns the unlisten function.
+ */
+export function listenForPreviewSetting(): () => void {
+  const unlisten = listen<AppSettings>("settings-changed", (e) => {
+    if (!e.payload.googlePreviews) return;
+    let dropped = false;
+    for (const [key, entry] of answers) {
+      if (entry.answer.state !== "off") continue;
+      answers.delete(key);
+      dropped = true;
+    }
+    if (dropped) changed();
+  });
+  return () => {
+    unlisten.then((fn) => fn()).catch(() => {});
+  };
+}
+
+/** Counts the answers heard this session: it changes whenever a row hears back, which is when
+ *  the preview cache may have grown (Settings reads its size again). */
+export function useGooglePreviewAnswers(): number {
+  return useSyncExternalStore(subscribe, () => generations);
+}
+
+/** Whether a family couldn't reach Google lately (for the page's one-line note). It clears
+ *  `RETRY_OFFLINE_MS` after the last such answer: by then rows still on screen have asked again. */
 export function useGoogleOffline(): boolean {
   const last = useSyncExternalStore(subscribe, () => lastOffline);
   const left = last + RETRY_OFFLINE_MS - Date.now();

@@ -457,44 +457,71 @@ fn a_broken_file_or_a_refused_family_is_unavailable_and_retried_after_a_week() {
 
 #[test]
 fn network_trouble_pauses_previews_without_blaming_the_family() {
-    let s = Setup::new("offline", vec![inter(), family("roboto", "Roboto", &["latin"])]);
+    let (roboto, lora) = (family("roboto", "Roboto", &["latin"]), family("lora", "Lora", &["latin"]));
+    let s = Setup::new("offline", vec![inter(), roboto.clone(), lora.clone()]);
     let held = name_text("Inter");
-    let _net = fake_net::serve(file(&inter(), &held, "inter", font("Inter", &held)));
+    let mut routes = file(&inter(), &held, "inter", font("Inter", &held));
+    routes.extend(file(&roboto, &name_text("Roboto"), "roboto", font("Roboto", &name_text("Roboto"))));
+    routes.extend(file(&lora, &name_text("Lora"), "lora", font("Lora", &name_text("Lora"))));
+    let _net = fake_net::serve(routes);
+    let end_pause = || s.previews.backoff.lock().unwrap().until = 0;
+    let pause_left = || s.previews.backoff.lock().unwrap().until.saturating_sub(now());
+
+    // One failure alone is often a hiccup: that row is "offline", the next family still tries,
+    // and a family that downloads starts the count again.
     fake_net::fail(&css_url(&inter(), &held), Failure::Offline);
     assert_eq!(s.row("inter").state, PreviewState::Offline);
-    assert_eq!(urls().len(), 1);
-    // Paused: no family is asked about for a while.
+    assert_eq!(s.row("roboto").state, PreviewState::Ready);
+    assert_eq!(urls().len(), 3);
+    assert!(s.files().iter().all(|f| f.starts_with("roboto/")), "nothing remembered about Inter: {:?}", s.files());
+
+    // Server trouble, rate limits and an answer that isn't Google's usual one (a Wi-Fi sign-in
+    // page) count as the network's too, never the family's.
+    fake_net::fail(&css_url(&inter(), &held), Failure::Status(503));
     assert_eq!(s.row("inter").state, PreviewState::Offline);
-    assert_eq!(s.row("roboto").state, PreviewState::Offline);
-    assert!(urls().is_empty());
-    assert!(s.files().is_empty(), "nothing remembered about the family: {:?}", s.files());
-    // Server trouble and rate limits count as the network's, not the family's.
-    for code in [500, 503, 429] {
-        s.previews.offline_until.store(0, Ordering::Relaxed);
-        fake_net::fail(&css_url(&inter(), &held), Failure::Status(code));
-        assert_eq!(s.row("inter").state, PreviewState::Offline, "{code}");
-        assert!(s.files().is_empty(), "{code}");
-    }
-    // The font download failing counts the same way.
-    s.previews.offline_until.store(0, Ordering::Relaxed);
-    fake_net::set(&css_url(&inter(), &held), css(&kit("inter")), None);
-    fake_net::fail(&kit("inter"), Failure::Offline);
+    fake_net::fail(&css_url(&inter(), &held), Failure::Status(429));
     assert_eq!(s.row("inter").state, PreviewState::Offline);
-    // An answer that isn't Google's usual one (a portal page, a font elsewhere): the same.
-    s.previews.offline_until.store(0, Ordering::Relaxed);
+    assert!(!s.previews.paused(), "two in a row: no pause yet");
     fake_net::set(&css_url(&inter(), &held), b"<html>Sign in to the Wi-Fi</html>".to_vec(), None);
     assert_eq!(s.row("inter").state, PreviewState::Offline);
-    assert!(s.files().is_empty());
-    // After the pause, it works again.
-    s.previews.offline_until.store(0, Ordering::Relaxed);
+    assert!(s.files().iter().all(|f| f.starts_with("roboto/")), "{:?}", s.files());
+
+    // Three in a row: previews pause, briefly at first. Nothing new is asked for meanwhile, and
+    // saved previews still show.
+    assert!(s.previews.paused());
+    assert!((FIRST_PAUSE_SECS - 1..=FIRST_PAUSE_SECS).contains(&pause_left()), "{}", pause_left());
+    urls();
+    assert_eq!(s.row("lora").state, PreviewState::Offline);
+    assert_eq!(s.row("roboto").state, PreviewState::Ready);
+    assert!(urls().is_empty());
+    // A request that was already running when the pause began, failing now, doesn't lengthen it.
+    s.previews.network_trouble();
+    assert!(pause_left() <= FIRST_PAUSE_SECS);
+
+    // Still failing after each pause: the next one is twice as long, up to 15 minutes. The CSS
+    // getting through isn't enough when the font download fails.
     fake_net::set(&css_url(&inter(), &held), css(&kit("inter")), None);
+    fake_net::fail(&kit("inter"), Failure::Offline);
+    for expected in [60, 120, 240, 480, OFFLINE_SECS, OFFLINE_SECS] {
+        end_pause();
+        assert_eq!(s.row("inter").state, PreviewState::Offline);
+        assert!((expected - 1..=expected).contains(&pause_left()), "{expected}: {}", pause_left());
+    }
+
+    // Google answers again: the pauses end and the count starts over.
+    end_pause();
     fake_net::set(&kit("inter"), font("Inter", &held), None);
     assert_eq!(s.row("inter").state, PreviewState::Ready);
-    // Saved previews still show while offline.
-    s.previews.go_offline();
-    urls();
-    assert_eq!(s.row("inter").state, PreviewState::Ready);
-    assert!(urls().is_empty());
+    assert!(!s.previews.paused());
+    fake_net::fail(&css_url(&lora, &name_text("Lora")), Failure::Offline);
+    assert_eq!(s.row("lora").state, PreviewState::Offline);
+    assert!(!s.previews.paused(), "one failure after things worked: no pause");
+    // A final answer about a family (Google doesn't know it) shows the network works too.
+    fake_net::fail(&css_url(&lora, &name_text("Lora")), Failure::Offline);
+    s.previews.network_trouble();
+    fake_net::fail(&css_url(&lora, &name_text("Lora")), Failure::Status(400));
+    assert_eq!(s.row("lora").state, PreviewState::Unavailable);
+    assert_eq!(s.previews.backoff.lock().unwrap().in_row, 0);
 }
 
 #[test]
@@ -561,6 +588,105 @@ fn a_new_version_replaces_the_old_files_and_dropped_families_go() {
     assert_eq!(s.files(), vec!["inter/2026-02-15/name.json", "inter/2026-02-15/name.ttf"]);
     assert!(s.previews.resolve("roboto/2026-01-01/name").is_none());
     assert!(s.previews.resolve("inter/2026-01-01/name").is_none());
+}
+
+#[test]
+fn files_profiled_by_an_older_build_are_profiled_again_without_the_network() {
+    let s = Setup::new("rev", vec![inter()]);
+    let held = name_text("Inter");
+    let _net = fake_net::serve(file(&inter(), &held, "inter", font("Inter", &held)));
+    let answer = s.row("inter");
+    assert_eq!(answer.state, PreviewState::Ready);
+    let details = s.previews.root().join("inter/2026-01-01/name.json");
+    let read = || serde_json::from_slice::<serde_json::Value>(&std::fs::read(&details).unwrap()).unwrap();
+    assert_eq!(read()["rev"], preview::PREVIEW_REV);
+    // Saved by an older build, whose profiles said something else: with an older rev, or with
+    // none (saved before it was noted).
+    for rev in [Some(preview::PREVIEW_REV - 1), None] {
+        let mut saved = read();
+        saved["text"] = "Stale".into();
+        saved["sample"] = true.into();
+        saved["profile"]["kind"] = "partial".into();
+        match rev {
+            Some(rev) => saved["rev"] = rev.into(),
+            None => {
+                saved.as_object_mut().unwrap().remove("rev");
+            }
+        }
+        std::fs::write(&details, serde_json::to_vec(&saved).unwrap()).unwrap();
+        s.previews.size(); // measured, as if the older build had saved it
+        urls();
+        assert_eq!(s.row("inter"), answer, "{rev:?}: today's profile of the saved file");
+        assert!(urls().is_empty(), "{rev:?}: no network");
+        let again = read();
+        assert_eq!((again["rev"].as_i64(), again["text"].as_str()), (Some(preview::PREVIEW_REV), Some("Inter")), "{rev:?}: saved again");
+    }
+    // The cache's running count of its size kept up with the rewritten details.
+    let on_disk: u64 = files_under(s.previews.root()).iter().map(|(_, m)| m.len()).sum();
+    assert_eq!(*s.previews.bytes.lock().unwrap(), Some(on_disk));
+}
+
+#[test]
+fn a_saved_name_that_profiles_now_say_cant_draw_gives_way_to_the_script() {
+    // An older build saved a name file it thought drew; today's profiles say it draws nothing.
+    let f = family("noto-sans-khmer", "Noto Sans Khmer", &["khmer", "latin"]);
+    let s = Setup::new("rev-script", vec![f.clone()]);
+    let (held, script) = (name_text(&f.family), script_text("khmer").unwrap());
+    let _net = fake_net::serve(file(&f, &script, "khmer", font("Noto Sans Khmer", &script)));
+    let dir = s.previews.root().join("noto-sans-khmer/2026-01-01");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("name.ttf"), font("Noto Sans Khmer", " ")).unwrap();
+    // Its details, as that build saved them: the name, drawn.
+    let mut old = entry_for(&f, FileKind::Name, &held, &font("Noto Sans Khmer", &held)).unwrap();
+    old.rev = preview::PREVIEW_REV - 1;
+    assert_eq!(old.text, "Noto Sans Khmer");
+    std::fs::write(dir.join("name.json"), serde_json::to_vec(&old).unwrap()).unwrap();
+    let answer = s.row("noto-sans-khmer");
+    assert_eq!(answer.state, PreviewState::Ready);
+    assert_eq!(answer.path.as_deref(), Some("google/noto-sans-khmer/2026-01-01/script"));
+    assert_eq!(urls(), vec![css_url(&f, &script), kit("khmer")], "the name isn't downloaded again");
+    assert_eq!(
+        s.files(),
+        vec!["noto-sans-khmer/2026-01-01/name.fail", "noto-sans-khmer/2026-01-01/script.json", "noto-sans-khmer/2026-01-01/script.ttf"]
+    );
+    let failed: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("name.fail")).unwrap()).unwrap();
+    assert_eq!((failed["why"].as_str(), failed["rev"].as_i64()), (Some("cantDraw"), Some(preview::PREVIEW_REV)));
+}
+
+#[test]
+fn cant_draw_is_tried_again_after_a_profile_change_and_other_failures_wait() {
+    let s = Setup::new("rev-fail", vec![inter()]);
+    let held = name_text("Inter");
+    let _net = fake_net::serve(file(&inter(), &held, "inter", font("Inter", &held)));
+    let fail = s.previews.root().join("inter/2026-01-01/name.fail");
+    std::fs::create_dir_all(fail.parent().unwrap()).unwrap();
+    let note = |why: &str, rev: Option<i64>| {
+        let mut v = serde_json::json!({ "at": now(), "why": why, "held": held });
+        if let Some(rev) = rev {
+            v["rev"] = rev.into();
+        }
+        std::fs::write(&fail, serde_json::to_vec(&v).unwrap()).unwrap();
+    };
+    // Judged by today's profiles: still believed.
+    note("cantDraw", Some(preview::PREVIEW_REV));
+    assert_eq!(s.row("inter").state, PreviewState::Unavailable);
+    assert!(urls().is_empty());
+    // Not the family's own fault in any other way (a broken file, Google not knowing it): those
+    // wait their week, whatever profiles say.
+    for why in ["broken", "notFound"] {
+        note(why, Some(preview::PREVIEW_REV - 1));
+        assert_eq!(s.row("inter").state, PreviewState::Unavailable, "{why}");
+        assert!(urls().is_empty(), "{why}");
+    }
+    // Judged by older profiles (or before that was noted): tried again, and today it draws.
+    for rev in [Some(preview::PREVIEW_REV - 1), None] {
+        let _ = std::fs::remove_dir_all(s.previews.root());
+        std::fs::create_dir_all(fail.parent().unwrap()).unwrap();
+        note("cantDraw", rev);
+        assert_eq!(s.row("inter").state, PreviewState::Ready, "{rev:?}");
+        assert_eq!(urls().len(), 2, "{rev:?}");
+        assert!(!fail.exists());
+    }
 }
 
 #[test]
@@ -674,7 +800,7 @@ fn the_cache_reports_its_size_and_clears() {
     let size = s.previews.size();
     let on_disk: u64 = files_under(s.previews.root()).iter().map(|(_, m)| m.len()).sum();
     assert!(size > 0 && size == on_disk);
-    s.previews.go_offline();
+    s.previews.backoff.lock().unwrap().until = now() + OFFLINE_SECS;
     s.previews.clear().unwrap();
     assert_eq!(s.previews.size(), 0);
     assert!(!s.previews.root().exists());

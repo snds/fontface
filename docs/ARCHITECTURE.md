@@ -258,7 +258,8 @@ The Google Fonts page shows families that aren't downloaded in their own font
   view never contacts Google, so the content security policy (CSP) is unchanged: it loads the
   saved file over `ff://` (above).
 - **Network plumbing** (`services/mod.rs`, `fetch_preview`). One shared `ureq` agent per host,
-  so a scroll's many small requests reuse connections; the proxy rules (`NO_PROXY` too) apply
+  keeping up to 6 idle connections (`Deadline::idle_per_host`; ureq keeps one by default), so a
+  scroll's many small requests reuse connections; the proxy rules (`NO_PROXY` too) apply
   per host. A 10-second deadline, 5 to connect (`Deadline::Preview`). At most 6 preview requests
   at once, whatever the UI asks. The answer must come from the expected host. Tests never touch
   the network: `services::fake_net` answers instead, and can fail a URL with a status or as if
@@ -269,11 +270,16 @@ The Google Fonts page shows families that aren't downloaded in their own font
   the file holds, what a row draws and whether it's a sample) and, after a failure,
   `<kind>.fail`. `<token>` is the family's catalog `lastModified`; when it changes, the old
   folder goes, and families that leave the catalog go too (checked whenever the saved catalog
-  changes). Writes are a temporary file and a rename; two requests for one family take turns.
-  Past about 64 MB, the files used longest ago go (their modified time marks use, refreshed at
-  most hourly). Failures that are the family's are retried after 7 days; network trouble pauses
-  previews for 15 minutes instead. `google_preview_cache()` reports the size and
-  `clear_google_preview_cache()` empties it.
+  changes). Each `.json` notes the `PREVIEW_REV` its profile was worked out with; after a bump
+  the saved file is profiled again on its next use (no network) and its `.json` rewritten, and
+  a "can't draw anything" failure is tried again. Writes are a temporary file and a rename; two
+  requests for one family take turns. Past about 64 MB, the files used longest ago go (their
+  modified time marks use, refreshed at most hourly). Failures that are the family's are
+  retried after 7 days. Network trouble is never the family's: 3 failures in a row pause
+  previews for 30 seconds, then twice as long for each pause in a row, up to 15 minutes; a
+  download that gets through ends that (`Previews::network_trouble`, `network_fine`).
+  `google_preview_cache()` reports the size and `clear_google_preview_cache()` empties it
+  (and ends any pause).
 - **Off limits.** `previews::is_preview_cache_path` sits next to every Adobe Fonts path check
   (scanner, database, activation, reveal, tags, named styles, relocate, preview reads, purchases
   and `ff://` by id), so the cache's files can't be scanned, listed, turned on, tagged or served

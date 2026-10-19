@@ -22,10 +22,16 @@
 //!   holds. The token is the catalog's `lastModified`: when it changes, the old files go, and
 //!   families that leave the catalog go too. Writes are atomic (a temporary file, then a
 //!   rename). The cache holds about `MAX_CACHE_BYTES`; past that, the files used longest ago go.
+//!   Each entry notes the `preview::PREVIEW_REV` it was profiled with: after a change to how
+//!   profiles are worked out, a saved file is profiled again (from the file, no network), so
+//!   Google rows and library rows of the same font always agree.
 //! - **Failures** are remembered next to the files (`<file kind>.fail`) and tried again after a
 //!   week: Google not knowing the family, a file too large, a file that isn't a usable font, or
-//!   one that can't draw anything. Network trouble (no connection, a timeout, Google's servers
-//!   failing) isn't the family's fault: previews pause for 15 minutes ("offline") instead.
+//!   one that can't draw anything (that one also after a `PREVIEW_REV` change). Network trouble
+//!   (no connection, a timeout, Google's servers failing) isn't the family's fault, and one
+//!   failure alone is often a hiccup: after `OFFLINE_AFTER` in a row, previews pause ("offline"),
+//!   for 30 seconds at first, then twice as long each time it goes on, up to 15 minutes. A
+//!   download that gets through (or Google's final answer about a family) ends the pauses.
 //! - **Privacy.** On by default (Settings › Google Fonts previews). Google sees the computer's IP
 //!   address and which families are viewed. Typed text is never sent. Turned off, nothing at all
 //!   is sent and saved files aren't used either (they stay until the cache is cleared).
@@ -71,7 +77,12 @@ pub const MAX_FILE_BYTES: u64 = 512 * 1024;
 pub const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 /// A remembered failure is tried again after this long.
 const RETRY_FAILED_SECS: u64 = 7 * 24 * 60 * 60;
-/// After network trouble, previews leave the network alone for this long (like the catalog).
+/// Network trouble this many requests in a row pauses previews. One failure alone is often a
+/// hiccup (a dropped connection, a slow answer), and the next request works.
+const OFFLINE_AFTER: u32 = 3;
+/// The first pause after network trouble. Each pause in a row after it is twice as long.
+const FIRST_PAUSE_SECS: u64 = 30;
+/// The longest pause (like the catalog's).
 const OFFLINE_SECS: u64 = 15 * 60;
 /// A saved file used again is marked as used (its modified time) at most this often.
 const TOUCH_EVERY_SECS: u64 = 60 * 60;
@@ -181,6 +192,10 @@ struct Entry {
     text: String,
     sample: bool,
     profile: PreviewInfo,
+    /// The `preview::PREVIEW_REV` the profile was worked out with (0: saved before this was
+    /// noted). Any other: the file is profiled again before it's used.
+    #[serde(default)]
+    rev: i64,
 }
 
 /// Why a file wasn't made, remembered for `RETRY_FAILED_SECS` (`<file kind>.fail`).
@@ -204,6 +219,29 @@ struct Failed {
     why: Why,
     /// The characters asked for: a different request is tried at once.
     held: String,
+    /// The `preview::PREVIEW_REV` then. A file that couldn't draw anything is tried again once
+    /// profiles are worked out differently: it may draw now.
+    #[serde(default)]
+    rev: i64,
+}
+
+impl Failed {
+    /// Still to be believed: the same request, under a week old, and for "can't draw", judged by
+    /// the profiles of this build.
+    fn holds(&self, held: &str) -> bool {
+        self.held == held && now().saturating_sub(self.at) < RETRY_FAILED_SECS && (self.why != Why::CantDraw || self.rev == preview::PREVIEW_REV)
+    }
+}
+
+/// Network trouble, for when previews leave the network alone (`Previews::network_trouble`).
+#[derive(Debug, Default)]
+struct Backoff {
+    /// Requests in a row that failed because of the network.
+    in_row: u32,
+    /// Pauses in a row: each one after the first is twice as long.
+    pauses: u32,
+    /// Until when (seconds since the epoch) previews leave the network alone.
+    until: u64,
 }
 
 /// What getting one file came to.
@@ -460,8 +498,8 @@ pub struct Previews {
     data_dir: PathBuf,
     /// About how many bytes the cache may hold.
     max_bytes: u64,
-    /// Until when (seconds since the epoch) previews leave the network alone.
-    offline_until: AtomicU64,
+    /// Network trouble lately, and until when previews leave the network alone.
+    backoff: Mutex<Backoff>,
     /// The cache's size in bytes, once measured.
     bytes: Mutex<Option<u64>>,
     /// Families being worked on: one request per family at a time, so two rows (or a row and its
@@ -546,7 +584,7 @@ impl Previews {
             root,
             data_dir,
             max_bytes: MAX_CACHE_BYTES,
-            offline_until: AtomicU64::new(0),
+            backoff: Mutex::new(Backoff::default()),
             bytes: Mutex::new(None),
             busy: Mutex::new(HashSet::new()),
             freed: Condvar::new(),
@@ -701,29 +739,34 @@ impl Previews {
         let dir = self.dir(&f.id, token);
         let (font, details, fail) =
             (dir.join(format!("{}.ttf", kind.as_str())), dir.join(format!("{}.json", kind.as_str())), dir.join(format!("{}.fail", kind.as_str())));
+        let remember = |why: Why| {
+            let failed = Failed { at: now(), why, held: held.to_string(), rev: preview::PREVIEW_REV };
+            let _ = std::fs::create_dir_all(&dir).and_then(|_| write_atomic(&fail, &serde_json::to_vec(&failed).unwrap_or_default()));
+        };
         if let Some(entry) = read_json::<Entry>(&details).filter(|e| e.held == held) {
             if std::fs::metadata(&font).is_ok_and(|m| m.is_file() && m.len() <= MAX_FILE_BYTES) {
-                touch(&font);
-                return Got::Ready(entry);
+                if entry.rev == preview::PREVIEW_REV {
+                    touch(&font);
+                    return Got::Ready(entry);
+                }
+                if let Some(got) = self.profile_again(f, kind, held, &font, &details, &remember) {
+                    return got;
+                }
             }
         }
-        if let Some(failed) = read_json::<Failed>(&fail).filter(|x| x.held == held && now().saturating_sub(x.at) < RETRY_FAILED_SECS) {
+        if let Some(failed) = read_json::<Failed>(&fail).filter(|x| x.holds(held)) {
             return match failed.why {
                 Why::CantDraw => Got::CantDraw,
                 Why::TooLarge => Got::Not(PreviewState::TooLarge),
                 Why::NotFound | Why::Broken => Got::Not(PreviewState::Unavailable),
             };
         }
-        if now() < self.offline_until.load(Ordering::Relaxed) {
+        if self.paused() {
             return Got::Not(PreviewState::Offline);
         }
         if !enabled() {
             return Got::Not(PreviewState::Off);
         }
-        let remember = |why: Why| {
-            let failed = Failed { at: now(), why, held: held.to_string() };
-            let _ = std::fs::create_dir_all(&dir).and_then(|_| write_atomic(&fail, &serde_json::to_vec(&failed).unwrap_or_default()));
-        };
         // 1. Google's CSS, for the URL of the file. The CSS itself is thrown away.
         let css = match fetch_preview(&css_url(f, held), MAX_CSS_BYTES, CSS_ORIGIN) {
             Ok(css) => css,
@@ -731,8 +774,8 @@ impl Previews {
         };
         let Some(url) = font_url(&String::from_utf8_lossy(&css)) else {
             // Not Google's usual answer (no font, or a font somewhere else): something between
-            // here and Google is off, so wait like after network trouble.
-            self.go_offline();
+            // here and Google is off (a Wi-Fi sign-in page, say), so it counts as network trouble.
+            self.network_trouble();
             return Got::Not(PreviewState::Offline);
         };
         if !enabled() {
@@ -743,36 +786,17 @@ impl Previews {
             Ok(bytes) => bytes,
             Err(e) => return self.failed(e, remember),
         };
-        let Ok(face) = ttf_parser::Face::parse(&bytes, 0) else {
-            remember(Why::Broken);
-            return Got::Not(PreviewState::Unavailable);
-        };
+        // Both hosts answered. (The CSS alone isn't enough: with fonts.gstatic.com out of reach,
+        // every row would still ask fonts.googleapis.com again.)
+        self.network_fine();
         // 3. What it draws, worked out like a library font's.
-        let names = profile::Names { family: &f.family, subfamily: "", full: &f.family, postscript: "", file_stem: "" };
-        let p = preview::profile_safely(&face, &names);
-        if p.kind == profile::Kind::None {
-            remember(Why::CantDraw);
-            return Got::CantDraw;
-        }
-        let mut info = PreviewInfo::from_profile(&p);
-        // The other files hold just a few characters on purpose, so only the alphabet's missing
-        // characters mean what they do in the library. A name file keeps the ones it was asked
-        // for and lacks (a capitals-only font's lowercase), so the View options' case isn't
-        // applied to a name the font can't draw in it.
-        match kind {
-            FileKind::Alphabet => {}
-            FileKind::Name => info.ascii_missing.retain(|c| held.contains(c)),
-            FileKind::Icons | FileKind::Script => info.ascii_missing.clear(),
-        }
-        let (text, sample) = match kind {
-            FileKind::Icons => {
-                info.family_text = Some(ICON_PREVIEW.to_string());
-                (ICON_PREVIEW.to_string(), true)
+        let entry = match entry_for(f, kind, held, &bytes) {
+            Ok(entry) => entry,
+            Err(why) => {
+                remember(why);
+                return if why == Why::CantDraw { Got::CantDraw } else { Got::Not(PreviewState::Unavailable) };
             }
-            FileKind::Alphabet => (held.to_string(), false),
-            FileKind::Name | FileKind::Script => (p.family_text.clone().unwrap_or_else(|| f.family.clone()), p.kind.is_sample()),
         };
-        let entry = Entry { held: held.to_string(), text, sample, profile: info };
         // 4. Saved: the font first, then its details, which make it count.
         let details_bytes = serde_json::to_vec(&entry).unwrap_or_default();
         let saved = std::fs::create_dir_all(&dir)
@@ -786,27 +810,83 @@ impl Previews {
         Got::Ready(entry)
     }
 
-    /// A failed request: the family's fault (remembered for a week), or the network's (previews
-    /// pause for a while, and nothing is remembered about the family).
+    /// A saved file profiled with an older `PREVIEW_REV`: profiled again from the file, with no
+    /// network, and its details saved again. None if the file isn't a usable font any more: it's
+    /// removed, and asked for again like a file that was never saved.
+    fn profile_again(&self, f: &CatalogFamily, kind: FileKind, held: &str, font: &Path, details: &Path, remember: &dyn Fn(Why)) -> Option<Got> {
+        let old_size = std::fs::metadata(details).map_or(0, |m| m.len());
+        let redone = std::fs::read(font).map_err(|_| Why::Broken).and_then(|bytes| entry_for(f, kind, held, &bytes));
+        match redone {
+            Ok(entry) => {
+                let details_bytes = serde_json::to_vec(&entry).unwrap_or_default();
+                // If this can't be saved, the answer is still right; the file is profiled again
+                // next time.
+                if write_atomic(details, &details_bytes).is_ok() {
+                    let mut bytes = self.bytes.lock().unwrap_or_else(|p| p.into_inner());
+                    *bytes = bytes.map(|b| (b + details_bytes.len() as u64).saturating_sub(old_size));
+                }
+                touch(font);
+                Some(Got::Ready(entry))
+            }
+            Err(why) => {
+                let _ = std::fs::remove_file(details);
+                let _ = std::fs::remove_file(font);
+                *self.bytes.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                // Profiles now say it draws nothing: on to the next file in the plan.
+                (why == Why::CantDraw).then(|| {
+                    remember(why);
+                    Got::CantDraw
+                })
+            }
+        }
+    }
+
+    /// A failed request: the family's fault (remembered for a week), or the network's (counted
+    /// towards a pause, and nothing is remembered about the family).
     fn failed(&self, e: PreviewFetchError, remember: impl FnOnce(Why)) -> Got {
         match e {
             PreviewFetchError::TooLarge => {
+                self.network_fine();
                 remember(Why::TooLarge);
                 Got::Not(PreviewState::TooLarge)
             }
             PreviewFetchError::Status(code) if (400..500).contains(&code) && code != 429 && code != 408 => {
+                self.network_fine();
                 remember(Why::NotFound);
                 Got::Not(PreviewState::Unavailable)
             }
             PreviewFetchError::Status(_) | PreviewFetchError::Elsewhere | PreviewFetchError::Network(_) => {
-                self.go_offline();
+                self.network_trouble();
                 Got::Not(PreviewState::Offline)
             }
         }
     }
 
-    fn go_offline(&self) {
-        self.offline_until.store(now() + OFFLINE_SECS, Ordering::Relaxed);
+    /// Whether previews are leaving the network alone for now.
+    fn paused(&self) -> bool {
+        now() < self.backoff.lock().unwrap_or_else(|p| p.into_inner()).until
+    }
+
+    /// A request failed because of the network. After `OFFLINE_AFTER` in a row, previews pause:
+    /// `FIRST_PAUSE_SECS`, then twice as long for each pause in a row, up to `OFFLINE_SECS`.
+    /// Requests that were already running when a pause began don't make it longer.
+    fn network_trouble(&self) {
+        let mut b = self.backoff.lock().unwrap_or_else(|p| p.into_inner());
+        let at = now();
+        if at < b.until {
+            return;
+        }
+        b.in_row = b.in_row.saturating_add(1);
+        if b.in_row >= OFFLINE_AFTER {
+            b.until = at + FIRST_PAUSE_SECS.saturating_mul(1 << b.pauses.min(16)).min(OFFLINE_SECS);
+            b.pauses = b.pauses.saturating_add(1);
+        }
+    }
+
+    /// Google answered for good (a file, or a final no for the family): the network works, so
+    /// any pause ends and the count starts again.
+    fn network_fine(&self) {
+        *self.backoff.lock().unwrap_or_else(|p| p.into_inner()) = Backoff::default();
     }
 
     /// Counts a newly saved file; past the limit, the files used longest ago go until the cache
@@ -871,7 +951,7 @@ impl Previews {
             Err(_) => std::fs::remove_dir_all(&self.root)?,
         }
         *self.bytes.lock().unwrap_or_else(|p| p.into_inner()) = Some(0);
-        self.offline_until.store(0, Ordering::Relaxed);
+        self.network_fine();
         Ok(())
     }
 
@@ -900,6 +980,36 @@ impl Previews {
         touch(&path);
         Some(bytes)
     }
+}
+
+/// What a downloaded (or saved) file holds for a row, worked out like a library font's
+/// profile. `Why::Broken` if it isn't a usable font, `Why::CantDraw` if nothing in it draws.
+fn entry_for(f: &CatalogFamily, kind: FileKind, held: &str, bytes: &[u8]) -> Result<Entry, Why> {
+    let face = ttf_parser::Face::parse(bytes, 0).map_err(|_| Why::Broken)?;
+    let names = profile::Names { family: &f.family, subfamily: "", full: &f.family, postscript: "", file_stem: "" };
+    let p = preview::profile_safely(&face, &names);
+    if p.kind == profile::Kind::None {
+        return Err(Why::CantDraw);
+    }
+    let mut info = PreviewInfo::from_profile(&p);
+    // The other files hold just a few characters on purpose, so only the alphabet's missing
+    // characters mean what they do in the library. A name file keeps the ones it was asked
+    // for and lacks (a capitals-only font's lowercase), so the View options' case isn't
+    // applied to a name the font can't draw in it.
+    match kind {
+        FileKind::Alphabet => {}
+        FileKind::Name => info.ascii_missing.retain(|c| held.contains(c)),
+        FileKind::Icons | FileKind::Script => info.ascii_missing.clear(),
+    }
+    let (text, sample) = match kind {
+        FileKind::Icons => {
+            info.family_text = Some(ICON_PREVIEW.to_string());
+            (ICON_PREVIEW.to_string(), true)
+        }
+        FileKind::Alphabet => (held.to_string(), false),
+        FileKind::Name | FileKind::Script => (p.family_text.clone().unwrap_or_else(|| f.family.clone()), p.kind.is_sample()),
+    };
+    Ok(Entry { held: held.to_string(), text, sample, profile: info, rev: preview::PREVIEW_REV })
 }
 
 /// A small JSON file, if it's there and reads.

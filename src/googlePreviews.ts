@@ -1,4 +1,5 @@
 import type { FontSummary, GooglePreview, GooglePreviewKind } from "./api.ts";
+import { formatBytes } from "./familyFacts.ts";
 
 // How the Google Fonts catalog (components/GoogleFontsPanel.tsx) previews each family:
 // - **Downloaded** (in the folder Fontface manages): from those files, as before.
@@ -118,6 +119,11 @@ export function rowSource(o: { match: { downloaded: boolean } | undefined; local
  *  font (those keep their icons). */
 export const wantsAlphabet = (typed: string, icons: boolean) => typed !== "" && !icons;
 
+/** What "Your copy" says, on hover and to screen readers: the preview is drawn from `file`, a
+ *  copy of the family already in your library, not from Google's files. */
+export const yourCopyNote = (file: string) =>
+  `This preview uses the copy already in your library (${file}). It may be a different version from Google's.`;
+
 // ----------------------------------------------------------------------- the cached files
 
 export const PREVIEW_FILE_KINDS = ["name", "icons", "script", "alphabet"] as const;
@@ -153,16 +159,24 @@ export const previewFilePath = (f: PreviewFile) => `google/${f.id}/${f.token}/${
  *  lastModified, so a family Google updated is asked for again. */
 export const answerKey = (id: string, token: string, kind: GooglePreviewKind) => `${id}\n${token}\n${kind}`;
 
-/** How long an answer that isn't a file is kept before the row asks again. */
-export const RETRY_OFFLINE_MS = 60_000;
+/** How long an "offline" answer (or a call that failed) is kept before the row asks again. As
+ *  long as Rust's first pause after network trouble; during a longer pause, asking costs nothing
+ *  (Rust answers "offline" at once, without the network). */
+export const RETRY_OFFLINE_MS = 30_000;
+
+/** How long an "off" answer is kept. Rows only ask while the page has previews on, so "off" only
+ *  means Rust hadn't saved the switch yet: the page shows a switch at once and saves it a moment
+ *  later. Asked again shortly, never kept. */
+export const RETRY_OFF_MS = 1_000;
 
 /**
  * Until when (ms since the epoch) an answer is kept. A file, or a family Google can't preview,
- * for the session (Rust remembers failures for longer itself). "offline", "off" (the setting
- * changed meanwhile) and a call that failed: a minute.
+ * for the session (Rust remembers failures for longer itself). "offline" and a call that failed:
+ * `RETRY_OFFLINE_MS`. "off": a moment (`RETRY_OFF_MS`).
  */
 export function keepAnswerUntil(answer: GooglePreview | null, now: number): number {
   if (answer && (answer.state === "ready" || answer.state === "unavailable" || answer.state === "tooLarge")) return Infinity;
+  if (answer?.state === "off") return now + RETRY_OFF_MS;
   return now + RETRY_OFFLINE_MS;
 }
 
@@ -184,18 +198,24 @@ export function outsideAlphabet(text: string): string[] {
 
 // ---------------------------------------------------------------------- what a row draws
 
+/** What Fontface does after network trouble (Rust pauses previews briefly, then for longer each
+ *  time it goes on, up to 15 minutes). */
+export const KEEPS_TRYING = "Fontface keeps trying, soon at first and then less often.";
+
 /** Why an online file isn't drawn: google_preview's answer, or "error" for a file that came but
- *  wouldn't load as a font. */
-export type FailReason = "off" | "offline" | "unavailable" | "tooLarge" | "error";
+ *  wouldn't load as a font. ("off" isn't one: see `fileStatus`.) */
+export type FailReason = "offline" | "unavailable" | "tooLarge" | "error";
 
 export type FileStatus = { kind: "waiting" } | { kind: "loading" } | { kind: "ready" } | { kind: "failed"; why: FailReason };
 
 /** The page font's state, as fontLoader reports it. */
 type FaceState = "loading" | "ready" | "error" | "cloud" | "too-large";
 
-/** Where one online file is: no answer yet, its font loading, ready to draw, or not coming. */
+/** Where one online file is: no answer yet, its font loading, ready to draw, or not coming. An
+ *  "off" answer counts as no answer yet: rows only ask while previews are on, so it only means
+ *  Rust hadn't saved the switch when it was asked (it's asked again in a moment). */
 export function fileStatus(answer: GooglePreview | undefined, face: FaceState): FileStatus {
-  if (!answer) return { kind: "waiting" };
+  if (!answer || answer.state === "off") return { kind: "waiting" };
   if (answer.state !== "ready") return { kind: "failed", why: answer.state };
   if (!parsePreviewPath(answer.path)) return { kind: "failed", why: "error" };
   if (face === "ready") return { kind: "ready" };
@@ -218,13 +238,19 @@ export function onlineChoice(row: FileStatus, alphabet?: FileStatus): OnlineChoi
   return { draw: "loading" };
 }
 
+/**
+ * Whether the line under an online row describes the row's file (the family's name, and the
+ * badge naming a script sample): once the file is there, while its font loads too, until it
+ * fails. Not whether the preview shows yet, which changes as the font loads, so the line stays
+ * put meanwhile.
+ */
+export const describesRowFile = (row: FileStatus) => row.kind === "loading" || row.kind === "ready";
+
 /** The quiet explanation of a row showing its name in the interface font. */
 export function failNote(why: FailReason): string {
   switch (why) {
-    case "off":
-      return "Previews of families you haven't downloaded are off in Settings.";
     case "offline":
-      return "Couldn't reach Google Fonts for a preview. Fontface tries again in a few minutes.";
+      return `Couldn't reach Google Fonts for a preview. ${KEEPS_TRYING}`;
     case "unavailable":
       return "Google Fonts has no preview of this family.";
     case "tooLarge":
@@ -232,4 +258,15 @@ export function failNote(why: FailReason): string {
     default:
       return "This family's preview couldn't be shown.";
   }
+}
+
+// ------------------------------------------------------------------------- the cache's size
+
+/**
+ * Settings' "Clear preview cache" button. The size is a reading that may be out of date (rows on
+ * the Google Fonts page underneath keep saving files), so it never disables the button: only a
+ * clear in progress does, and clearing an empty cache does nothing.
+ */
+export function previewCacheButton(bytes: number | null, clearing: boolean): { label: string; disabled: boolean } {
+  return { label: bytes ? `Clear preview cache (${formatBytes(bytes)})` : "Clear preview cache", disabled: clearing };
 }

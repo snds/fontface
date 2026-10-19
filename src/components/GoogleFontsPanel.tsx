@@ -4,16 +4,26 @@ import { toast } from "sonner";
 import { api, type FontSummary, type GoogleCatalog, type GoogleFamily, type GoogleInstallResult, type PreviewInfo } from "@/api";
 import { faceName, remoteFace, useFontFace, useRemoteFace, type FaceState } from "@/fontLoader";
 import {
+  describesRowFile,
   failNote,
   fileStatus,
+  KEEPS_TRYING,
   matchLibrary,
   onlineChoice,
   outsideAlphabet,
   rowSource,
   wantsAlphabet,
+  yourCopyNote,
   type LibraryMatch,
 } from "@/googlePreviews";
-import { refreshGooglePreviews, retryGooglePreview, useGoogleOffline, useGooglePreview, type PreviewRequest } from "@/googlePreviewStore";
+import {
+  listenForPreviewSetting,
+  refreshGooglePreviews,
+  retryGooglePreview,
+  useGoogleOffline,
+  useGooglePreview,
+  type PreviewRequest,
+} from "@/googlePreviewStore";
 import { ROW_HEIGHT } from "@/previewFit";
 import { isSampleKind, usePreviewProfile, useProfileWait } from "@/previewProfiles";
 import { applyCase } from "@/previewStyle";
@@ -116,19 +126,19 @@ function PlainName({ family, note, hidden }: { family: GoogleFamily; note?: stri
   );
 }
 
-/** "Your copy": the preview is drawn from a copy of the family elsewhere in your library. */
+/** "Your copy": the preview is drawn from a copy of the family elsewhere in your library. The
+ *  explanation is on hover, and in words for screen readers (the trigger can't take focus). */
 function YourCopy({ font }: { font: FontSummary }) {
+  const note = yourCopyNote(fileName(font.path));
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="shrink-0" />}>
         <Badge variant="outline" className="text-muted-foreground">
           Your copy
         </Badge>
+        <span className="sr-only">. {note}</span>
       </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        This preview uses the copy already in your library ({fileName(font.path)}). It may be a different version from
-        Google's.
-      </TooltipContent>
+      <TooltipContent className="max-w-xs">{note}</TooltipContent>
     </Tooltip>
   );
 }
@@ -192,11 +202,25 @@ function FamilyInfo({
   const alphabetFace = useRemoteFace(alphabetPath, alphabet.generation);
   useRetry(rowRequest, rowPath, rowFace);
   useRetry(alphabetRequest, alphabetPath, alphabetFace);
-  const choice = onlineChoice(
-    fileStatus(rowRequest && row.answer, rowFace),
-    alphabetRequest ? fileStatus(alphabet.answer, alphabetFace) : undefined,
-  );
+  const rowStatus = fileStatus(rowRequest && row.answer, rowFace);
+  const choice = onlineChoice(rowStatus, alphabetRequest ? fileStatus(alphabet.answer, alphabetFace) : undefined);
   const onlineWaited = useProfileWait(source === "online" && choice.draw === "loading", family.id, ONLINE_WAIT_MS);
+  // The row's own file, drawn in its page font: the name, the icons or a sample of its script.
+  const rowProfile = row.answer?.profile;
+  const rowText = row.answer?.text || family.family;
+  const rowShown: Shown | undefined =
+    source === "online" && rowPath
+      ? {
+          kind: "font",
+          face: remoteFace(rowPath)!,
+          text: rowText,
+          ready: choice.draw === "row",
+          profile: rowProfile,
+          ownText: !icons && !!rowProfile && rowText === (rowProfile.familyText ?? family.family),
+          typed: false,
+          sample: icons || (row.answer?.sample ?? isSampleKind(rowProfile)),
+        }
+      : undefined;
 
   let shown: Shown;
   if ((source === "download" || source === "library") && font) {
@@ -213,21 +237,9 @@ function FamilyInfo({
     };
   } else if (source === "online" && choice.draw === "alphabet" && alphabetPath) {
     shown = { kind: "font", face: remoteFace(alphabetPath)!, text, ready: true, profile: alphabet.answer?.profile, ownText: false, typed: true, sample: false };
-  } else if (source === "online" && rowPath && (choice.draw === "row" || (choice.draw === "loading" && !onlineWaited))) {
-    // The row's own file: the name, the icons or a sample of its script. While its font loads
-    // it's hidden (and fades in), so nothing draws in the fallback font.
-    const profile = row.answer?.profile;
-    const drawn = row.answer?.text || family.family;
-    shown = {
-      kind: "font",
-      face: remoteFace(rowPath)!,
-      text: drawn,
-      ready: choice.draw === "row",
-      profile,
-      ownText: !icons && !!profile && drawn === (profile.familyText ?? family.family),
-      typed: false,
-      sample: icons || (row.answer?.sample ?? isSampleKind(profile)),
-    };
+  } else if (rowShown && (choice.draw === "row" || (choice.draw === "loading" && !onlineWaited))) {
+    // While its font loads it's hidden (and fades in), so nothing draws in the fallback font.
+    shown = rowShown;
   } else if (source === "online" && choice.draw === "plain") {
     shown = { kind: "plain", note: failNote(choice.why) };
   } else if (source === "online") {
@@ -240,6 +252,9 @@ function FamilyInfo({
   // Drawn in a page font (the family's own, or its icons or script): its name in plain letters
   // goes on the line below too.
   const f = shown.kind === "font" ? shown : null;
+  // The line below describes the file the row settles on, also while its font is still loading
+  // (the preview shows the name meanwhile), so it doesn't change as the font arrives.
+  const facts = f ?? (rowShown && describesRowFile(rowStatus) ? rowShown : null);
   return (
     <div className="min-w-0 flex-1">
       {f ? (
@@ -257,26 +272,29 @@ function FamilyInfo({
       ) : (
         <PlainName family={family} note={shown.kind === "plain" ? shown.note : undefined} hidden={shown.kind === "plain" && shown.hidden} />
       )}
-      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-        {f && (
-          // Screen readers already hear the name from the preview when it draws the name.
-          <span className="text-foreground" aria-hidden={(!f.sample && !f.typed) || undefined}>
+      {/* One line, always as tall as a badge: what it holds can change (a badge arrives with a
+          preview), its height can't, so the row never moves the rows below it. */}
+      <div className="mt-0.5 flex h-5 min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden text-xs whitespace-nowrap text-muted-foreground">
+        {facts && (
+          // Screen readers already hear the name from the preview when it draws the name, or
+          // shows it in the interface font while the font loads.
+          <span className="min-w-0 truncate text-foreground" aria-hidden={!f || (!f.sample && !f.typed) || undefined}>
             {family.family}
           </span>
         )}
-        {f && source === "library" && font && <YourCopy font={font} />}
-        {f && f.sample && !icons && <SampleBadge profile={f.profile} row="family" />}
-        {f?.typed && <MissingHint text={f.text} profile={f.profile} />}
-        {f?.typed && source === "online" && <AlphabetHint text={f.text} />}
-        {f && <span>·</span>}
-        <span>{categoryLabel(family.category)}</span>
-        <span>·</span>
-        <span>
+        {facts && source === "library" && font && <YourCopy font={font} />}
+        {facts && facts.sample && !icons && <SampleBadge profile={facts.profile} row="family" />}
+        {facts?.typed && <MissingHint text={facts.text} profile={facts.profile} />}
+        {facts?.typed && source === "online" && <AlphabetHint text={facts.text} />}
+        {facts && <span className="shrink-0">·</span>}
+        <span className="shrink-0">{categoryLabel(family.category)}</span>
+        <span className="shrink-0">·</span>
+        <span className="shrink-0">
           {family.weights.length} {family.weights.length === 1 ? "weight" : "weights"}
           {family.styles.includes("italic") ? " + italics" : ""}
         </span>
         {family.variable && <Badge variant="outline">Variable</Badge>}
-        <span className="font-mono text-[11px]">{family.license}</span>
+        <span className="shrink-0 font-mono text-[11px]">{family.license}</span>
       </div>
     </div>
   );
@@ -326,8 +344,10 @@ export function GoogleFontsPanel({
   // regular style. No network.
   const matches = useMemo(() => matchLibrary(catalog?.families ?? [], fonts), [catalog, fonts]);
 
-  // Switching online previews on or off asks again for every row that had no file.
+  // Switching online previews on or off asks again for every row that had no file, and rows that
+  // asked before Rust saved the switch ask again once it has.
   useEffect(() => refreshGooglePreviews(), [onlinePreviews]);
+  useEffect(() => listenForPreviewSetting(), []);
   const offline = useGoogleOffline() && onlinePreviews;
 
   const visible = useMemo(() => {
@@ -401,7 +421,7 @@ export function GoogleFontsPanel({
               "Settings"
             )}
             .
-            {offline && " Google couldn't be reached just now, so some families show their names; Fontface tries again in a few minutes."}
+            {offline && ` Google couldn't be reached just now, so some families show their names. ${KEEPS_TRYING}`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

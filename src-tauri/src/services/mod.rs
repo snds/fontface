@@ -96,6 +96,17 @@ impl Deadline {
             _ => Duration::from_secs(15),
         }
     }
+
+    /// How many open connections to one host an agent keeps for its next requests. Previews run
+    /// up to `MAX_PREVIEW_FETCHES` requests at once through one shared agent, so it keeps that
+    /// many; with ureq's default of one, the others would close and the next requests would
+    /// each start a new connection. Other agents serve one request (see `agent`).
+    fn idle_per_host(self) -> usize {
+        match self {
+            Deadline::Preview => MAX_PREVIEW_FETCHES,
+            _ => 1,
+        }
+    }
 }
 
 /// An HTTP(S) proxy from the environment, if one applies to `host`. SOCKS proxies are skipped
@@ -143,6 +154,7 @@ fn agent(url: &str, deadline: Deadline) -> ureq::Agent {
     let mut builder = ureq::AgentBuilder::new()
         .timeout_connect(deadline.connect())
         .timeout(deadline.duration())
+        .max_idle_connections_per_host(deadline.idle_per_host())
         .user_agent(USER_AGENT);
     if let Some(proxy) = proxy_for(host) {
         builder = builder.proxy(proxy);
@@ -267,10 +279,11 @@ pub enum PreviewFetchError {
     Network(String),
 }
 
-/// The agent preview requests to one host share. One agent keeps its connections open, so the
-/// many small requests of a scroll don't each start a new TLS handshake (`agent` builds a new
-/// one for every request, which is fine for the occasional catalog or install). Each host gets
-/// its own, with the proxy that applies to it (NO_PROXY may name one host and not the other).
+/// The agent preview requests to one host share. One agent keeps its connections open (as many
+/// as run at once, `Deadline::idle_per_host`), so the many small requests of a scroll don't
+/// each start a new TLS handshake (`agent` builds a new one for every request, which is fine
+/// for the occasional catalog or install). Each host gets its own, with the proxy that applies
+/// to it (NO_PROXY may name one host and not the other).
 fn preview_agent(url: &str) -> ureq::Agent {
     static AGENTS: Mutex<Vec<(String, ureq::Agent)>> = Mutex::new(Vec::new());
     let host = host_name(url).to_ascii_lowercase();
@@ -500,6 +513,23 @@ mod tests {
         assert!(usable_etag("").is_none());
         assert!(usable_etag("\"a\r\nX-Evil: 1\"").is_none());
         assert!(usable_etag(&"a".repeat(201)).is_none());
+    }
+
+    /// Building an agent sends nothing. Its pool settings show only in ureq's debug text
+    /// (ureq 2.12: `max_idle_per_host: N`).
+    #[test]
+    fn the_preview_agent_keeps_a_connection_for_each_request_running_at_once() {
+        let kept = |a: &ureq::Agent| {
+            let text = format!("{a:?}");
+            let at = text.find("max_idle_per_host: ").expect("ureq's debug text names the pool size") + "max_idle_per_host: ".len();
+            text[at..].split(|c: char| !c.is_ascii_digit()).next().unwrap().parse::<usize>().unwrap()
+        };
+        for url in ["https://fonts.googleapis.com/css2?family=Inter", "https://fonts.gstatic.com/l/font?kit=a"] {
+            let shared = preview_agent(url);
+            assert_eq!(kept(&shared), MAX_PREVIEW_FETCHES, "{url}");
+            assert_eq!(kept(&preview_agent(url)), MAX_PREVIEW_FETCHES, "the same agent again");
+        }
+        assert_eq!(kept(&agent("https://example.test/catalog.json", Deadline::Small)), 1, "a one-request agent keeps ureq's default");
     }
 
     #[test]
