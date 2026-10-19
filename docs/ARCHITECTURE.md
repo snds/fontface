@@ -164,10 +164,14 @@ House-A-Rama-Kingpin is House-A-Rama's Kingpin). With "Group families by name" o
 also rejoins (`rejoin`) a name whose every style has a copy named for the family grouping
 would list it in (MorganAvec-BoldCaps, also "MorganAvec" Bold), and a lone style keeps a style
 that has a file of its name too (Sansation Light); never into another family than grouping
-gives, so the families with it off always lie inside the families with it on. Its label comes
+gives, so the families with it off always lie inside the families with it on. A name whose
+chosen name goes by another itself follows it there when its faces have that name too, else
+stays under its own (FagoLf-BoldCaps, when FagoLf goes by Fago), so no style is left alone
+under a name whose own styles went. Its label comes
 from the copy whose names say it best (`labelFor`), and never from one whose label would name
-another family (`relates`; a name with every word of the family, "ZeitgeistExpertMT-Cameo" in
-Zeitgeist MT, is labelled by the words it has besides: "Expert Cameo"). The copy shown and turned on (`primary`) is chosen by state,
+another family (`relates`; when the font also has a copy named that family, a name with every
+word of it, "ZeitgeistExpertMT-Cameo" in Zeitgeist MT, is labelled by the words it has besides:
+"Expert Cameo"; a style you move keeps its own name first, "Times New Roman" in Times Roman). The copy shown and turned on (`primary`) is chosen by state,
 format and date first, then the same names, and by path only between copies named alike.
 Names and labels that tie ignoring case are put in code-point order. Each face carries its
 `family`, its `style` label ("Black Italic"), how it got them (`groupedBy`: own, name, rule,
@@ -180,9 +184,10 @@ A new family made by grouping (no font of that name) keeps a style word all its 
 only when it's part of the name (`partOfName`: a plain word, a weight the fonts' numbers
 contradict, or one a PostScript family part spells), so "Gotham Bold" and "Gotham Bold Italic"
 are Gotham's. A width, size or numbered suggestion joins the longest name left that's a family
-(`WideName.steps`: "Times New Roman Condensed", and G2's "Times New Roman 2 Bold", for Times
-New Roman), with the outermost word as its reason (`WideName.word`: "Condensed" for MINI 7
-Condensed).
+as the families stand (`WideName.steps`, and `Held.steps` for G2: "Times New Roman Condensed",
+and "Times New Roman 2 Bold", for Times New Roman; "Gill Sans Light 2 Italic" for Gill Sans
+when grouping lists Gill Sans Light there), with the outermost word as its reason
+(`WideName.word`: "Condensed" for MINI 7 Condensed).
 
 Your choices (`src-tauri/src/families.rs`) are two side tables made by `ensure_schema` at launch,
 outside the numbered migrations like the tag tables: `family_overrides(face_key, family,

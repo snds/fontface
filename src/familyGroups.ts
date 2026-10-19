@@ -638,25 +638,25 @@ function wordsBeyond(raw: string, family: string): string | null {
  * A face's style in the family it's listed under (5.4): the words its family name has past
  * that family, spelled the usual way, then its own style unless that's Regular, Roman, Plain or
  * Normal, without repeating a word. "AmintaBlackItalic" (style Regular) in Aminta is "Black
- * Italic"; "Dynasty Heavy" (Italic) in Dynasty is "Heavy Italic". A name with every word of the
- * family but not as one string gives the words it has besides ("ZeitgeistExpertMT-Cameo" in
- * Zeitgeist MT is "Expert Cameo"; `wordsBeyond`). A face under its own name keeps its own style;
- * one moved under an unrelated family puts its family name first.
+ * Italic"; "Dynasty Heavy" (Italic) in Dynasty is "Heavy Italic". A face under its own name
+ * keeps its own style; one moved under an unrelated family puts its family name first.
  *
  * `weight` is the font's stored weight. Old Fontographer fonts call every style "Medium" and
  * store 400: when the family name already names a weight ("VisageBold"), that "Medium" is
- * dropped ("Bold", not "Bold Medium").
+ * dropped ("Bold", not "Bold Medium"). `besides`: the font has a copy named that family too
+ * (`labelFor`); then a name with every word of the family but not as one string gives the words
+ * it has besides ("ZeitgeistExpertMT-Cameo" in Zeitgeist MT is "Expert Cameo"; `wordsBeyond`).
  */
-export function styleLabel(raw: string, own: string, family: string, weight?: number): string {
+export function styleLabel(raw: string, own: string, family: string, weight?: number, besides = false): string {
   if (raw === family) return own;
   const ownTrim = own.trim();
   const ownLower = ownTrim.toLowerCase();
   const fallback = weight === 400 && ownLower === "medium";
-  const cacheKey = `${raw}\u0000${own}\u0000${family}\u0000${fallback ? 1 : 0}`;
+  const cacheKey = `${raw}\u0000${own}\u0000${family}\u0000${fallback ? 1 : 0}${besides ? 1 : 0}`;
   const known = labels.get(cacheKey);
   if (known !== undefined) return known;
   // Past the family, or else besides its words ("ZeitgeistExpertMT-Cameo" in Zeitgeist MT).
-  const after = leftover(clean(raw), family) ?? wordsBeyond(clean(raw), family);
+  const after = leftover(clean(raw), family) ?? (besides ? wordsBeyond(clean(raw), family) : null);
   // A few words: a list, not a set, to leave out repeats.
   const out: string[] = [];
   const seen: string[] = [];
@@ -980,27 +980,31 @@ export function namedCopy<C extends NameFont>(copies: readonly C[]): C | undefin
   return best === primary ? undefined : best;
 }
 
-/** A copy whose family name is `family`, starts with it (then what's left is a style) or has all
- *  its words (`wordsBeyond`): its label stays inside the family rather than naming another. */
-const relates = (raw: string, family: string) => raw === family || leftover(clean(raw), family) !== null || wordsBeyond(clean(raw), family) !== null;
+/** A copy whose family name is `family`, starts with it (then what's left is a style) or, when
+ *  the font has a copy named that family too (`besides`), has all its words (`wordsBeyond`): its
+ *  label stays inside the family rather than naming another. */
+const relates = (raw: string, family: string, besides: boolean) =>
+  raw === family || leftover(clean(raw), family) !== null || (besides && wordsBeyond(clean(raw), family) !== null);
 
 /**
  * A face's style label in `family` (`styleLabel`), from the copy whose names say it best: one
  * whose label stays inside the family (`relates`: its family name is that family, starts with it
- * or has all its words), then the one whose names agree with its PostScript name (Engine-LightLF,
- * style Regular, is "Light LF" in Engine; the copy that calls it Engine, style Medium, isn't;
- * ZeitgeistExpertMT-Cameo is "Expert Cameo" in Zeitgeist MT, not the family copy's "Regular"),
- * then one whose label comes from its family name's words ("UltraBronzo-Lite" is "Light", where
- * the "UltraBronzo" copy says "Lite"), then A to Z. A copy whose label would name another family
- * never wins over one inside it, however well its names agree. Never by which copy is shown or
- * what placed it, so turning one on doesn't change it.
+ * or, when another copy is named that family, has all its words), then the one whose names agree
+ * with its PostScript name (Engine-LightLF, style Regular, is "Light LF" in Engine; the copy that
+ * calls it Engine, style Medium, isn't; ZeitgeistExpertMT-Cameo is "Expert Cameo" in Zeitgeist
+ * MT, not the family copy's "Regular"), then one whose label comes from its family name's words
+ * ("UltraBronzo-Lite" is "Light", where the "UltraBronzo" copy says "Lite"), then A to Z. A copy
+ * whose label would name another family never wins over one inside it, however well its names
+ * agree. Never by which copy is shown or what placed it, so turning one on doesn't change it.
  */
 function labelFor(face: FaceInput, family: string): string {
   const copies = face.copies;
   let best = face.primary;
   const alike = !copies || copies.length < 2 || face.varied === false || (face.varied === undefined && copies.every((c) => c.family === best.family && c.subfamily === best.subfamily));
   if (alike) return best.family === family ? best.subfamily : styleLabel(best.family, best.subfamily, family, best.weight);
-  const score = (c: NameFont) => (relates(c.family, family) ? 8 : 0) + namesAgree(c) * 2 + (c.family !== family ? 1 : 0);
+  // The font itself puts the face in that family: its other names count by their words too.
+  const besides = copies.some((c) => c.family === family);
+  const score = (c: NameFont) => (relates(c.family, family, besides) ? 8 : 0) + namesAgree(c) * 2 + (c.family !== family ? 1 : 0);
   let bestScore = score(best);
   for (const c of copies) {
     if (c === best || (c.family === best.family && c.subfamily === best.subfamily)) continue;
@@ -1010,7 +1014,7 @@ function labelFor(face: FaceInput, family: string): string {
       bestScore = s;
     }
   }
-  return styleLabel(best.family, best.subfamily, family, face.primary.weight);
+  return styleLabel(best.family, best.subfamily, family, face.primary.weight, besides);
 }
 
 /** Why a name that could join a family isn't grouped with it automatically. */
@@ -1038,6 +1042,9 @@ export interface Held {
   reason: HoldReason;
   /** A numbered style's number ("45"). */
   word?: string;
+  /** A numbered style's names left without the number, longest first (`WideName.steps`):
+   *  `suggestGroups` suggests it for the longest that's a family as they stand, else `into`. */
+  steps?: readonly WideStep[];
 }
 
 interface NameInfo {
@@ -1340,7 +1347,7 @@ export function planByName(
         const into =
           wide.steps.find((step) => carry.has(step.key) && letters(step.base) >= 3) ??
           wide.steps[wide.steps.length - 1 - keptWords([wide], (wordsOf ??= members.map((x) => x.list.map(namedOf))))];
-        held.set(m.raw, { into: into.base, reason: "number", word: wide.word });
+        held.set(m.raw, { into: into.base, reason: "number", word: wide.word, steps: wide.steps });
         continue;
       }
       // G1: the font names its own grouping family.
@@ -1527,7 +1534,8 @@ function rehome(
  * own names: LTUnivers-CondThin, whose other copy says LTUnivers, stays on its own, since
  * grouping by name lists it in LTUnivers-Cond. A name with a style whose copies are all named
  * alike stays whole, as in step 3. Decided for every name before any face moves, so the order
- * names come in doesn't matter.
+ * names come in doesn't matter; a name whose chosen name goes by another follows it there, or
+ * stays under its own (FagoLf-BoldCaps, when FagoLf goes by Fago).
  */
 function rejoin(
   byName: ReadonlyMap<string, FaceInput[]>,
@@ -1573,7 +1581,8 @@ function rejoin(
     }
     return fixed(name) + (now.get(name)?.length ?? 0) + (carried.get(name) ?? 0);
   };
-  const moves: [faces: FaceInput[], name: string][] = [];
+  // Each name that would move: its faces, the name they'd go by, and every name they could.
+  const moves = new Map<string, { faces: FaceInput[]; to: string; names: Set<string> }>();
   for (const [name, faces] of now) {
     const family = listed(name);
     if (family === name || fixed(name) || ruled(name)) continue;
@@ -1597,14 +1606,37 @@ function rejoin(
       if (best !== undefined && (Number(best === family) - Number(n === family) || most - t || betterNamed(copyOf(n), copyOf(best))) >= 0) continue;
       [best, most] = [n, t];
     }
-    if (best !== undefined) moves.push([faces, best]);
+    if (best !== undefined) moves.set(name, { faces, to: best, names: names! });
   }
-  for (const [faces, name] of moves)
+  // Where each name ends up, through the names it would go by: one whose chosen name goes by
+  // another itself follows it there when its every face has a copy of that one too, else stays
+  // under its own, rather than be left alone under a name whose own styles went (FagoLf-BoldCaps,
+  // also "FagoLf", when FagoLf's styles go by Fago). Names that would go round in a circle stay.
+  const ends = new Map<string, string>();
+  for (const name of moves.keys()) {
+    const path: string[] = [];
+    let at = name;
+    while (moves.has(at) && !ends.has(at) && !path.includes(at)) {
+      path.push(at);
+      at = moves.get(at)!.to;
+    }
+    const circle = path.indexOf(at);
+    if (circle >= 0) for (const n of path.splice(circle)) ends.set(n, n);
+    let end = ends.get(at) ?? at;
+    for (const n of path.reverse()) {
+      if (!moves.get(n)!.names.has(end)) end = n;
+      ends.set(n, end);
+    }
+  }
+  for (const [name, { faces }] of moves) {
+    const end = ends.get(name)!;
+    if (end === name) continue;
     for (const face of faces) {
       let best: NameFont | undefined;
-      for (const c of face.copies!) if (c.family === name && (!best || betterNamed(c, best) < 0)) best = c;
+      for (const c of face.copies!) if (c.family === end && (!best || betterNamed(c, best) < 0)) best = c;
       face.named = best;
     }
+  }
   // A style alone under the one name all its files carry (Sansation Light's Light Italic) is
   // joined by a face listed elsewhere that has a copy of that name too (Sansation-Light, whose
   // other copy says Sansation), unless that leaves a style alone where it was.
@@ -1775,7 +1807,11 @@ export function suggestGroups<F extends FamilyLike>(families: readonly F[], plan
   };
   for (const [raw, h] of plan.held) {
     const family = byName.get(raw);
-    if (family && !kept(raw)) add(h.into, family, h.reason, h.word);
+    if (!family || kept(raw)) continue;
+    // A numbered style: the longest name left that's a family as they stand, as for width words
+    // below (Gill Sans Light 2 Italic into Gill Sans, when grouping lists Gill Sans Light there).
+    const step = h.steps?.find((s) => byKey.has(s.key) && letters(s.base) >= 3);
+    add(step?.base ?? h.into, family, h.reason, h.word);
   }
   if (!options.byName)
     for (const [raw, into] of plan.merges) {

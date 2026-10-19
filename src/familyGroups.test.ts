@@ -1073,10 +1073,11 @@ test("a style's label comes from the copy whose names agree with its PostScript 
     assert.deepEqual(shape(families), ["Lido STF CE: Condensed Bold, Normal, Bold", "Zeitgeist MT: Expert Cameo, Regular, Expert"], "no second Regular or Normal");
     for (const other of variants([...zeitgeist, ...lido])) assert.deepEqual(shape(groupFamilies(other, options)), shape(families), "whichever copy is shown");
   }
-  assert.equal(styleLabel("ZeitgeistExpertMT-Cameo", "Regular", "Zeitgeist MT"), "Expert Cameo", "the words it has besides the family's");
-  assert.equal(styleLabel("LidoSTFCondCE-Bold", "Regular", "Lido STF CE"), "Condensed Bold");
-  assert.equal(styleLabel("Times New Roman", "Regular", "New York"), "Times New Roman", "not every word of the family: its own name first");
-  assert.equal(styleLabel("Helvetica Neue", "Bold", "Neue"), "Helvetica Neue Bold", "the family's first word must start it");
+  // With a copy named the family (`besides`, as labelFor passes it).
+  assert.equal(styleLabel("ZeitgeistExpertMT-Cameo", "Regular", "Zeitgeist MT", undefined, true), "Expert Cameo", "the words it has besides the family's");
+  assert.equal(styleLabel("LidoSTFCondCE-Bold", "Regular", "Lido STF CE", undefined, true), "Condensed Bold");
+  assert.equal(styleLabel("Times New Roman", "Regular", "New York", undefined, true), "Times New Roman", "not every word of the family: its own name first");
+  assert.equal(styleLabel("Helvetica Neue", "Bold", "Neue", undefined, true), "Helvetica Neue Bold", "the family's first word must start it");
   // A copy whose names agree but name another family doesn't rename the style away from its
   // family: XyzBold, moved into Foo by your choice, is Foo's Bold, from its "Foo" copy.
   const foo = [font("Foo", "Regular", { postscriptName: "Foo-Regular" }), ...copies("XyzBold", ["XyzBold", "Regular"], ["Foo", "Bold"], { weight: 700 })];
@@ -1108,4 +1109,69 @@ test("a numbered name is suggested for the longest name left that's a family, wi
   assert.deepEqual(into([font("Foo 2", "Regular", { postscriptName: "Foo2" }), font("Foo 2 Condensed", "Regular", { postscriptName: "Foo2-Condensed" })]), ["Foo 2 <- Foo 2 Condensed (Width word “Condensed”)"]);
   assert.deepEqual([widen("MINI 7 Condensed").word, widen("MINI 7 Condensed").kind], ["Condensed", "width"], "the outermost word");
   assert.deepEqual(widen("MINI 7 Condensed").steps.map((s) => s.base), ["MINI 7", "MINI"]);
+});
+
+test("with grouping off, a name whose chosen name goes by another isn't left alone under it (M3-r4-1: a two-step chain)", () => {
+  // FagoLf's styles also say Fago, so off they go by Fago. FagoLf-BoldCaps's other copy says
+  // FagoLf, but none says Fago: it stays under its own name, not alone under a FagoLf that holds
+  // none of the FagoLf fonts.
+  const fago = [
+    font("Fago", "Regular", { postscriptName: "Fago-Regular" }),
+    font("Fago", "Bold", { postscriptName: "Fago-Bold", weight: 700 }),
+    ...copies("FagoLf-Regular", ["FagoLf", "Regular"], ["Fago", "Regular"]),
+    ...copies("FagoLf-Bold", ["FagoLf", "Bold"], ["Fago", "Bold"], { weight: 700 }),
+    ...copies("FagoLf-BoldCaps", ["FagoLf-BoldCaps", "Regular"], ["FagoLf", "Bold"], { weight: 700 }),
+  ];
+  assert.deepEqual(shape(groupFamilies(fago, ON)), ["Fago: Regular, LF, Bold, LF Bold, LF Bold Caps"]);
+  assert.deepEqual(shape(groupFamilies(fago, OFF)), ["Fago: Regular, LF, Bold, LF Bold", "FagoLf-BoldCaps: Regular"]);
+  assert.deepEqual(
+    suggestionsOf(fago, OFF).map((s) => [s.into, s.sources.map((src) => src.family.name)]),
+    [["Fago", ["FagoLf-BoldCaps"]]],
+    "still suggested for Fago",
+  );
+  for (const other of variants(fago)) assert.deepEqual(shape(groupFamilies(other, OFF)), shape(groupFamilies(fago, OFF)), "whatever the order, folders or copy on");
+  offRefinesOn(fago);
+});
+
+test("a numbered name is suggested for the longest name left that's a family as they stand (M3-r4-2: Gill Sans Light 2)", () => {
+  // Grouping lists Gill Sans Light in Gill Sans, so no family is called Gill Sans Light: the
+  // numbered names are suggested for Gill Sans, not for a new Gill Sans Light beside it.
+  const gill = [
+    font("Gill Sans", "Regular", { postscriptName: "GillSans" }),
+    font("Gill Sans", "Bold", { postscriptName: "GillSans-Bold", weight: 700 }),
+    font("Gill Sans Light", "Regular", { postscriptName: "GillSans-Light", weight: 300 }),
+    font("Gill Sans Light", "Italic", { postscriptName: "GillSans-LightItalic", weight: 300, italic: true }),
+  ];
+  const italic = font("Gill Sans Light 2 Italic", "Regular", { postscriptName: "GillSansLight2-Italic", italic: true });
+  const bold = font("Gill Sans Light 2 Bold", "Regular", { postscriptName: "GillSansLight2-Bold", weight: 700 });
+  const said = (fonts: FontSummary[], options: GroupingOptions) =>
+    suggestionsOf(fonts, options).map((s) => `${suggestionText(s)} [${s.existing?.name ?? "new"}]: ${s.sources.map((src) => `${src.family.name} (${src.reason})`).join(", ")}`);
+  assert.deepEqual(said([...gill, italic, bold], ON), ["Merge 2 families into Gill Sans (6 styles) [Gill Sans]: Gill Sans Light 2 Bold (number), Gill Sans Light 2 Italic (number)"]);
+  assert.deepEqual(said([...gill, italic], ON), ["Merge “Gill Sans Light 2 Italic” into Gill Sans (5 styles) [Gill Sans]: Gill Sans Light 2 Italic (number)"], "one numbered name, the same");
+  // Off, Gill Sans Light is a family as it stands, and it's suggested for Gill Sans itself.
+  assert.deepEqual(said([...gill, italic, bold], OFF), [
+    "Merge 3 families into Gill Sans (6 styles) [Gill Sans]: Gill Sans Light (strong), Gill Sans Light 2 Bold (number), Gill Sans Light 2 Italic (number)",
+  ]);
+  for (const other of variants([...gill, italic, bold])) assert.deepEqual(said(other, ON), said([...gill, italic, bold], ON), "whatever the order");
+});
+
+test("a style moved by hand into a family whose words it has keeps its full name (M3-r4-3: Times New Roman into Times Roman)", () => {
+  // Only a font with a copy named the family itself is labelled by the words it has besides
+  // (Zeitgeist MT, Lido STF CE, above); styles you move keep their family name first.
+  const fonts = [
+    font("Times Roman", "Regular", { postscriptName: "Times-Roman" }),
+    font("Times Roman", "Bold", { postscriptName: "Times-Bold", weight: 700 }),
+    font("Times New Roman", "Regular", { postscriptName: "TimesNewRomanPSMT" }),
+    font("Times New Roman", "Bold", { postscriptName: "TimesNewRomanPS-BoldMT", weight: 700 }),
+    font("Proxima Soft", "Regular", { postscriptName: "ProximaSoft-Regular" }),
+    font("Proxima Nova Soft", "Bold", { postscriptName: "ProximaNovaSoft-Bold", weight: 700 }),
+  ];
+  const moved: [string, string][] = [["TimesNewRomanPSMT", "Times Roman"], ["TimesNewRomanPS-BoldMT", "Times Roman"], ["ProximaNovaSoft-Bold", "Proxima Soft"]];
+  const choices = new Map<string, FaceChoice>(moved.map(([ps, family]) => [keyOf(ps), { faceKey: keyOf(ps), family, style: null }]));
+  const expected = ["Proxima Soft: Regular, Proxima Nova Soft Bold", "Times Roman: Regular, Times New Roman, Bold, Times New Roman Bold"];
+  for (const byName of [true, false]) assert.deepEqual(shape(groupFamilies(fonts, { byName, choices })), expected, `your choice, grouping ${byName ? "on" : "off"}`);
+  const rules = new Map<string, NameRule>([["timesnewroman", { nameKey: "timesnewroman", name: "Times New Roman", decision: "merge", into: "Times Roman" }]]);
+  assert.deepEqual(shape(groupFamilies(fonts.slice(0, 4), { byName: true, rules })), [expected[1]], "your rule");
+  assert.equal(styleLabel("Times New Roman", "Bold", "Times Roman"), "Times New Roman Bold");
+  assert.equal(styleLabel("Avenir Next Condensed", "Demi Bold", "Avenir Condensed"), "Avenir Next Condensed DemiBold");
 });
