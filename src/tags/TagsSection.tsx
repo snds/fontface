@@ -1,19 +1,22 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { viewKey, type Family, type LibraryView } from "@/library";
+import { viewKey, type Face, type Family, type LibraryView } from "@/library";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { BUILTIN_HINT, facesByTag, tagSwitchProgress } from "@/tagActions";
 import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
 import { DragLayer, dropTarget, pressToDrag, useDrag } from "./drag";
 import { isOpen, setOpen, toggleOpen, useOpenRows } from "./expanded";
-import { countByTag, flatten, GROUP_LABELS, parentOf, useTagIndex, type TagGroup, type TagNode } from "./model";
-import { CONTEXT, DROPDOWN, openMenuFromKeyboard, TagMenuItems } from "./menus";
+import { flatten, GROUP_LABELS, parentOf, useTagIndex, type TagGroup, type TagNode } from "./model";
+import { CONTEXT, DROPDOWN, openMenuFromKeyboard, TagMenuItems, TipItem } from "./menus";
 import { GROUP_ROWS, revealTag, tagOpenId as openId } from "./reveal";
 import { useOrganize } from "./store";
+import { useTagRun } from "./switching";
+import { TagSwitch } from "./TagSwitch";
 
 const n = (v: number) => v.toLocaleString();
 
@@ -24,13 +27,28 @@ const rowClass = (selected: boolean, dropping: boolean) =>
     dropping && "bg-primary/10 ring-2 ring-primary ring-inset",
   );
 
-function HeaderAction({ icon, label, onClick }: { icon: string; label: string; onClick?: () => void }) {
+/** Design-system tooltips on the section's controls (never the native `title`). */
+const TIP_DELAY = 600;
+
+function HeaderAction({ icon, label, tip, onClick }: { icon: string; label: string; tip: string; onClick?: () => void }) {
   return (
     <Tooltip>
       <TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={label} onClick={onClick} />}>
         <Icon name={icon} size={16} />
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>{tip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** A plain text button (the empty section's links) with a tooltip saying more. */
+function TextAction({ tip, onClick, children }: { tip: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger delay={TIP_DELAY} render={<button className="text-left hover:text-foreground" onClick={onClick} />}>
+        {children}
+      </TooltipTrigger>
+      <TooltipContent className="max-w-64">{tip}</TooltipContent>
     </Tooltip>
   );
 }
@@ -40,25 +58,38 @@ function setOpenDeep(node: TagNode, to: boolean) {
   for (const n of flatten([node])) if (n.children.length) toggleOpen(openId(n.tag.id), to);
 }
 
+/** No fonts: the same empty list for every tag that has none, so rows don't redraw for nothing. */
+const NO_FACES: Face[] = [];
+
+/**
+ * One tag in the sidebar: open/close (if tags are inside it), its name (shows its fonts), how many
+ * fonts it covers, its switch (TagSwitch), and its "…" menu (also on right-click). A built-in tag
+ * is quieter: an outlined label, dimmer text, and a read-only menu.
+ */
 function TagRow({
   node,
-  counts,
+  sets,
   view,
   onView,
 }: {
   node: TagNode;
-  counts: Map<number, number>;
+  /** Each tag's fonts, its nested tags' included (tagActions.facesByTag). */
+  sets: Map<number, Face[]>;
   view: LibraryView;
   onView: (v: LibraryView) => void;
 }) {
   const open = useOpenRows().has(openId(node.tag.id));
   const [menu, setMenu] = useState(false);
   const drag = useDrag();
+  const run = useTagRun(node.tag.id);
   const target: LibraryView = { kind: "tag", id: node.tag.id };
   const selected = viewKey(view) === viewKey(target);
-  const count = counts.get(node.tag.id) ?? 0;
+  const set = sets.get(node.tag.id) ?? NO_FACES;
+  const count = set.length;
   const dropping = drag?.over === `tag:${node.tag.id}`;
   const hasChildren = node.children.length > 0;
+  const builtin = node.tag.builtin;
+  const path = node.tag.name.split("/").join(" › ");
 
   // Hovering a closed tag while dragging opens it, so you can reach the tags inside.
   useEffect(() => {
@@ -102,66 +133,106 @@ function TagRow({
           className={rowClass(selected, dropping)}
           style={{ paddingLeft: 8 + node.depth * 14 }}
           onKeyDown={onKeyDown}
-          onPointerDown={(e) => pressToDrag(e, () => ({ kind: "tag", tag: node.tag }))}
+          // Built-in tags don't move, so they don't drag either.
+          onPointerDown={(e) => pressToDrag(e, () => (builtin ? null : { kind: "tag", tag: node.tag }))}
           data-tag-row=""
           data-tag-id={node.tag.id}
+          data-builtin={builtin ? "" : undefined}
           {...dropTarget(`tag:${node.tag.id}`)}
         >
           {hasChildren ? (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="-ml-1 size-5 shrink-0"
-              aria-label={open ? `Hide tags in ${node.label}` : `Show tags in ${node.label}`}
-              aria-expanded={open}
-              title="Option-click to open or close every tag inside"
-              data-no-drag=""
-              onClick={(e) => (e.altKey ? setOpenDeep(node, !open) : toggleOpen(openId(node.tag.id)))}
-            >
-              <Icon name="chevron_right" size={16} className={cn("transition-transform", open && "rotate-90")} />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger
+                delay={TIP_DELAY}
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="-ml-1 size-5 shrink-0"
+                    aria-label={open ? `Hide tags in ${node.label}` : `Show tags in ${node.label}`}
+                    aria-expanded={open}
+                    data-no-drag=""
+                    onClick={(e) => (e.altKey ? setOpenDeep(node, !open) : toggleOpen(openId(node.tag.id)))}
+                  />
+                }
+              >
+                <Icon name="chevron_right" size={16} className={cn("transition-transform", open && "rotate-90")} />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-64">
+                {open ? `Hide the tags inside “${node.label}”.` : `Show the tags inside “${node.label}”.`} Option-click to {open ? "close" : "open"} every level.
+              </TooltipContent>
+            </Tooltip>
           ) : (
             <span className="w-4 shrink-0" aria-hidden />
           )}
-          <button
-            className="flex min-w-0 flex-1 items-center gap-2"
-            aria-current={selected ? "page" : undefined}
-            title={node.tag.name}
-            data-tag-link=""
-            onClick={() => onView(target)}
-          >
-            <Icon name="label" size={18} filled style={{ color: colorVar(node.tag.color) }} />
-            <span className="truncate">{node.label}</span>
-          </button>
-          <span className="font-mono text-xs text-muted-foreground tabular-nums">{n(count)}</span>
-          <DropdownMenu open={menu} onOpenChange={setMenu}>
-            <DropdownMenuTrigger
+          <Tooltip>
+            <TooltipTrigger
+              delay={800}
               render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={`More for ${node.tag.name}`}
-                  data-no-drag=""
-                  // Invisible until hover or focus, but always there for keyboard and VoiceOver users.
-                  className={cn("opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100", menu && "opacity-100")}
+                <button
+                  className={cn("flex min-w-0 flex-1 items-center gap-2", builtin && !selected && "text-muted-foreground")}
+                  aria-current={selected ? "page" : undefined}
+                  aria-description={builtin ? "Built-in, read-only" : undefined}
+                  data-tag-link=""
+                  onClick={() => onView(target)}
                 />
               }
             >
-              <Icon name="more_horiz" size={16} />
-            </DropdownMenuTrigger>
+              {/* Built-in: an outlined label, so it reads as not yours at a glance. */}
+              <Icon name="label" size={18} filled={!builtin} style={{ color: colorVar(node.tag.color) }} />
+              <span className="truncate">{node.label}</span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-64">
+              Show the fonts in “{path}”.{builtin && " Built-in, read-only."}
+            </TooltipContent>
+          </Tooltip>
+          {run ? (
+            // Short, so the name keeps its room; the toast has the full count.
+            <span className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground tabular-nums" aria-hidden>
+              <Icon name="progress_activity" size={14} className="animate-spin" />
+              {Math.floor((run.done / Math.max(1, run.total)) * 100)}%
+            </span>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground tabular-nums">{n(count)}</span>
+          )}
+          {run && <span className="sr-only">{tagSwitchProgress(node.tag.name, run.on, run.done, run.total).detail}</span>}
+          <TagSwitch tag={node.tag} set={set} />
+          <DropdownMenu open={menu} onOpenChange={setMenu}>
+            <Tooltip>
+              <TooltipTrigger
+                delay={TIP_DELAY}
+                render={
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`More for ${node.tag.name}`}
+                        data-no-drag=""
+                        // Invisible until hover or focus, but always there for keyboard and VoiceOver users.
+                        className={cn("opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100", menu && "opacity-100")}
+                      />
+                    }
+                  />
+                }
+              >
+                <Icon name="more_horiz" size={16} />
+              </TooltipTrigger>
+              <TooltipContent>More for “{node.label}”: turn on or off, {builtin ? "export" : "rename, move, delete"}…</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent className="w-auto min-w-44">
-              <TagMenuItems kit={DROPDOWN} tag={node.tag} />
+              <TagMenuItems kit={DROPDOWN} tag={node.tag} set={set} />
             </DropdownMenuContent>
           </DropdownMenu>
         </ContextMenuTrigger>
         <ContextMenuContent className="min-w-44">
-          <TagMenuItems kit={CONTEXT} tag={node.tag} />
+          <TagMenuItems kit={CONTEXT} tag={node.tag} set={set} />
         </ContextMenuContent>
       </ContextMenu>
       {open && hasChildren && (
         <div role="group" data-tag-group="">
           {node.children.map((c) => (
-            <TagRow key={c.tag.id} node={c} counts={counts} view={view} onView={onView} />
+            <TagRow key={c.tag.id} node={c} sets={sets} view={view} onView={onView} />
           ))}
         </div>
       )}
@@ -189,27 +260,27 @@ function TopLevelTarget() {
 
 /** The two groups' headings: open-state ids in the expanded-rows store, and how each starts. */
 const GROUPS: Record<TagGroup, { openId: string; startsOpen: boolean; hint: string }> = {
-  mine: { ...GROUP_ROWS.mine, hint: "Tags you made, here or in another app." },
-  builtin: { ...GROUP_ROWS.builtin, hint: "Tags that came with Font Book and Typeface, such as Fixed Width and Style." },
+  mine: { ...GROUP_ROWS.mine, hint: "Tags you made, here or in another app. You can change them in any way." },
+  builtin: { ...GROUP_ROWS.builtin, hint: BUILTIN_HINT },
 };
 
 /**
  * One group of top-level tags (My tags or Built-in) under a small heading that opens and closes
- * it. Without a heading (`labelled` false: only one group has tags) it's just the rows.
- * Dropping a top-level tag of the other group on the heading moves it here.
+ * it. Without a heading (`labelled` false) it's just the rows: Built-in always has its heading,
+ * with a lock, so its tags never pass for yours; My tags has one only when Built-in is there too.
  */
 function TagGroupList({
   group,
   nodes,
   labelled,
-  counts,
+  sets,
   view,
   onView,
 }: {
   group: TagGroup;
   nodes: TagNode[];
   labelled: boolean;
-  counts: Map<number, number>;
+  sets: Map<number, Face[]>;
   view: LibraryView;
   onView: (v: LibraryView) => void;
 }) {
@@ -220,8 +291,6 @@ function TagGroupList({
   const [hovered, setHovered] = useState(false);
   const listId = useId();
   const hintId = useId();
-  const target = `group:${group}`;
-  const dropping = drag?.over === target;
   const total = useMemo(() => flatten(nodes).length, [nodes]);
 
   // Hovering a closed heading while dragging opens it, so the tags inside can be reached.
@@ -231,7 +300,7 @@ function TagGroupList({
     return () => clearTimeout(t);
   }, [labelled, open, dragging, hovered, openId, startsOpen]);
 
-  const rows = nodes.map((node) => <TagRow key={node.tag.id} node={node} counts={counts} view={view} onView={onView} />);
+  const rows = nodes.map((node) => <TagRow key={node.tag.id} node={node} sets={sets} view={view} onView={onView} />);
   if (!labelled) return <>{rows}</>;
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -248,30 +317,36 @@ function TagGroupList({
 
   return (
     <div data-tags-group={group}>
-      <button
-        type="button"
-        className={cn(
-          "flex h-6 w-full items-center gap-1 rounded-md pr-1 pl-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground",
-          dropping && "bg-primary/10 text-foreground ring-2 ring-primary ring-inset",
-        )}
-        aria-expanded={open}
-        aria-controls={open ? listId : undefined}
-        aria-describedby={hintId}
-        title={hint}
-        data-group-heading=""
-        onClick={() => setOpen(openId, !open, startsOpen)}
-        onKeyDown={onKeyDown}
-        onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
-        {...dropTarget(target)}
-      >
-        <Icon name="chevron_right" size={16} className={cn("transition-transform", open && "rotate-90")} />
-        <span className="flex-1 truncate">{GROUP_LABELS[group]}</span>
-        <span className="text-[11px] font-normal tabular-nums" aria-hidden>
-          {n(total)}
-        </span>
-        <span className="sr-only">, {total === 1 ? "1 tag" : `${n(total)} tags`}</span>
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          delay={TIP_DELAY}
+          render={
+            <button
+              type="button"
+              className="flex h-6 w-full items-center gap-1 rounded-md pr-1 pl-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+              aria-expanded={open}
+              aria-controls={open ? listId : undefined}
+              aria-describedby={hintId}
+              data-group-heading=""
+              onClick={() => setOpen(openId, !open, startsOpen)}
+              onKeyDown={onKeyDown}
+              onPointerEnter={() => setHovered(true)}
+              onPointerLeave={() => setHovered(false)}
+            />
+          }
+        >
+          <Icon name="chevron_right" size={16} className={cn("transition-transform", open && "rotate-90")} />
+          <span className="flex min-w-0 flex-1 items-center gap-1">
+            <span className="truncate">{GROUP_LABELS[group]}</span>
+            {group === "builtin" && <Icon name="lock" size={12} aria-hidden />}
+          </span>
+          <span className="text-[11px] font-normal tabular-nums" aria-hidden>
+            {n(total)}
+          </span>
+          <span className="sr-only">, {total === 1 ? "1 tag" : `${n(total)} tags`}</span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-72">{hint}</TooltipContent>
+      </Tooltip>
       {/* The heading's description, read once. Outside the button so it isn't part of the name
           too; `hidden` still lets aria-describedby read it. */}
       <span id={hintId} hidden>
@@ -287,14 +362,14 @@ function TagGroupList({
 }
 
 /**
- * The sidebar's Tags section: every tag as a view, nested by "/", with style counts. Tags are
- * loaded, and their dialogs shown, by App (TagDialogHost), so they work while this section is
- * hidden or settings are open.
+ * The sidebar's Tags section: every tag as a view, nested by "/", with style counts and a switch
+ * that turns the whole tag on or off. Tags are loaded, and their dialogs shown, by App
+ * (TagDialogHost), so they work while this section is hidden or settings are open.
  *
- * Tags come in two groups: My tags, then Built-in (from Font Book and Typeface), each under a
- * heading that opens and closes it. A group with no tags has no heading, and when only one group
- * has tags there are no headings at all. `showBuiltin` (Settings › Sidebar) hides Built-in here
- * only: those tags still exist, still show on fonts, and still appear in tag menus.
+ * Tags come in two groups: My tags, then Built-in (from Font Book and Typeface, read-only), each
+ * under a heading that opens and closes it. Built-in always has its heading, with a lock; My
+ * tags has one only when Built-in is there too. `showBuiltin` (Settings › Sidebar) hides Built-in
+ * here only: those tags still exist, still show on fonts, and still appear in the tag search.
  */
 export function TagsSection({
   families,
@@ -314,11 +389,13 @@ export function TagsSection({
 }) {
   const { loaded } = useOrganize();
   const index = useTagIndex();
-  const counts = useMemo(() => countByTag(families, index), [families, index]);
+  // Each tag's fonts, its nested tags' included: the counts, the switches and Turn on/off.
+  const sets = useMemo(() => facesByTag(families, index), [families, index]);
   const groups = index.ordered.filter((node) => node.children.length > 0);
   const mine = index.roots.mine;
   const builtin = showBuiltin ? index.roots.builtin : [];
-  const labelled = mine.length > 0 && builtin.length > 0;
+  // Built-in always has its heading (and lock); My tags only when Built-in is there too.
+  const labelled = builtin.length > 0;
   const hiddenBuiltin = showBuiltin ? 0 : index.tags.filter((t) => index.groupOf(t.id) === "builtin").length;
 
   // A tag view whose tag is gone (deleted, or merged by a rename elsewhere), or is now hidden
@@ -333,7 +410,7 @@ export function TagsSection({
   // changes or its row moves (another group, another parent, headings shown or not), so they
   // can be closed again.
   const viewTag = loaded && view.kind === "tag" && index.byId.has(view.id) ? view.id : null;
-  const viewPlace = viewTag === null ? null : [viewTag, index.groupOf(viewTag), labelled, index.lineage.get(viewTag)?.join("/")].join(" ");
+  const viewPlace = viewTag === null ? null : [viewTag, index.groupOf(viewTag), labelled, mine.length > 0, index.lineage.get(viewTag)?.join("/")].join(" ");
   useEffect(() => {
     if (viewTag !== null) revealTag(viewTag, !showBuiltin);
     // Only when the view or its place changes, not each time a row opens or closes.
@@ -345,24 +422,37 @@ export function TagsSection({
       <div className="flex items-center justify-between pr-1">
         <div className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Tags</div>
         <span className="flex items-center">
-          <HeaderAction icon="add" label="New tag" onClick={() => openTagDialog({ kind: "create" })} />
+          <HeaderAction icon="add" label="New tag" tip="Make a new tag" onClick={() => openTagDialog({ kind: "create" })} />
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="More for tags: import, export, open or close all" />}>
-              <Icon name="more_horiz" size={16} />
-            </DropdownMenuTrigger>
+            <Tooltip>
+              <TooltipTrigger
+                delay={TIP_DELAY}
+                render={<DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="More for tags: import, export, open or close all" />} />}
+              >
+                <Icon name="more_horiz" size={16} />
+              </TooltipTrigger>
+              <TooltipContent>More for tags: import, export, open or close all</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end" className="w-auto min-w-48">
-              <DropdownMenuItem onClick={() => openTagDialog({ kind: "import" })}>
+              <TipItem kit={DROPDOWN} tip="Bring in tags from Typeface, Finder, Font Book or a Fontface tags file." onClick={() => openTagDialog({ kind: "import" })}>
                 <Icon name="download" size={16} />
                 Import tags…
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={!index.tags.length} onClick={() => openTagDialog({ kind: "export" })}>
+              </TipItem>
+              <TipItem
+                kit={DROPDOWN}
+                tip={index.tags.length ? "Save all your tags to a file, or to Finder tags or Font Book." : "There are no tags to export yet."}
+                disabled={!index.tags.length}
+                onClick={() => openTagDialog({ kind: "export" })}
+              >
                 <Icon name="ios_share" size={16} />
                 Export tags…
-              </DropdownMenuItem>
+              </TipItem>
               {groups.length > 0 && (
                 <>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem
+                  <TipItem
+                    kit={DROPDOWN}
+                    tip="Show the tags inside every tag."
                     onClick={() => {
                       groups.forEach((g) => toggleOpen(openId(g.tag.id), true));
                       // Open the group headings too, so every tag is in sight. (Close all leaves
@@ -372,11 +462,11 @@ export function TagsSection({
                   >
                     <Icon name="unfold_more" size={16} />
                     Open all tags
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => groups.forEach((g) => toggleOpen(openId(g.tag.id), false))}>
+                  </TipItem>
+                  <TipItem kit={DROPDOWN} tip="Hide the tags inside other tags." onClick={() => groups.forEach((g) => toggleOpen(openId(g.tag.id), false))}>
                     <Icon name="unfold_less" size={16} />
                     Close all tags
-                  </DropdownMenuItem>
+                  </TipItem>
                 </>
               )}
             </DropdownMenuContent>
@@ -385,27 +475,27 @@ export function TagsSection({
       </div>
       {loaded && index.tags.length === 0 && (
         <div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
-          <button className="text-left hover:text-foreground" onClick={() => openTagDialog({ kind: "create" })}>
+          <TextAction tip="Make your first tag. Then drag fonts onto it, or use a font's right-click menu." onClick={() => openTagDialog({ kind: "create" })}>
             Create a tag…
-          </button>
-          <button className="text-left hover:text-foreground" onClick={() => openTagDialog({ kind: "import" })}>
+          </TextAction>
+          <TextAction tip="Bring in the tags you made in Typeface, Finder or Font Book." onClick={() => openTagDialog({ kind: "import" })}>
             Import from Typeface, Finder or Font Book…
-          </button>
+          </TextAction>
         </div>
       )}
       {loaded && mine.length === 0 && hiddenBuiltin > 0 && (
         <div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
-          <button className="text-left hover:text-foreground" onClick={() => openTagDialog({ kind: "create" })}>
+          <TextAction tip="Make your own tag. Then drag fonts onto it, or use a font's right-click menu." onClick={() => openTagDialog({ kind: "create" })}>
             Create a tag…
-          </button>
+          </TextAction>
           <p>
             {hiddenBuiltin === 1 ? "1 built-in tag is" : `${n(hiddenBuiltin)} built-in tags are`} hidden. Settings › Sidebar shows them.
           </p>
         </div>
       )}
       <TopLevelTarget />
-      <TagGroupList group="mine" nodes={mine} labelled={labelled} counts={counts} view={view} onView={onView} />
-      <TagGroupList group="builtin" nodes={builtin} labelled={labelled} counts={counts} view={view} onView={onView} />
+      <TagGroupList group="mine" nodes={mine} labelled={labelled && mine.length > 0} sets={sets} view={view} onView={onView} />
+      <TagGroupList group="builtin" nodes={builtin} labelled={labelled} sets={sets} view={view} onView={onView} />
       <DragLayer />
     </div>
   );

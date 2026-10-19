@@ -782,6 +782,69 @@ fn nested_tags_follow_their_top_level_group() {
 }
 
 #[test]
+fn built_in_tags_are_read_only_by_hand() {
+    use super::{check_edit, Edit};
+    use crate::error::AppError;
+
+    let mut lib = Library::new("groups-read-only");
+    let okuda = face_key(Some("Okuda"), false, false, "", 0);
+    let trek = super::create_tag(&mut lib.conn, "Sci-Fi/Trek", None).unwrap();
+    super::create_tag(&mut lib.conn, "Style/Sans", None).unwrap();
+    lib.set_group("Style", true).unwrap();
+    let (style, sans) = (lib.id("Style"), lib.id("Style/Sans"));
+    let refused = |r: AppResult<()>| match r {
+        Err(AppError::Invalid(message)) => message,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+
+    // A built-in tag, and every tag inside it: no renaming or moving, no color, no deleting,
+    // no fonts added or taken off (even alongside one of your tags).
+    for id in [style, sans] {
+        refused(check_edit(&lib.conn, Edit::Rename { id, to: "Other" }));
+        refused(check_edit(&lib.conn, Edit::Recolor { id }));
+        refused(check_edit(&lib.conn, Edit::Delete { id }));
+        refused(check_edit(&lib.conn, Edit::Fonts { tag_ids: &[trek.id, id] }));
+    }
+    // Nothing goes inside it: not a new tag (in any spelling), not one of yours moved there.
+    for name in ["Style/Mono", "style/Mono", " Style / Sans / Grotesque "] {
+        refused(check_edit(&lib.conn, Edit::Create { name }));
+    }
+    refused(check_edit(&lib.conn, Edit::Rename { id: trek.id, to: "style/Trek" }));
+    // The refusal says which tag, and what to do instead.
+    let said = refused(check_edit(&lib.conn, Edit::Delete { id: sans }));
+    assert!(said.contains("“Style/Sans” is a built-in tag") && said.contains("Make it your tag first"), "{said}");
+
+    // Your own tags work as before (a name that only starts the same way isn't inside it).
+    for edit in [
+        Edit::Create { name: "Sci-Fi/Aliens" },
+        Edit::Create { name: "Styles/Mono" },
+        Edit::Create { name: "Brand New" },
+        Edit::Rename { id: trek.id, to: "Trek" },
+        Edit::Recolor { id: trek.id },
+        Edit::Delete { id: trek.id },
+        Edit::Fonts { tag_ids: &[trek.id, 9999] }, // a missing tag is for `assign` to report
+    ] {
+        check_edit(&lib.conn, edit).unwrap();
+    }
+
+    // Imports, restores and sync still change them directly: that's where their fonts come from.
+    super::assign(&mut lib.conn, &[sans], &[okuda.clone()], true).unwrap();
+
+    // Made your own (from any tag in it), every change is open again.
+    lib.set_group("Style/Sans", false).unwrap();
+    for edit in [
+        Edit::Rename { id: sans, to: "Style/Grotesque" },
+        Edit::Recolor { id: style },
+        Edit::Delete { id: sans },
+        Edit::Fonts { tag_ids: &[sans] },
+        Edit::Create { name: "Style/Mono" },
+        Edit::Rename { id: trek.id, to: "Style/Trek" },
+    ] {
+        check_edit(&lib.conn, edit).unwrap();
+    }
+}
+
+#[test]
 fn typeface_and_font_book_imports_sort_new_tags_by_name() {
     let mut lib = typeface_library("groups-typeface");
     let source = typeface::parse(TYPEFACE_V4.as_bytes()).unwrap();

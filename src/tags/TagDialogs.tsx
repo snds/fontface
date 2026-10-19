@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
 import type { Family } from "@/library";
 import {
@@ -25,6 +25,7 @@ import { useBuiltinHidden } from "./menus";
 import { countByTag, groupOfTag, isWithin, topOf, useTagIndex } from "./model";
 import { revealTag } from "./reveal";
 import { createTag, deleteTag, reload, renameTag, setFaceTags } from "./store";
+import { setSwitchFonts, type SwitchFonts } from "./switching";
 import { TagPicker } from "./TagPicker";
 
 const close = () => openTagDialog(null);
@@ -32,9 +33,21 @@ const close = () => openTagDialog(null);
 /**
  * Loads tags at launch and shows whichever tag dialog is open. Mounted once, in App (not in the
  * sidebar), so tags, chips and menus work even when the Tags section is hidden or settings are open.
+ * `switchFonts` is App's on/off path, for turning whole tags on and off (switching.ts).
  */
-export function TagDialogHost({ families, onDeleted }: { families: Family[]; onDeleted: (ids: number[]) => void }) {
+export function TagDialogHost({
+  families,
+  onDeleted,
+  switchFonts,
+}: {
+  families: Family[];
+  onDeleted: (ids: number[]) => void;
+  switchFonts: SwitchFonts;
+}) {
   const dialog = useTagDialog();
+  // App's function changes every render; the latest one is always the one used.
+  useLayoutEffect(() => setSwitchFonts(switchFonts));
+  useEffect(() => () => setSwitchFonts(null), []);
   useEffect(() => {
     reload().catch((e) => toast.error("Couldn't load tags", { description: String(e) }));
   }, []);

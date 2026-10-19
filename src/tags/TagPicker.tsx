@@ -43,11 +43,16 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
     .filter((g) => g.nodes.length);
   const shown = groups.flatMap((g) => g.nodes);
   const labelled = groups.length > 1;
-  const canCreate = !!q && !index.tags.some((t) => fold(t.name) === fold(q));
+  // Nothing new goes inside a built-in tag (they're read-only, src/tagActions.ts).
+  const lockedParent = q.includes("/") ? index.tags.find((t) => t.builtin && fold(t.name) === fold(q.split("/")[0])) : undefined;
+  const canCreate = !!q && !lockedParent && !index.tags.some((t) => fold(t.name) === fold(q));
   const count = shown.length + (canCreate ? 1 : 0);
   const at = Math.min(active, Math.max(0, count - 1));
 
-  const toggle = (tagId: number) => applyTags([tagId], faces, (coverage.get(tagId) ?? 0) < faces.length);
+  const toggle = (tagId: number) => {
+    if (index.byId.get(tagId)?.builtin) return; // read-only: the row says so
+    applyTags([tagId], faces, (coverage.get(tagId) ?? 0) < faces.length);
+  };
   const creating = useRef(false);
   const create = async () => {
     if (creating.current) return; // Enter pressed twice before the first one finished
@@ -94,6 +99,7 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
   const option = (node: TagNode, pos: number) => {
     const n = coverage.get(node.tag.id) ?? 0;
     const state = n === 0 ? false : n === faces.length ? true : "mixed";
+    const locked = node.tag.builtin;
     // In a multi-select list "selected" means the fonts have the tag; the highlight is
     // conveyed by aria-activedescendant on the input.
     return (
@@ -102,17 +108,20 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
         id={optionId(pos)}
         role="option"
         aria-selected={state === true}
+        aria-disabled={locked || undefined}
         title={node.tag.name}
-        className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", pos === at && "bg-accent")}
+        className={cn("flex h-7 cursor-default items-center gap-2 rounded-md px-2 text-sm", pos === at && "bg-accent", locked && "text-muted-foreground")}
         style={{ paddingLeft: q ? undefined : 8 + node.depth * 14 }}
         onMouseEnter={() => setActive(pos)}
         onClick={() => toggle(node.tag.id)}
       >
-        <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
+        <Icon name="label" size={16} filled={!locked} style={{ color: colorVar(node.tag.color) }} />
         <span className="flex-1 truncate">
           {q ? node.tag.name : node.label}
           {state === "mixed" && <span className="sr-only">, on {n} of {faces.length} styles</span>}
+          {locked && <span className="sr-only">, built-in, read-only</span>}
         </span>
+        {locked && <Icon name="lock" size={14} aria-hidden />}
         {state === "mixed" && (
           <span className="font-mono text-[11px] text-muted-foreground tabular-nums" title={`${n} of ${faces.length} styles`}>
             {n}/{faces.length}
@@ -153,8 +162,14 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
           const labelId = `${listId}-${g.group}`;
           return (
             <div key={g.group} role="group" aria-labelledby={labelId}>
-              <div id={labelId} className="px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">
+              <div id={labelId} className="flex items-center gap-1 px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">
                 {GROUP_LABELS[g.group]}
+                {g.group === "builtin" && (
+                  <>
+                    <Icon name="lock" size={12} aria-hidden />
+                    <span className="font-normal">read-only</span>
+                  </>
+                )}
               </div>
               {rows}
             </div>
@@ -175,7 +190,10 @@ export function TagPicker({ faces, autoFocus = true }: { faces: Face[]; autoFocu
             </span>
           </div>
         )}
-        {count === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">No tags yet. Type a name to create one.</p>}
+        {count === 0 && !lockedParent && <p className="px-2 py-1.5 text-xs text-muted-foreground">No tags yet. Type a name to create one.</p>}
+        {lockedParent && (
+          <p className="px-2 py-1.5 text-xs text-muted-foreground">“{lockedParent.name}” is a built-in tag, so new tags can't go inside it.</p>
+        )}
       </div>
       <p className="px-0.5 text-[11px] text-muted-foreground">
         Nest tags with “/”, as in Sci-Fi/Star Trek. Changes apply to {what}.

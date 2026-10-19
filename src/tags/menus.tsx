@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import {
   ContextMenu,
@@ -26,13 +26,21 @@ import {
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useStateWording } from "@/components/ActivationSwitch";
+import type { ActivationMode } from "@/api";
+import { otherMode } from "@/fontActions";
+import type { Face } from "@/library";
+import { cn } from "@/lib/utils";
 import { useSettings } from "@/settings/useSettings";
+import { canNestIn, tagEditStates, tagSwitchStates, type TagActionState } from "@/tagActions";
 import { COLOR_NAMES, PALETTE, colorVar, type Tag, type TagColor } from "./api";
 import { openTagDialog } from "./dialogs";
 import { moveTag, moveToGroup } from "./drag";
 import type { Locations } from "./locations";
-import { fold, GROUP_LABELS, isWithin, parentOf, useTagIndex, type TagGroup, type TagNode } from "./model";
+import { parentOf, useTagIndex } from "./model";
 import { recolorTag, setLocationColor } from "./store";
+import { switchTag } from "./switching";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** The same menu items work in a right-click menu and in a "…" menu. */
@@ -73,15 +81,86 @@ export const CONTEXT: Kit = {
   RadioItem: ContextMenuRadioItem,
 };
 
-/** A "Color" submenu with the palette as radio items. */
-function ColorSub({ kit, value, defaultColor, onPick }: { kit: Kit; value: TagColor; defaultColor?: TagColor; onPick: (c: TagColor) => void }) {
-  const { Sub, SubTrigger, SubContent, RadioGroup, RadioItem } = kit;
+/** How long the pointer rests on a menu item before its tooltip shows, so moving down a menu
+ *  doesn't flash one per item. */
+const MENU_TIP_DELAY = 500;
+
+/**
+ * A menu item (or submenu trigger, with `as`) with a design-system tooltip: what it does, or,
+ * when it's greyed out, why. The tip is also the item's description for screen readers. A
+ * greyed-out item still takes the pointer, so its tooltip shows. Submenu triggers put the tip
+ * above, so it doesn't cover the submenu.
+ */
+export function TipItem({
+  kit,
+  tip,
+  as = "Item",
+  disabled,
+  className,
+  children,
+  ...rest
+}: {
+  kit: Kit;
+  tip: string;
+  as?: "Item" | "SubTrigger";
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+} & Record<string, unknown>) {
+  const Item = kit[as];
+  const id = useId();
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        delay={MENU_TIP_DELAY}
+        render={<Item disabled={disabled} aria-describedby={id} className={cn(disabled && "data-disabled:pointer-events-auto data-disabled:opacity-50", className)} {...rest} />}
+      >
+        {children}
+        <span id={id} hidden>
+          {tip}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side={as === "SubTrigger" ? "top" : "right"} className="max-w-64">
+        {tip}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** A menu item for one of a tag's actions (tagActions.ts says if it can run, and its words). */
+function ActionItem({ kit, state, icon, onClick, variant }: { kit: Kit; state: TagActionState; icon: string; onClick: (e: React.MouseEvent) => void; variant?: "destructive" }) {
+  return (
+    <TipItem kit={kit} tip={state.tip} disabled={!state.enabled} variant={variant} onClick={onClick}>
+      <Icon name={icon} size={16} />
+      {state.label}
+    </TipItem>
+  );
+}
+
+/** A "Color" submenu with the palette as radio items. `tip`: the trigger's tooltip (with
+ *  `disabled`, why it's greyed out). */
+function ColorSub({
+  kit,
+  value,
+  defaultColor,
+  onPick,
+  tip = "Change its color.",
+  disabled,
+}: {
+  kit: Kit;
+  value: TagColor;
+  defaultColor?: TagColor;
+  onPick: (c: TagColor) => void;
+  tip?: string;
+  disabled?: boolean;
+}) {
+  const { Sub, SubContent, RadioGroup, RadioItem } = kit;
   return (
     <Sub>
-      <SubTrigger>
+      <TipItem kit={kit} as="SubTrigger" tip={tip} disabled={disabled}>
         <span className="size-3 rounded-full" style={{ background: colorVar(value) }} aria-hidden />
         Color
-      </SubTrigger>
+      </TipItem>
       <SubContent className="min-w-40">
         <RadioGroup value={value} onValueChange={(c: TagColor) => onPick(c)}>
           {PALETTE.map((c) => (
@@ -118,125 +197,108 @@ export function openMenuFromKeyboard(e: React.KeyboardEvent, on?: HTMLElement | 
   return true;
 }
 
-/**
- * Tags listed the way the sidebar shows them: My tags first, then Built-in under a quiet label.
- * The label only appears when both groups have something to list. `item` draws one tag.
- */
-export function GroupedTags({
-  kit,
-  groups,
-  item,
-}: {
-  kit: Kit;
-  groups: { group: TagGroup; nodes: TagNode[] }[];
-  item: (node: TagNode) => React.ReactNode;
-}) {
-  const { Group, Label, Separator } = kit;
-  const shown = groups.filter((g) => g.nodes.length);
-  if (shown.length < 2) return <>{shown.flatMap((g) => g.nodes.map(item))}</>;
-  return (
-    <>
-      {shown.map((g, i) => (
-        <Fragment key={g.group}>
-          {i > 0 && <Separator />}
-          <Group>
-            <Label>{GROUP_LABELS[g.group]}</Label>
-            {g.nodes.map(item)}
-          </Group>
-        </Fragment>
-      ))}
-    </>
-  );
-}
-
 /** True while Settings › Sidebar hides the Built-in group, so a move into it can say so. */
 export function useBuiltinHidden(): boolean {
   return useSettings().settings?.sidebar.builtinTags === false;
 }
 
-/** "Move to": the top level, or any tag that isn't this one, inside it, or its parent already. */
-function MoveSub({ kit, tag }: { kit: Kit; tag: Tag }) {
-  const { Sub, SubTrigger, SubContent, Item, Separator } = kit;
+/**
+ * "Move to": the top level, or any of your tags that isn't this one, inside it, or its parent
+ * already (tagActions.canNestIn). Greyed out on a built-in tag, with why (`state`).
+ */
+function MoveSub({ kit, tag, state }: { kit: Kit; tag: Tag; state: TagActionState }) {
+  const { Sub, SubContent, Separator } = kit;
   const index = useTagIndex();
   const builtinHidden = useBuiltinHidden();
   const parent = parentOf(tag.name);
-  const fits = (n: TagNode) => !isWithin(n.tag.name, tag.name) && fold(n.tag.name) !== fold(parent ?? "");
-  const groups = index.byGroup.map((g) => ({ group: g.group, nodes: g.nodes.filter(fits) }));
-  const places = groups.some((g) => g.nodes.length);
-  if (!parent && !places) return null;
+  const places = state.enabled ? index.byGroup.flatMap((g) => g.nodes).filter((n) => canNestIn(tag, n.tag)) : [];
+  if (state.enabled && !parent && !places.length) return null;
   return (
     <Sub>
-      <SubTrigger>
+      <TipItem kit={kit} as="SubTrigger" tip={state.tip} disabled={!state.enabled}>
         <Icon name="drive_file_move" size={16} />
-        Move to
-      </SubTrigger>
+        {state.label}
+      </TipItem>
       <SubContent className="max-h-[min(26rem,var(--available-height))] min-w-48 overflow-y-auto">
         {parent && (
           <>
-            <Item onClick={() => moveTag(tag, null, { builtinHidden, follow: true })}>
+            <TipItem kit={kit} tip={`Take it out of “${parent}”.`} onClick={() => moveTag(tag, null, { builtinHidden, follow: true })}>
               <Icon name="vertical_align_top" size={16} />
               Top level
-            </Item>
-            {places && <Separator />}
+            </TipItem>
+            {places.length > 0 && <Separator />}
           </>
         )}
-        <GroupedTags
-          kit={kit}
-          groups={groups}
-          item={(n) => (
-            <Item key={n.tag.id} title={n.tag.name} style={{ paddingLeft: 6 + n.depth * 14 }} onClick={() => moveTag(tag, n.tag, { builtinHidden, follow: true })}>
-              <Icon name="label" size={16} filled style={{ color: colorVar(n.tag.color) }} />
-              <span className="truncate">{n.label}</span>
-            </Item>
-          )}
-        />
+        {places.map((n) => (
+          <TipItem
+            kit={kit}
+            key={n.tag.id}
+            tip={`Put it inside “${n.tag.name}”.`}
+            style={{ paddingLeft: 6 + n.depth * 14 }}
+            onClick={() => moveTag(tag, n.tag, { builtinHidden, follow: true })}
+          >
+            <Icon name="label" size={16} filled style={{ color: colorVar(n.tag.color) }} />
+            <span className="truncate">{n.label}</span>
+          </TipItem>
+        ))}
       </SubContent>
     </Sub>
   );
 }
 
 /**
- * "Move to Built-in" or "Move to My tags". A group belongs to a top-level tag and everything in
- * it, so on a nested tag this moves the tag at the top of its branch, and says which.
+ * The tag menu, for its right-click menu and its "…" menu. `set`: the fonts it covers (its own
+ * and the tags' inside it, tagActions.facesByTag), which Turn on and Turn off work on. A
+ * built-in tag shows the same items, with the ones that would change it greyed out (each
+ * tooltip says why), plus "Make it my tag".
  */
-function GroupItem({ kit, tag }: { kit: Kit; tag: Tag }) {
-  const { Item } = kit;
+/** Turning on until logout has the clock the font list's mark uses; turning on to stay, a switch. */
+const modeIcon = (mode: ActivationMode) => (mode === "temporary" ? "timer" : "toggle_on");
+
+export function TagMenuItems({ kit, tag, set }: { kit: Kit; tag: Tag; set: readonly Face[] }) {
+  const { Separator, Group, Label } = kit;
   const index = useTagIndex();
   const builtinHidden = useBuiltinHidden();
+  const { mode = "persistent", untilQuit = false } = useStateWording();
+  const nested = (index.subtree.get(tag.id)?.size ?? 1) > 1;
   const top = index.topTag(tag.id) ?? tag;
-  const to: TagGroup = top.builtin ? "mine" : "builtin";
-  return (
-    <Item onClick={() => moveToGroup(tag, to, { builtinHidden, follow: true })} title={top.id !== tag.id ? `Everything in “${top.name}” moves with it` : undefined}>
-      <Icon name={to === "builtin" ? "move_down" : "move_up"} size={16} />
-      {top.id === tag.id ? `Move to ${GROUP_LABELS[to]}` : `Move “${top.name}” to ${GROUP_LABELS[to]}`}
-    </Item>
-  );
-}
-
-export function TagMenuItems({ kit, tag }: { kit: Kit; tag: Tag }) {
-  const { Item, Separator } = kit;
+  const edit = tagEditStates(tag, top, { nested });
+  const turn = tagSwitchStates(tag.name, set, { mode, untilQuit, nested });
+  const locked = !edit.rename.enabled;
+  const wording = { mode, untilQuit };
   return (
     <>
-      <Item onClick={() => openTagDialog({ kind: "rename", tag })}>
-        <Icon name="edit" size={16} />
-        Rename…
-      </Item>
-      <ColorSub kit={kit} value={tag.color} onPick={(c) => recolorTag(tag.id, c).catch(failed("change the color"))} />
-      <Item onClick={() => openTagDialog({ kind: "create", parent: tag })}>
-        <Icon name="new_label" size={16} />
-        New tag inside…
-      </Item>
-      <MoveSub kit={kit} tag={tag} />
-      <GroupItem kit={kit} tag={tag} />
-      <Item onClick={() => openTagDialog({ kind: "export", tag })}>
-        <Icon name="ios_share" size={16} />
-        Export…
-      </Item>
+      {locked && (
+        <Group>
+          <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Icon name="lock" size={14} />
+            Built-in tag, read-only
+          </Label>
+        </Group>
+      )}
+      <ActionItem kit={kit} state={turn.turnOn} icon={modeIcon(mode)} onClick={() => void switchTag(tag, set, true, null, wording)} />
+      <ActionItem kit={kit} state={turn.turnOnOther} icon={modeIcon(otherMode(mode))} onClick={() => void switchTag(tag, set, true, otherMode(mode), wording)} />
+      <ActionItem kit={kit} state={turn.turnOff} icon="toggle_off" onClick={() => void switchTag(tag, set, false, null, wording)} />
       <Separator />
-      <Item variant="destructive" onClick={() => openTagDialog({ kind: "delete", tag })}>
-        <Icon name="delete" size={16} />
-        Delete…
-      </Item>
+      {locked && (
+        <>
+          <ActionItem kit={kit} state={edit.makeMine} icon="lock_open" onClick={() => moveToGroup(tag, "mine", { builtinHidden, follow: true })} />
+          <Separator />
+        </>
+      )}
+      <ActionItem kit={kit} state={edit.rename} icon="edit" onClick={() => openTagDialog({ kind: "rename", tag })} />
+      <ColorSub
+        kit={kit}
+        value={tag.color}
+        tip={edit.color.tip}
+        disabled={!edit.color.enabled}
+        onPick={(c) => recolorTag(tag.id, c).catch(failed("change the color"))}
+      />
+      <ActionItem kit={kit} state={edit.newInside} icon="new_label" onClick={() => openTagDialog({ kind: "create", parent: tag })} />
+      <MoveSub kit={kit} tag={tag} state={edit.moveTo} />
+      <ActionItem kit={kit} state={edit.export} icon="ios_share" onClick={() => openTagDialog({ kind: "export", tag })} />
+      <Separator />
+      <ActionItem kit={kit} state={edit.delete} icon="delete" variant="destructive" onClick={() => openTagDialog({ kind: "delete", tag })} />
     </>
   );
 }

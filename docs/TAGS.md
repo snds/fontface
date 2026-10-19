@@ -34,26 +34,44 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 - **Open and close** nested tags with the arrow, Option-click it to open or close every tag inside,
   or use "Open all tags" and "Close all tags" in the Tags "…" menu. With a tag focused, Right
   opens it and Left closes it (or moves to the tag above).
+- **Turn a whole tag on or off.** The small switch on a tag's row turns on every font in the tag
+  and in the tags inside it; switching a nested tag covers only that tag (and the tags inside
+  it). The switch shows the state: on when they all are, a paler track when some are. While none
+  are on it shows only when the row is hovered or focused, like the "…" button. Option-click
+  turns them on the other way (until logout, or to stay), as on a font's switch. The tag's menu
+  has the same: **Turn on all fonts**, the same until logout (or to stay), and **Turn off all
+  fonts**, each greyed out with a reason when there's nothing to do. It goes through the same path
+  as a font's switch (one request at a time, busy marks, sync), in about ten requests for a big
+  tag, with a toast that counts up and a last one that says how many turned on and why any
+  didn't. Fonts installed in a macOS font folder are always on and left alone. Turning a tag off
+  turns off every font in it, however it was turned on (its own switch, its family's or another
+  tag's): Fontface records whether a font should be on, not why, and a family switch works the
+  same way.
 - **Rename, recolor, nest, export or delete** a tag from its "…" button or by right-clicking it.
   Renaming moves the tags inside it too. Deleting removes the tags inside it as well; the fonts
-  themselves are never touched.
+  themselves are never touched. Every item in the tag menus has a tooltip saying what it does,
+  or why it's greyed out.
 - **My tags and Built-in.** Tags come in two groups, each under a small heading in the sidebar
   that opens and closes it (click it, or Right and Left with it focused) and shows how many tags
   it holds. **My tags** comes first and starts open. **Built-in** holds tags that came with other
   apps: Font Book's starter collections (Fixed Width, Fun, Modern, PDF, Traditional, Web) and
   Typeface's automatic "Style" tags (Style/Sans, Style/Serif…). It starts closed. Whether each is
-  open is remembered. A group with no tags has no heading, and when only one group has tags there
-  are no headings at all. To move a tag to the other group, right-click it and choose **Move to
-  Built-in** or **Move to My tags**, or drag it onto the other group's heading. A group belongs
-  to a top-level tag and everything inside it, so on a nested tag the menu moves its top-level tag
-  and says so ("Move “Style” to My tags"); dragging only takes top-level tags. A tag moved inside
-  a tag of the other group joins that group; one moved to the top level keeps its group. The same
-  goes for a "/" in Rename or New tag, and a message says which group it joined. After a move
-  from a menu, its group and the tags above it open and keyboard focus follows the tag. The tag
-  you're viewing is kept in sight the same way: if it's in a closed group (say, restored at
-  launch inside Built-in), the group opens for it once, and can be closed again. Tag
-  menus (Add to tag, Find a tag…, Move to) list My tags first, then Built-in under a quiet label
-  when both have tags. Chips on font rows show every tag, as before. Settings › Sidebar ›
+  open is remembered. Built-in always has its heading, with a lock; My tags has one only when
+  Built-in is there too. Built-in rows are quieter: an outlined label and dimmer text.
+- **Built-in tags are read-only.** They're a copy of what those apps made, and only imports add
+  to them. You can view them, turn them on and off, and export them. You can't rename, recolor,
+  move or delete them, put tags inside them, drag them, or add fonts to them or take fonts off
+  them by hand: those menu items are greyed out with a tooltip saying why, Add to tag and Remove
+  from tag list only your own tags, the tag search shows them with a lock, and the back end
+  refuses the same changes (`tags::check_edit`). To change one, choose **Make it my tag** in its
+  menu: it moves to My tags (on a nested tag, its whole top-level tag moves, and the item says
+  so: "Make “Style” my tag"), with Undo. There's no way to move your own tag into Built-in by
+  hand: imports put app-made tags there. After a move from a menu, its group and the tags above
+  it open and keyboard focus follows the tag. The tag you're viewing is kept in sight the same
+  way: if it's in a closed group (say, restored at launch inside Built-in), the group opens for
+  it once, and can be closed again. Add to tag lists your tags; the tag search lists My tags
+  first, then Built-in (read-only). Chips on font rows show every tag, as before; on a font page,
+  a built-in tag's chip has a lock where the remove button would be. Settings › Sidebar ›
   **Built-in tags** hides the Built-in group from the sidebar only: the tags still exist, still
   show on fonts and still appear in tag menus. With sync on, a tag's group syncs like its color
   (the show/hide setting doesn't: settings belong to one computer).
@@ -157,6 +175,13 @@ another takes the new parent's (with everything inside it), a tag moved to the t
 renamed there keeps its own, and `tags_set_group` changes a top-level tag and its whole subtree
 in one transaction (given a nested tag, it acts on its top-level tag). Tags you make in Fontface
 start in My tags, whatever their name.
+
+**Read-only by hand.** The commands the UI calls for a change by hand (`tags_create`,
+`tags_rename`, `tags_recolor`, `tags_delete`, `tags_assign`) first run `tags::check_edit`, which
+refuses any change to a built-in tag, any new tag inside one, and any tag moved inside one,
+naming the tag and saying "Make it your tag first". `tags_set_group` stays open, for "Make it my
+tag" and its Undo. Imports, restores and sync write directly and aren't checked: imports are how
+built-in tags get their fonts.
 
 Where tags start is decided by one list, `tags::BUILTIN_NAMES`: a top-level name of Font Book's
 starter collections ("Fixed Width", "Fun", "Modern", "PDF", "Traditional", "Web") or Typeface's
@@ -424,7 +449,14 @@ tag on create, rename and move, moving a whole subtree, imports from Typeface an
 (new tags by name, existing tags keep theirs), Fontface tags files with and without `builtin`,
 and export, backup and restore round trips, including that a replace's preview shows the groups
 the restore creates. `cargo test settings` covers the Built-in tags setting. `cargo test sync::`
-covers groups between computers (see [SYNC.md](SYNC.md)).
+covers groups between computers (see [SYNC.md](SYNC.md)). `built_in_tags_are_read_only_by_hand`
+covers `check_edit`: every change refused on a built-in tag and inside it, your own tags as
+before, imports still filling them, and everything open again once it's yours.
+
+`npm run test:ui` covers the rest in `src/tagActions.test.ts`: a tag's set (a parent includes
+its nested tags' fonts, a nested tag only its own subtree, each font once), the switch plan (off
+fonts only, one copy each, every copy to turn off, whole files in about ten requests), the result
+and its words, the menu items' states and tooltips, and the read-only rules.
 
 `cargo test tags::` also covers reading named styles from `fvar` (single files and collections),
 matching them and tidied names, Typeface format 5, and moving a folder with `Locate…`: fonts on

@@ -5,6 +5,8 @@ import type { FaceState } from "@/fontLoader";
 import type { Face } from "@/library";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { BUILTIN_FONTS_TIP } from "@/tagActions";
 import { colorVar } from "@/tags/api";
 import { leafOf, useTagIndex } from "@/tags/model";
 import { applyTags } from "@/tags/TagPicker";
@@ -120,9 +122,9 @@ export function FactsMessage({ state, retry, what = "details" }: { state: FactsS
 }
 
 /**
- * The family's tags, each with a remove button. A tag only some styles have is drawn dashed and
- * says how many; removing it takes it off all of them. Nothing shows when there are none (the
- * header's Tags button adds them).
+ * The family's tags, each with a remove button (a lock for built-in tags, which are read-only).
+ * A tag only some styles have is drawn dashed and says how many; removing it takes it off all of
+ * them. Nothing shows when there are none (the header's Tags button adds them).
  */
 export function TagChipsRow({ faces }: { faces: Face[] }) {
   const index = useTagIndex();
@@ -152,9 +154,20 @@ export function TagChipsRow({ faces }: { faces: Face[] }) {
               {leafOf(t.name)}
               {partial && <span className="sr-only">, on {n} of {faces.length} styles</span>}
             </span>
-            <Button variant="ghost" size="icon-xs" className="size-5 rounded-full" aria-label={`Remove tag ${t.name}`} onClick={() => applyTags([t.id], on, false)}>
-              <Icon name="close" size={14} />
-            </Button>
+            {t.builtin ? (
+              // Built-in tags are read-only: a lock where the remove button would be.
+              <Tooltip>
+                <TooltipTrigger render={<span className="flex size-5 items-center justify-center text-muted-foreground" />}>
+                  <Icon name="lock" size={12} />
+                  <span className="sr-only">Built-in, read-only</span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-64">{BUILTIN_FONTS_TIP}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <Button variant="ghost" size="icon-xs" className="size-5 rounded-full" aria-label={`Remove tag ${t.name}`} onClick={() => applyTags([t.id], on, false)}>
+                <Icon name="close" size={14} />
+              </Button>
+            )}
           </li>
         );
       })}

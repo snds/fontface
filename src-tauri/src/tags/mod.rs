@@ -164,6 +164,81 @@ pub fn set_group(conn: &mut Connection, id: i64, builtin: bool) -> AppResult<Tag
     get_tag(conn, top.id)
 }
 
+// ------------------------------------------------------------- built-in tags are read-only
+
+/// A change the user asks for by hand: from the sidebar, a menu, a drag or the tag picker.
+/// See [`check_edit`].
+#[derive(Debug, Clone, Copy)]
+pub enum Edit<'a> {
+    /// A new tag with this name (nested ones say where).
+    Create { name: &'a str },
+    /// Renaming a tag, which also moves it when the new name nests it somewhere else.
+    Rename { id: i64, to: &'a str },
+    Recolor { id: i64 },
+    Delete { id: i64 },
+    /// Adding these tags to fonts, or taking them off.
+    Fonts { tag_ids: &'a [i64] },
+}
+
+/// Built-in tags are read-only by hand. They are a copy of what came with other apps (Font
+/// Book's starter collections, Typeface's automatic "Style"), so the user can view, export and
+/// turn them on, but not rename, recolor, delete or move them, put tags inside them, or add
+/// fonts to them or take fonts off. To change one, the user makes it their own first
+/// ([`set_group`] to My tags, which stays open to the UI).
+///
+/// The commands the UI calls check this before they act. Imports, restores and sync change
+/// tags directly and aren't checked: imports are how built-in tags get their fonts.
+pub fn check_edit(conn: &Connection, edit: Edit) -> AppResult<()> {
+    let locked = |tag: &Tag, what: &str| {
+        Err(AppError::Invalid(format!("“{}” is a built-in tag, so it can't be {what}. Make it your tag first.", tag.name)))
+    };
+    // A nested name goes inside its top-level tag, if that exists already. (A tag being renamed
+    // is the user's own by then, so a built-in top level is always another tag.)
+    let inside_builtin = |name: &str| -> AppResult<()> {
+        let name = with_existing_parents(conn, &normalize_name(name)?)?;
+        let Some(top) = parent_names(&name).into_iter().next() else { return Ok(()) };
+        match find_tag(conn, &top)? {
+            Some(t) if t.builtin => Err(AppError::Invalid(format!(
+                "“{}” is a built-in tag, so tags can't go inside it. Make it your tag first.",
+                t.name
+            ))),
+            _ => Ok(()),
+        }
+    };
+    match edit {
+        Edit::Create { name } => inside_builtin(name),
+        Edit::Rename { id, to } => {
+            let tag = get_tag(conn, id)?;
+            if tag.builtin {
+                return locked(&tag, "renamed or moved");
+            }
+            inside_builtin(to)
+        }
+        Edit::Recolor { id } => match get_tag(conn, id)? {
+            t if t.builtin => locked(&t, "recolored"),
+            _ => Ok(()),
+        },
+        Edit::Delete { id } => match get_tag(conn, id)? {
+            t if t.builtin => locked(&t, "deleted"),
+            _ => Ok(()),
+        },
+        Edit::Fonts { tag_ids } => {
+            for &id in tag_ids {
+                // A tag that doesn't exist is for `assign` to report.
+                if let Some(t) = conn.query_row(&format!("SELECT {TAG_COLUMNS} FROM tags WHERE id = ?1"), [id], tag_row).optional()? {
+                    if t.builtin {
+                        return Err(AppError::Invalid(format!(
+                            "“{}” is a built-in tag, so fonts can't be added to it or taken off it by hand. Make it your tag first.",
+                            t.name
+                        )));
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }

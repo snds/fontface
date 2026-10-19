@@ -4,14 +4,15 @@ import { toast } from "sonner";
 import type { Face } from "@/library";
 import { Icon } from "@/components/ui/icon";
 import { colorVar, type Tag } from "./api";
-import { buildIndex, fold, GROUP_LABELS, groupOfTag, isWithin, leafOf, parentOf, topOf, type TagGroup } from "./model";
+import { canNestIn } from "@/tagActions";
+import { buildIndex, GROUP_LABELS, groupOfTag, leafOf, parentOf, topOf, type TagGroup } from "./model";
 import { followTag } from "./reveal";
 import { organizeNow, renameTag, setFaceTags, setTagGroup } from "./store";
 
 /**
- * Dragging in the sidebar: fonts onto a tag to tag them, a tag onto another to nest it, a
- * tag onto "Top level" to un-nest it, or a top-level tag onto the other group's heading (My
- * tags, Built-in) to move it there.
+ * Dragging in the sidebar: fonts onto a tag to tag them, a tag onto another to nest it, or a
+ * tag onto "Top level" to un-nest it. Built-in tags are read-only (src/tagActions.ts): they
+ * don't drag, and they take neither fonts nor tags.
  *
  * Built on pointer events rather than HTML drag and drop, which the Windows web view only
  * allows if the app gives up file drops. Every drag has a menu equivalent (Add to Tag, Move
@@ -21,8 +22,7 @@ export type DragPayload = { kind: "fonts"; faces: Face[]; label: string } | { ki
 
 interface Active {
   payload: DragPayload;
-  /** The drop target under the pointer, if it accepts this payload: "tag:<id>", "top", or a
-   *  group heading ("group:mine", "group:builtin"). */
+  /** The drop target under the pointer, if it accepts this payload: "tag:<id>" or "top". */
   over: string | null;
 }
 
@@ -78,24 +78,15 @@ function tagById(id: number): Tag | undefined {
   return organizeNow().tags.find((t) => t.id === id);
 }
 
-/** The group a "group:<name>" drop target stands for, if it is one. */
-const groupTarget = (target: string | null): TagGroup | null =>
-  target === "group:mine" ? "mine" : target === "group:builtin" ? "builtin" : null;
-
 /** Whether `target` takes this payload. */
 function accepts(payload: DragPayload, target: string): boolean {
-  if (target === "top") return payload.kind === "tag" && parentOf(payload.tag.name) !== null;
-  // A group heading takes a top-level tag from the other group. A nested tag would have to leave
-  // its parent too; "Move to" and the right-click menu do that in clear steps.
-  const group = groupTarget(target);
-  if (group) return payload.kind === "tag" && parentOf(payload.tag.name) === null && groupOfTag(payload.tag) !== group;
+  if (target === "top") return payload.kind === "tag" && !payload.tag.builtin && parentOf(payload.tag.name) !== null;
   if (!target.startsWith("tag:")) return false;
   const tag = tagById(Number(target.slice(4)));
   if (!tag) return false;
-  if (payload.kind === "fonts") return true;
-  const moving = payload.tag;
-  // Not onto itself, not inside itself, and not where it already is.
-  return tag.id !== moving.id && !isWithin(tag.name, moving.name) && fold(parentOf(moving.name) ?? "") !== fold(tag.name);
+  // Fonts onto any of your tags; a tag into one of your others (not itself, not inside itself,
+  // not where it already is).
+  return payload.kind === "fonts" ? !tag.builtin : canNestIn(payload.tag, tag);
 }
 
 function targetAt(x: number, y: number, payload: DragPayload): string | null {
@@ -209,8 +200,6 @@ export function tagFonts(tag: Tag, faces: Face[], label: string) {
 
 function drop(payload: DragPayload, target: string) {
   if (target === "top" && payload.kind === "tag") return moveTag(payload.tag, null);
-  const group = groupTarget(target);
-  if (group) return payload.kind === "tag" ? moveToGroup(payload.tag, group) : undefined;
   const tag = tagById(Number(target.slice(4)));
   if (!tag) return;
   if (payload.kind === "fonts") tagFonts(tag, payload.faces, payload.label);
@@ -300,19 +289,16 @@ export function DragLayer() {
   if (!drag) return null;
   const { payload, over } = drag;
   const overTag = over?.startsWith("tag:") ? tagById(Number(over.slice(4))) : undefined;
-  const overGroup = groupTarget(over);
   const hint =
     payload.kind === "fonts"
       ? overTag
         ? `Add to “${overTag.name}”`
-        : "Drop on a tag to add it"
+        : "Drop on one of your tags to add it"
       : over === "top"
         ? "Move to the top level"
-        : overGroup
-          ? `Move to ${GROUP_LABELS[overGroup]}`
-          : overTag
-            ? `Move into “${overTag.name}”`
-            : "Drop on a tag to nest it";
+        : overTag
+          ? `Move into “${overTag.name}”`
+          : "Drop on one of your tags to nest it";
   return createPortal(
     <div
       ref={(el) => {

@@ -22,11 +22,10 @@ export function revealTag(id: number, builtinHidden: boolean) {
   if (!index.byId.has(id)) return;
   const group = index.groupOf(id);
   if (group === "builtin" && builtinHidden) return;
-  // The headings show only when both groups have tags in the sidebar (see TagsSection).
-  const other: TagGroup = group === "mine" ? "builtin" : "mine";
-  if (index.roots[other].length > 0 && !(other === "builtin" && builtinHidden)) {
-    setOpen(GROUP_ROWS[group].openId, true, GROUP_ROWS[group].startsOpen);
-  }
+  // Built-in always has its heading in the sidebar; My tags only when Built-in shows there too
+  // (see TagsSection).
+  const headed = group === "builtin" || (index.roots.builtin.length > 0 && !builtinHidden);
+  if (headed) setOpen(GROUP_ROWS[group].openId, true, GROUP_ROWS[group].startsOpen);
   for (const above of index.lineage.get(id)?.slice(1) ?? []) toggleOpen(tagOpenId(above), true);
 }
 
