@@ -298,7 +298,7 @@ fn view_options_change_by_patch_and_refuse_bad_values() {
     );
     assert!(!settings::apply_patch(&d, &json!({ "googlePreviews": false })).unwrap().google_previews);
     assert!(d.catalog_yours_first, "catalog pages list your families first by default");
-    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "catalogYoursFirst": "on" }))), "“Yours first” must be on or off");
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "catalogYoursFirst": "on" }))), "“Installed” must be on or off");
     assert!(!settings::apply_patch(&d, &json!({ "catalogYoursFirst": false })).unwrap().catalog_yours_first);
     assert!(!settings::apply_patch(&d, &json!({ "groupByName": false })).unwrap().group_by_name);
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "tableDensity": "airy" }))), "Table density must be “compact” or “regular”");

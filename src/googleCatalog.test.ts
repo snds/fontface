@@ -144,9 +144,9 @@ test("a downloaded style with a copy of yours too: Remove counts only the downlo
   assert.deepEqual(switchIds(undefined, true), []);
 });
 
-test("Yours first's tooltip says what flipping it does", () => {
+test("the Installed switch's tooltip says what flipping it does", () => {
   assert.equal(yoursFirstTip(true), "Lists every family A to Z");
-  assert.equal(yoursFirstTip(false), "Lists the families you have first, downloaded here or already in your library");
+  assert.equal(yoursFirstTip(false), "Lists installed families first, downloaded here or already in your library");
 });
 
 test("Active: some style of the family is on, downloaded here or your own copy", () => {

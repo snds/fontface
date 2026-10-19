@@ -87,7 +87,7 @@ import { IS_MAC } from "./TitleBar";
  * manage them (docs/ARCHITECTURE.md, Front end). The sidebar's Google Fonts row opens it, under
  * the main toolbar, whose search, preview text, size and Variable work on it, and whose filter
  * is All / Downloaded / Active / Updates (googleCatalog.ts). Under the toolbar a slim bar has
- * the categories, "Yours first", Update all and Refresh; at the bottom, one quiet line says
+ * the categories, "Installed" (yours first), Update all and Refresh; at the bottom, one quiet line says
  * where previews come from.
  *
  * Each family's row: its preview and facts, then what fits it (googleCatalog.rowPlan): Get;
@@ -101,7 +101,7 @@ import { IS_MAC } from "./TitleBar";
  * own buttons and switch are in the Tab order. One row is selected at a time.
  */
 
-/** How tall a group's heading is in the list ("Yours first"). */
+/** How tall a group's heading is in the list ("Installed": yours first). */
 const HEADING_HEIGHT = 32;
 
 /** What icon families in the library preview with (online previews of them ask Google for the
@@ -476,7 +476,7 @@ interface Props {
   onlinePreviews: boolean;
   /** Opens Settings › General, which has that switch (the note at the bottom links to it). */
   onOpenSettings: () => void;
-  /** "Yours first": families you have (downloaded, or already in your library) come first. */
+  /** "Installed" (yours first): families you have (downloaded, or already in your library) come first. */
   yoursFirst: boolean;
   onYoursFirst: (on: boolean) => void;
   /** Families with a download or removal in progress (owned by the app, so it survives leaving this view). */
@@ -787,11 +787,11 @@ export function GoogleFontsPanel({
         />
         <span className="min-w-2 flex-1" />
         {/* The whole label shows the tooltip (keyboard focus on the switch too). Its words, which
-            change with the switch, are the switch's description; its name is only "Yours first". */}
+            change with the switch, are the switch's description; its name is only "Installed". */}
         <Tip tip={yoursFirstTip(yoursFirst)} describe={false} contentClassName="max-w-xs">
           <label className="flex cursor-default items-center gap-2 text-xs text-muted-foreground has-[[role=switch]:focus-visible]:text-foreground">
-            <Switch checked={yoursFirst} onCheckedChange={(on) => onYoursFirst(on)} aria-label="Yours first" aria-describedby={yoursFirstHintId} />
-            Yours first
+            <Switch checked={yoursFirst} onCheckedChange={(on) => onYoursFirst(on)} aria-label="Installed" aria-describedby={yoursFirstHintId} />
+            Installed
             <span id={yoursFirstHintId} hidden>
               {yoursFirstTip(yoursFirst)}
             </span>

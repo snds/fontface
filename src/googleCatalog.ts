@@ -341,6 +341,6 @@ export function removalWords(family: string, h: Holding | undefined): string[] {
   return out;
 }
 
-/** "Yours first"'s tooltip: what flipping it does now. */
+/** The "Installed" switch's tooltip (yours first): what flipping it does now. */
 export const yoursFirstTip = (on: boolean) =>
-  on ? "Lists every family A to Z" : "Lists the families you have first, downloaded here or already in your library";
+  on ? "Lists every family A to Z" : "Lists installed families first, downloaded here or already in your library";

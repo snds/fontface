@@ -1,4 +1,4 @@
-// The order of a font service's catalog page (GoogleFontsPanel): "Yours first" puts the families
+// The order of a font service's catalog page (GoogleFontsPanel): "Installed" (yours first) puts the families
 // you have before the rest, each group under a heading.
 
 /** One row of a catalog page's list: a family, or a heading before a group of families. */

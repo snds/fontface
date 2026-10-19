@@ -1,4 +1,4 @@
-// Run with `npm run test:ui`. "Yours first" on a catalog page (catalogOrder.ts).
+// Run with `npm run test:ui`. "Installed" (yours first) on a catalog page (catalogOrder.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { catalogItems, REST_HEADING, YOURS_HEADING, type CatalogItem } from "./catalogOrder.ts";
