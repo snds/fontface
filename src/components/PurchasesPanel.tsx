@@ -18,6 +18,18 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import {
+  checkNowBlocked,
+  emptyFindsText,
+  foldersLabel,
+  PRIVACY_SETTINGS_LABEL,
+  PRIVACY_SETTINGS_TIP,
+  PRIVACY_SETTINGS_URL,
+  WATCH_LABEL,
+  watchExplainer,
+  watchNotice,
+  watchSwitchTip,
+} from "@/purchaseWatch";
 import { Tip } from "./Tip";
 import { IS_MAC, PageHeader, type PageBack } from "./TitleBar";
 
@@ -77,6 +89,7 @@ const BOUGHT_TIP = "Stops marking it as a trial, because you have a license";
 const ITEM_BUSY = "Wait: Fontface is still working on this purchase";
 const SWAPPING = "Wait: Fontface is still swapping in a newer version of it";
 const SETTING_BUSY = "Wait: Fontface is still saving the last change";
+const TURNING_ON = IS_MAC ? "Wait: macOS may be asking whether Fontface can see your folders" : SETTING_BUSY;
 
 /** A badge that explains itself on hover; screen readers hear the explanation with it. */
 function NoteBadge({ note, children }: { note: string; children: React.ReactNode }) {
@@ -134,7 +147,12 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
   const [confirmOpen, setConfirmOpen] = useState(false);
   /** A watch setting change is in flight (the switch and folder buttons wait for it). */
   const [settingBusy, setSettingBusy] = useState(false);
+  /** Why turning watching on didn't fully work (a folder macOS wouldn't let Fontface see). */
+  const [watchNote, setWatchNote] = useState<string | null>(null);
+  /** Watching is being turned on: macOS may be asking about Downloads right now. */
+  const [turningOn, setTurningOn] = useState(false);
   const watchHintId = useId();
+  const watchAboutId = useId();
   const setting = async (op: () => Promise<unknown>, done?: string) => {
     if (settingBusy) return;
     setSettingBusy(true);
@@ -230,7 +248,25 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
   }
 
   /** What the watch switch does now, or why it's greyed out. */
-  const watchTip = settingBusy ? SETTING_BUSY : status.watching ? "Stops watching for font downloads" : "Watches your download folders for fonts you buy";
+  const watchTip = settingBusy ? (turningOn ? TURNING_ON : SETTING_BUSY) : watchSwitchTip(status.watching, IS_MAC);
+  /** Turning on is when macOS asks for access to Downloads; the answer decides what's shown. */
+  const setWatching = (on: boolean) =>
+    setting(async () => {
+      if (!on) {
+        setWatchNote(null);
+        await api.purchasesSetWatching(false);
+        return;
+      }
+      setTurningOn(true);
+      try {
+        const change = await api.purchasesSetWatching(true);
+        setWatchNote(watchNotice(change, IS_MAC));
+        if (change.watching) toast.success("Watching for font downloads");
+      } finally {
+        setTurningOn(false);
+      }
+    });
+  const checkBlocked = checkNowBlocked(status.watching, status.folders.length, checking);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -264,24 +300,21 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                 checked={status.watching}
                 disabled={settingBusy}
                 focusableWhenDisabled
-                onCheckedChange={(on) => setting(() => api.purchasesSetWatching(on), on ? "Watching for font downloads" : undefined)}
-                aria-label="Watch for font downloads"
-                aria-describedby={watchHintId}
+                onCheckedChange={setWatching}
+                aria-label={WATCH_LABEL}
+                aria-describedby={status.watching ? watchHintId : `${watchHintId} ${watchAboutId}`}
               />
-              Watch for font downloads
+              {WATCH_LABEL}
               <span id={watchHintId} hidden>
                 {watchTip}
               </span>
             </label>
           </Tip>
-          <Tip
-            tip="Looks in your watched folders for new font downloads now"
-            disabledReason={checking ? "Wait: Fontface is still checking" : status.folders.length === 0 && "Add a folder to watch first, or turn watching on"}
-          >
+          <Tip tip="Looks in your watched folders for new font downloads now" disabledReason={checkBlocked}>
             <Button
               size="sm"
               variant="outline"
-              disabled={checking || status.folders.length === 0}
+              disabled={!!checkBlocked}
               focusableWhenDisabled
               className="aria-disabled:opacity-50"
               onClick={async () => {
@@ -298,9 +331,27 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
             </Button>
           </Tip>
         </div>
+        {!status.watching && (
+          <p id={watchAboutId} className="max-w-2xl text-xs text-muted-foreground">
+            {watchExplainer(IS_MAC)}
+          </p>
+        )}
+        {watchNote && (
+          <div role="status" className="flex max-w-2xl flex-wrap items-center gap-x-3 gap-y-2 rounded-md border bg-muted/40 px-3 py-2 text-xs">
+            <Icon name="lock" size={16} className="text-muted-foreground" />
+            <p className="min-w-0 flex-1 text-pretty">{watchNote}</p>
+            {IS_MAC && (
+              <Tip tip={PRIVACY_SETTINGS_TIP}>
+                <Button size="xs" variant="outline" onClick={() => openUrl(PRIVACY_SETTINGS_URL).catch((e) => toast.error(message(e)))}>
+                  {PRIVACY_SETTINGS_LABEL}
+                </Button>
+              </Tip>
+            )}
+          </div>
+        )}
         <div className="flex flex-col gap-1.5 text-xs text-muted-foreground">
           <div className="flex flex-wrap items-center gap-2">
-            <span>Watching:</span>
+            <span>{foldersLabel(status.watching)}</span>
             {status.folders.length === 0 && <span>no folders yet (turning watching on adds Downloads)</span>}
             {status.folders.map((f) => (
               <span
@@ -360,9 +411,7 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
           ))}
           {newFinds.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              {status.watching
-                ? "Nothing new. Fonts you download will show up here."
-                : "Turn on watching, or import a zip or folder of fonts you've already bought."}
+              {emptyFindsText(status.watching)}
             </p>
           )}
           {newFinds.map((find) => {

@@ -16,6 +16,9 @@
       "allow": [
         {
           "url": "https://*"
+        },
+        {
+          "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
         }
       ]
     }

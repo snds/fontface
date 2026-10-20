@@ -464,7 +464,16 @@ export interface RemovalReport {
   failed: [string, string][];
 }
 
+/** What turning watching for purchases on found. */
+export interface WatchChange {
+  /** Whether watching is on now (it stays off if every folder was refused). */
+  watching: boolean;
+  /** Folders Fontface wasn't allowed to read (on macOS: the user said no to the system's question). */
+  denied: string[];
+}
+
 export interface PurchasesStatus {
+  /** While off, no watched folder is looked at: `folders` aren't checked and `finds` is empty. */
   watching: boolean;
   folders: WatchFolder[];
   finds: PurchaseFind[];
@@ -808,7 +817,7 @@ export const api = {
   clearGooglePreviewCache: () => invoke<void>("clear_google_preview_cache"),
   adobeStatus: () => invoke<AdobeStatus>("adobe_status"),
   purchasesStatus: () => invoke<PurchasesStatus>("purchases_status"),
-  purchasesSetWatching: (on: boolean) => invoke<void>("purchases_set_watching", { on }),
+  purchasesSetWatching: (on: boolean) => invoke<WatchChange>("purchases_set_watching", { on }),
   purchasesAddFolder: (path: string) => invoke<void>("purchases_add_folder", { path }),
   purchasesRemoveFolder: (path: string) => invoke<void>("purchases_remove_folder", { path }),
   purchasesCheckNow: () => invoke<number>("purchases_check_now"),

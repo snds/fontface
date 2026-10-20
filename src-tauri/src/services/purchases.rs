@@ -546,6 +546,10 @@ pub fn ensure_schema(conn: &Connection) -> AppResult<()> {
     if !has_file_id {
         conn.execute_batch("ALTER TABLE purchase_finds ADD COLUMN file_id TEXT;")?;
     }
+    // Watching became opt-in on 2026-10-20, with a switch that says macOS will ask once for
+    // access to Downloads. A choice saved before then (under the old key) was made without that
+    // warning, so it's dropped once and watching starts off. Folders, finds and imports are kept.
+    conn.execute("DELETE FROM purchase_settings WHERE key = 'watching'", [])?;
     Ok(())
 }
 
@@ -595,8 +599,32 @@ fn file_id(_: &Path) -> Option<String> {
     None
 }
 
+/// Where the watching switch is saved. Off until the user turns it on. (The key before
+/// 2026-10-20, `watching`, is dropped by `ensure_schema`: see there.)
+const WATCHING_KEY: &str = "watching_opt_in";
+
+/// Every look at a watched folder, or at a download in one, goes through here. On macOS the
+/// first look at Downloads makes the system ask the user for access, so none may happen while
+/// watching is off. Tests check that with `looked`.
+fn look<P: AsRef<Path>, T>(path: P, f: impl FnOnce(P) -> T) -> T {
+    #[cfg(test)]
+    LOOKED.with(|l| l.borrow_mut().push(path.as_ref().to_path_buf()));
+    f(path)
+}
+
+#[cfg(test)]
+thread_local! {
+    static LOOKED: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The watched folders and downloads looked at on this thread since the last call.
+#[cfg(test)]
+pub(crate) fn looked() -> Vec<PathBuf> {
+    LOOKED.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
 pub fn watching(conn: &Connection) -> bool {
-    conn.query_row("SELECT value FROM purchase_settings WHERE key = 'watching'", [], |r| r.get::<_, String>(0))
+    conn.query_row("SELECT value FROM purchase_settings WHERE key = ?1", [WATCHING_KEY], |r| r.get::<_, String>(0))
         .optional()
         .ok()
         .flatten()
@@ -605,11 +633,50 @@ pub fn watching(conn: &Connection) -> bool {
 
 pub fn set_watching(conn: &Connection, on: bool) -> AppResult<()> {
     conn.execute(
-        "INSERT INTO purchase_settings (key, value) VALUES ('watching', ?1)
+        "INSERT INTO purchase_settings (key, value) VALUES (?1, ?2)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-        [if on { "1" } else { "0" }],
+        [WATCHING_KEY, if on { "1" } else { "0" }],
     )?;
     Ok(())
+}
+
+/// What turning watching on found.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchChange {
+    /// Whether watching is on now.
+    pub watching: bool,
+    /// Folders Fontface wasn't allowed to read (on macOS: the user said no to the system's question).
+    pub denied: Vec<String>,
+}
+
+/// Turns watching on. With no folder yet, `home`'s Downloads is added. Then each folder is read
+/// once: on macOS that read is when the system asks the user to let Fontface see Downloads, and
+/// it waits for their answer. A refusal comes back as a permission error (EPERM). If every folder
+/// is refused, watching stays off, so the switch shows what's really happening.
+///
+/// The app calls this with its own connection, not the shared one, so the library isn't locked
+/// while macOS waits for an answer.
+pub fn turn_on(conn: &Connection, home: Option<&Path>) -> AppResult<WatchChange> {
+    if watch_folders(conn)?.is_empty() {
+        let home = home.ok_or_else(|| AppError::Other("Couldn't find your Downloads folder".into()))?;
+        add_watch_folder(conn, &validate_watch_folder(&home.join("Downloads"))?)?;
+    }
+    let folders = watch_folders(conn)?;
+    let denied: Vec<String> = folders
+        .iter()
+        .filter(|f| look(Path::new(f), |p| std::fs::read_dir(p)).is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied))
+        .cloned()
+        .collect();
+    let on = denied.len() < folders.len();
+    set_watching(conn, on)?;
+    Ok(WatchChange { watching: on, denied })
+}
+
+/// Whether a folder that couldn't be watched (`failed`, e.g. a drive that wasn't connected) can be
+/// read now, so the watcher should start again. Nothing is looked at while watching is off.
+pub fn watch_retry_due(conn: &Connection, failed: &[String]) -> bool {
+    watching(conn) && failed.iter().any(|f| folder_problem(f).is_none())
 }
 
 pub fn watch_folders(conn: &Connection) -> AppResult<Vec<String>> {
@@ -620,7 +687,7 @@ pub fn watch_folders(conn: &Connection) -> AppResult<Vec<String>> {
 
 /// Checks a folder can be watched. Returns the canonical path to store.
 pub fn validate_watch_folder(path: &Path) -> AppResult<String> {
-    let real = std::fs::canonicalize(path)?;
+    let real = look(path, std::fs::canonicalize)?;
     if !real.is_dir() {
         return Err(AppError::Invalid(format!("{} is not a folder", path.display())));
     }
@@ -645,7 +712,7 @@ pub fn remove_watch_folder(conn: &Connection, path: &str) -> AppResult<()> {
 
 /// Why a watched folder can't be read right now, in plain words, if it can't.
 pub fn folder_problem(path: &str) -> Option<String> {
-    match std::fs::read_dir(path) {
+    match look(Path::new(path), std::fs::read_dir) {
         Ok(_) => None,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some("Folder not found. Is the drive connected?".into()),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Some(
@@ -689,8 +756,8 @@ pub fn finds(conn: &Connection) -> AppResult<Vec<Find>> {
         Ok(Find {
             id: r.get(0)?,
             name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-            is_folder: p.is_dir(),
-            missing: !p.exists(),
+            is_folder: look(p, Path::is_dir),
+            missing: !look(p, Path::exists),
             store_name: store.as_deref().map(store_name),
             store,
             origin_url: r.get(3)?,
@@ -730,7 +797,7 @@ pub fn unit_for(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
 /// offered. A recorded download that was only moved or renamed keeps its state, quietly, and so
 /// does one whose fonts Fontface already has (e.g. an imported folder moved into a subfolder).
 pub fn record(conn: &Connection, data_dir: &Path, path: &Path) -> AppResult<Option<i64>> {
-    let Ok(meta) = std::fs::symlink_metadata(path) else { return Ok(None) };
+    let Ok(meta) = look(path, std::fs::symlink_metadata) else { return Ok(None) };
     let kind_ok = (meta.is_file() && is_candidate_file(path)) || (meta.is_dir() && !is_bundle(path));
     if !kind_ok || is_adobe_path(path) || is_preview_cache_path(path) {
         return Ok(None);
@@ -913,16 +980,20 @@ pub fn check_not_nested(existing: &[String], new: &str) -> AppResult<()> {
 }
 
 /// Looks at every item directly inside the watched folders. Returns the ids of new finds that
-/// hold fonts. Folders that can't be read are skipped (`folder_problem` explains them).
+/// hold fonts. Folders that can't be read are skipped (`folder_problem` explains them). While
+/// watching is off, nothing is looked at and nothing is found.
 ///
 /// One check runs at a time per library: asked for while one is running (the watcher, "Check
 /// now" and the check at startup can overlap), it waits for that one and shares its result.
 pub fn check_folders(conn: &Connection, data_dir: &Path) -> AppResult<Vec<i64>> {
+    if !watching(conn) {
+        return Ok(Vec::new());
+    }
     let key = conn.path().unwrap_or_default().to_string();
     single_flight(&key, || {
         let mut new = Vec::new();
         for folder in watch_folders(conn)? {
-            let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+            let Ok(entries) = look(Path::new(&folder), std::fs::read_dir) else { continue };
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if name.starts_with('.') || is_partial(&name) {
@@ -1619,6 +1690,48 @@ pub fn link_replacements(finds: &mut [Find], data_dir: &Path) {
             .max_by_key(|(_, shared)| *shared)
             .map(|(r, _)| r.dir.to_string_lossy().into_owned());
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchFolder {
+    pub path: String,
+    /// Why it can't be read right now, if it can't (missing, or no permission).
+    pub problem: Option<String>,
+}
+
+/// Everything the Purchases page shows.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    pub watching: bool,
+    pub folders: Vec<WatchFolder>,
+    pub finds: Vec<Find>,
+    pub imported: Vec<Imported>,
+    pub stores: &'static [Store],
+}
+
+/// What the Purchases page shows. `failed`: folders the watcher couldn't watch, and why.
+///
+/// While watching is off, the watched folders and the downloads in them aren't looked at at all
+/// (no listing, no stat): on macOS the first look at Downloads makes the system ask for access,
+/// which should only happen once the user turns watching on. The folders are still listed (from
+/// the library), new downloads aren't (they come back when watching is on), and imported
+/// purchases are read from Fontface's own folder.
+pub fn status(conn: &Connection, data_dir: &Path, failed: &HashMap<String, String>) -> AppResult<Status> {
+    let watching = watching(conn);
+    let folders = watch_folders(conn)?
+        .into_iter()
+        .map(|path| WatchFolder {
+            problem: watching
+                .then(|| folder_problem(&path).or_else(|| failed.get(&path).map(|e| format!("Not being watched: {e}"))))
+                .flatten(),
+            path,
+        })
+        .collect();
+    let mut finds = if watching { finds(conn)? } else { Vec::new() };
+    link_replacements(&mut finds, data_dir);
+    Ok(Status { watching, folders, finds, imported: imported(data_dir), stores: STORES })
 }
 
 /// "I bought it": the purchase is no longer flagged as a trial, now or after a Replace.

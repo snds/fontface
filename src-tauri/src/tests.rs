@@ -1236,6 +1236,7 @@ mod purchases_flow {
         let mut conn = db::open(&data.join("db.sqlite3")).unwrap();
         crate::services::ensure_service_folders(&mut conn, &data).unwrap();
         purchases::add_watch_folder(&conn, &purchases::validate_watch_folder(&dir.join("Downloads")).unwrap()).unwrap();
+        purchases::set_watching(&conn, true).unwrap();
 
         let new = purchases::check_folders(&conn, &data).unwrap();
         assert_eq!(new.len(), 1);
@@ -1294,7 +1295,96 @@ mod purchases_flow {
         let mut conn = db::open(&data.join("db.sqlite3")).unwrap();
         crate::services::ensure_service_folders(&mut conn, &data).unwrap();
         purchases::add_watch_folder(&conn, &purchases::validate_watch_folder(&dir.join("Downloads")).unwrap()).unwrap();
+        purchases::set_watching(&conn, true).unwrap();
         (dir, data, conn)
+    }
+
+    fn new_install(name: &str) -> (std::path::PathBuf, std::path::PathBuf, rusqlite::Connection) {
+        let dir = temp(name);
+        let data = dir.join("data");
+        let mut conn = db::open(&data.join("db.sqlite3")).unwrap();
+        crate::services::ensure_service_folders(&mut conn, &data).unwrap();
+        (dir, data, conn)
+    }
+
+    /// Watching is off until the user turns it on. A choice saved before it became opt-in (under
+    /// the old key) is dropped once, so it starts off; one made with the new switch is kept.
+    #[test]
+    fn watching_is_opt_in_and_an_older_choice_is_dropped_once() {
+        let (dir, _data, conn) = new_install("opt-in");
+        assert!(!purchases::watching(&conn), "off on a new install");
+
+        // An install from before: watching on, Downloads watched. Then the next launch.
+        conn.execute("INSERT INTO purchase_settings (key, value) VALUES ('watching', '1')", []).unwrap();
+        let downloads = purchases::validate_watch_folder(&dir.join("Downloads")).unwrap();
+        purchases::add_watch_folder(&conn, &downloads).unwrap();
+        purchases::ensure_schema(&conn).unwrap();
+        assert!(!purchases::watching(&conn), "the older choice is dropped");
+        assert_eq!(purchases::watch_folders(&conn).unwrap(), vec![downloads], "its folders are kept");
+
+        for on in [true, false, true] {
+            purchases::set_watching(&conn, on).unwrap();
+            purchases::ensure_schema(&conn).unwrap();
+            assert_eq!(purchases::watching(&conn), on, "kept from launch to launch");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The first time watching is turned on, Downloads in the home folder is watched.
+    #[test]
+    fn turning_watching_on_watches_downloads_in_the_home_folder() {
+        let (dir, _data, conn) = new_install("home");
+        assert!(purchases::turn_on(&conn, None).is_err(), "no home folder, nothing to watch");
+        assert!(!purchases::watching(&conn));
+        let change = purchases::turn_on(&conn, Some(&dir)).unwrap();
+        assert!(change.watching && change.denied.is_empty());
+        assert!(purchases::watching(&conn));
+        assert_eq!(purchases::watch_folders(&conn).unwrap(), vec![dir.join("Downloads").to_string_lossy().into_owned()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With watching off, nothing the app does at launch, on the Purchases page, in Settings or
+    /// when its window comes to the front looks at a watched folder or a download in one: on macOS
+    /// the first look at Downloads makes the system ask for access. Downloads here belongs to a
+    /// fake home, and is made unreadable, so a look would also show up as a problem.
+    #[test]
+    fn nothing_looks_at_watched_folders_while_watching_is_off() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, data, conn) = setup("off");
+        let downloads = dir.join("Downloads");
+        let folder = purchases::watch_folders(&conn).unwrap().remove(0);
+        crate::tests::copy_plain(ANDALE_MONO, downloads.join("Andale.ttf")).unwrap();
+        assert_eq!(purchases::check_folders(&conn, &data).unwrap().len(), 1, "found while watching was on");
+        purchases::set_watching(&conn, false).unwrap();
+        std::fs::set_permissions(&downloads, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let refusable = std::fs::read_dir(&downloads).is_err(); // not when tests run as root
+        purchases::looked();
+
+        let failed = std::collections::HashMap::from([(folder.clone(), "it wasn't connected".to_string())]);
+        let status = purchases::status(&conn, &data, &failed).unwrap();
+        assert!(purchases::check_folders(&conn, &data).unwrap().is_empty());
+        assert!(!purchases::watch_retry_due(&conn, std::slice::from_ref(&folder)));
+        assert_eq!(purchases::looked(), Vec::<std::path::PathBuf>::new(), "nothing was looked at");
+        assert!(!status.watching);
+        assert_eq!(status.folders.len(), 1, "the folder is still listed");
+        assert_eq!(status.folders[0].problem, None, "but not checked");
+        assert!(status.finds.is_empty(), "new downloads wait until watching is on");
+
+        // Turning watching on reads the folder (macOS asks then). Refused: watching stays off.
+        if refusable {
+            let change = purchases::turn_on(&conn, None).unwrap();
+            assert!(!change.watching);
+            assert_eq!(change.denied, vec![folder.clone()]);
+            assert!(!purchases::watching(&conn));
+            assert!(purchases::looked().contains(&downloads), "turning on looks");
+        }
+        std::fs::set_permissions(&downloads, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let change = purchases::turn_on(&conn, None).unwrap();
+        assert!(change.watching && change.denied.is_empty());
+        let status = purchases::status(&conn, &data, &std::collections::HashMap::new()).unwrap();
+        assert_eq!(status.finds.len(), 1, "the download is back");
+        assert!(!purchases::looked().is_empty(), "with watching on, the folders are looked at");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Safari and Archive Utility unzip downloads into a folder: that's one download, and its
