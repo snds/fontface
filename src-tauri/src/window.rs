@@ -25,6 +25,11 @@ use crate::{
 #[cfg(target_os = "macos")]
 const SETTINGS_ITEM: &str = "settings";
 
+/// The id of the File menu's "Turn On Fonts from a List…" item. Always there, whatever the page
+/// shows: it opens a dialog of its own.
+#[cfg(target_os = "macos")]
+const FONT_LIST_ITEM: &str = "file.fontList";
+
 /// One item of the View or Font menu. Choosing it sends "menu" to the page with its id, and the
 /// page keeps the items' state in step with what's on screen (`set_menu_state`). The ids must
 /// match src/fontActions.ts (src/menuIds.test.ts reads this file to check).
@@ -302,7 +307,8 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
             &Item::quit(app, None)?,
         ],
     )?;
-    let file = Submenu::with_items(app, "File", true, &[&Item::close_window(app, None)?])?;
+    let font_list = MenuItem::with_id(app, FONT_LIST_ITEM, "Turn On Fonts from a List…", true, None::<&str>)?;
+    let file = Submenu::with_items(app, "File", true, &[&font_list, &Item::separator(app)?, &Item::close_window(app, None)?])?;
     let edit = Submenu::with_items(
         app,
         "Edit",
@@ -339,7 +345,8 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
 }
 
 /// "Settings…": brings the window back if it was closed (see `hide`) and sends "open-settings"
-/// to the page, which opens the settings screen. A View or Font menu item brings it back too and
+/// to the page, which opens the settings screen. "Turn On Fonts from a List…" does the same with
+/// "open-font-list", which opens that dialog. A View or Font menu item brings it back too and
 /// sends "menu" with the item's id; the page checks it still applies (the menus can lag a
 /// moment behind the page) and that its own key handler hasn't already acted on the same key
 /// press (src/fontActions.ts, `createShortcutGuard`).
@@ -347,7 +354,7 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
 pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref();
     let page_id = page_menu_id(id);
-    if id != SETTINGS_ITEM && page_id.is_none() {
+    if id != SETTINGS_ITEM && id != FONT_LIST_ITEM && page_id.is_none() {
         return;
     }
     // A check item's mark goes back to what the page said (macOS flipped it on the click); the
@@ -363,6 +370,9 @@ pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     match page_id {
         Some(id) => {
             let _ = app.emit_to("main", "menu", id);
+        }
+        None if id == FONT_LIST_ITEM => {
+            let _ = app.emit_to("main", "open-font-list", ());
         }
         None => {
             let _ = app.emit_to("main", "open-settings", ());

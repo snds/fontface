@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ROW_TIP_DELAY, Tip } from "@/components/Tip";
+import { FONT_LIST_TIP } from "@/components/FontListDialog";
 import { cn } from "@/lib/utils";
 import { colorVar } from "@/tags/api";
 import { ADOBE_LOCATION, FONT_BOOK_LOCATION, useLocations } from "@/tags/locations";
@@ -47,6 +48,8 @@ interface Props {
   onRevealFolder: (f: Folder) => void;
   /** List the files a source's latest scan found but didn't add (Show Skipped Files…). */
   onShowSkipped: (name: string, skipped: SkippedFiles) => void;
+  /** Turn On Fonts from a List…: paste font names, then turn them on or tag them. */
+  onFontList: () => void;
 }
 
 const itemClass = (selected: boolean) =>
@@ -356,7 +359,11 @@ export function Sidebar(props: Props) {
       <ScrollArea className="min-h-0 flex-1">
         <nav className={cn("flex flex-col gap-4 p-2", !titleBar && "pt-3")}>
           <div>
-            <SectionLabel>Library</SectionLabel>
+            {/* Library-wide, not about a selection, so it sits by the heading, as Add folder does by SOURCES. */}
+            <div className="flex items-center justify-between pr-1">
+              <SectionLabel>Library</SectionLabel>
+              <IconAction icon="playlist_add_check" label="Turn on fonts from a list" tip={FONT_LIST_TIP} onClick={props.onFontList} />
+            </div>
             {smart.map((entry) => {
               const selected = view.kind === entry.kind;
               return (

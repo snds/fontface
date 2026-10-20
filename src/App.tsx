@@ -8,6 +8,7 @@ import {
   type ActivationMode,
   type ActivationOutcome,
   type Folder,
+  type FoundFace,
   type RemoveReport,
   type FontPageTab,
   type FontSummary,
@@ -36,6 +37,7 @@ import {
   sortFamilies,
   ungroup,
   viewKey,
+  type Face,
   type Family,
   type FilterContext,
   type LibraryView,
@@ -93,6 +95,7 @@ import { ComparePage, type FaceRef } from "@/components/ComparePage";
 import { PairPage } from "@/components/PairPage";
 import { RemoveFontsDialog, type RemovalRequest } from "@/components/RemoveFontsDialog";
 import { SKIPPED_DETAILS_TIP, SkippedFilesDialog, type SkippedRequest } from "@/components/SkippedFilesDialog";
+import { FontListDialog } from "@/components/FontListDialog";
 import { skippedSummary } from "@/skippedFiles";
 import { REVEAL_LABEL } from "@/components/fontPage/InfoTab";
 import { ViewOptions } from "@/components/ViewOptions";
@@ -211,6 +214,9 @@ export default function App() {
   /** The source whose skipped files are listed (Show Skipped Files…, or a scan's Details). */
   const [skippedList, setSkippedList] = useState<SkippedRequest | null>(null);
   const showSkipped = useCallback((name: string, skipped: SkippedFiles) => setSkippedList({ name, skipped, returnFocus: noteFocus() }), []);
+  /** Turn On Fonts from a List… is open, with what takes focus when it closes. */
+  const [fontList, setFontList] = useState<{ returnFocus: () => HTMLElement | null } | null>(null);
+  const openFontList = useCallback(() => setFontList((open) => open ?? { returnFocus: noteFocus() }), []);
   /** Files with an on/off request queued or in progress. The OS acts on whole files, so every
    *  style with a copy in one of these files shows as busy. */
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -698,6 +704,14 @@ export default function App() {
     };
   }, [openSettingsByShortcut]);
 
+  // File › Turn On Fonts from a List… (macOS) sends "open-font-list".
+  useEffect(() => {
+    const unlisten = listen("open-font-list", openFontList);
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [openFontList]);
+
   const addFolder = async () => {
     const path = await open({ directory: true, multiple: false, title: "Add a font folder" });
     if (typeof path !== "string") return;
@@ -1106,6 +1120,8 @@ export default function App() {
   const library = useMemo(() => groupLibrary(fonts, grouping), [fonts, grouping]);
   const allFamilies = library.families;
   const fontById = useMemo(() => new Map(fonts.map((f) => [f.id, f])), [fonts]);
+  /** Every style by face key: Turn On Fonts from a List… finds styles by key. */
+  const faceByKey = useMemo(() => new Map(allFamilies.flatMap((family) => family.faces.map((face) => [face.key, face] as const))), [allFamilies]);
   // Per-folder style counts, matching what each folder's view lists.
   const folderCounts = useMemo(() => {
     const map = new Map<number, number>();
@@ -1154,6 +1170,23 @@ export default function App() {
   // Switches turn fonts on the saved way; Option-click turns them on the other way.
   const activationMode = settings?.activationMode ?? DEFAULT_SETTINGS.activationMode;
   const stateWording = useMemo<SwitchWording>(() => ({ untilQuit, mode: activationMode }), [untilQuit, activationMode]);
+
+  /** The library's styles for what Turn On Fonts from a List… found. */
+  const listedFaces = (found: readonly FoundFace[]): Face[] => found.flatMap((f) => faceByKey.get(f.key) ?? []);
+  /** Turn On Fonts from a List…'s Turn On: one copy of each style, as a switch would (the user's
+   *  own choice), then says how many came on. */
+  const turnOnFromList = async (found: FoundFace[], scope: ActivationMode | null) => {
+    const faces = listedFaces(found);
+    // A style the list on screen doesn't have yet (a scan is adding it): its first copy.
+    const unlisted = found.filter((f) => !faceByKey.has(f.key) && !f.installed && f.ids.length).map((f) => f.ids[0]);
+    const on = await setActivation([...activationIds(faces, true), ...unlisted], true, undefined, scope);
+    const turned = faces.filter((face) => face.copies.some((c) => on.has(c.path))).length + unlisted.length;
+    if (!on.size) return;
+    const until = (scope ?? activationMode) === "temporary" ? (untilQuit ? " until you quit Fontface" : " until logout") : "";
+    const words = `Turned on ${turned.toLocaleString()} ${turned === 1 ? "style" : "styles"} from the list${until}`;
+    toast.success(words);
+    announce(words);
+  };
   const chooseLayout = useCallback(
     (next: LibraryLayout) => {
       updateSettings({ layout: next });
@@ -1687,6 +1720,7 @@ export default function App() {
               onLocateFolder={relocate}
               onRevealFolder={(f) => api.revealFolder(f.id).catch((e) => toast.error(`Couldn't show ${f.label}`, { description: String(e) }))}
               onShowSkipped={showSkipped}
+              onFontList={openFontList}
             />
             <main className="relative flex min-h-0 min-w-0 flex-col outline-none" tabIndex={-1}>
               {/* The list layer: the place picked in the sidebar. While a page is open it stays as it
@@ -1960,6 +1994,21 @@ export default function App() {
         <RemoveFontsDialog request={removal} onConfirm={(r) => void confirmRemoval({ ...r, closePage: removal?.closePage ?? null })} onCancel={() => setRemoval(null)} />
         {/* The files a source's latest scan found but didn't add, and why. */}
         <SkippedFilesDialog request={skippedList} onClose={() => setSkippedList(null)} />
+        {/* Turn On Fonts from a List…: paste names, see what the library has, turn on or tag. */}
+        <FontListDialog
+          open={!!fontList}
+          onClose={() => setFontList(null)}
+          faceByKey={faceByKey}
+          mode={activationMode}
+          untilQuit={untilQuit}
+          onTurnOn={turnOnFromList}
+          onAddToTag={(found) => {
+            const returnFocus = fontList?.returnFocus;
+            setFontList(null);
+            openTagDialog({ kind: "pick", faces: listedFaces(found), returnFocus });
+          }}
+          returnFocus={fontList?.returnFocus}
+        />
 
         <AlertDialog open={pendingRemoval !== null} onOpenChange={(o) => !o && setPendingRemoval(null)}>
           <AlertDialogContent>

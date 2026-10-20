@@ -264,6 +264,8 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Menu bar quick toggle | ⬜ | ⬜ |
 | Launch at login | 🟡 | ⬜ |
 | Auto-activate fonts a design file needs | ⬜ | ⬜ |
+| One name matcher for every place that names fonts (`src-tauri/src/font_names`) | 🟡 | ⬜ |
+| Turn On Fonts from a List…: paste PostScript names, full names, "Family Style" lines, a CSS font-family list or the Figma plugin's list; see what the library has; Turn On (Option-click: the other way), Add to Tag…, Copy Not Found. From the button by LIBRARY in the sidebar, and File › Turn On Fonts from a List… on macOS. Not yet checked in the running app | 🟡 | ⬜ |
 | Sync tags and on/off choices between computers | 🟡 | ⬜ |
 
 ## Sync (2026-10-12)

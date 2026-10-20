@@ -6,6 +6,7 @@ mod db;
 mod error;
 mod facts;
 mod families;
+mod font_names;
 #[cfg(target_os = "macos")]
 mod login_item;
 mod model;
@@ -332,6 +333,7 @@ pub fn run() {
             families::families_reset,
             families::families_undo,
             families::families_apply,
+            font_names::match_font_names,
             tags::commands::tags_list,
             tags::commands::tags_create,
             tags::commands::tags_rename,
