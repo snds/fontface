@@ -1,8 +1,11 @@
-//! A see-through sidebar: Settings › General › "Translucent sidebar".
+//! A see-through window: Settings › General › "Translucent window" (Off, Sidebar, Whole window).
 //!
 //! The window is see-through behind the page, and the OS draws its own blur there. The page then
-//! makes only its sidebars see-through (`data-translucent` on <html>, src/index.css): font lists,
-//! font pages, dialogs and menus stay solid, so previews and text keep their contrast.
+//! decides where it shows (`data-translucent` and `data-translucent-window` on <html>,
+//! src/index.css): the sidebars, and with Whole window, faintly behind the font lists and pages
+//! too, under a tint heavy enough to keep text readable. Dialogs, menus, cards and the Table stay
+//! solid. src/translucency.test.ts checks the text contrast that leaves, against a worst-case
+//! desktop.
 //!
 //! - **macOS**: the sidebar material native sidebars use (an NSVisualEffectView under the page,
 //!   through Tauri's window effects). It goes flatter while the window isn't the active one, as
@@ -14,14 +17,14 @@
 //!   shows the next time Fontface opens. Windows 10 gets nothing: Acrylic, its only blur, lags
 //!   while the window is moved or resized there (Tauri's note on `Effect::Acrylic`), so the
 //!   setting is greyed out.
-//! - **Linux**: there's no standard blur. Off by default; on, the desktop shows through the
-//!   sidebar unblurred, under a heavier tint so it stays readable, on desktops that support
+//! - **Linux**: there's no standard blur. Off by default; on, the desktop shows through
+//!   unblurred, under a heavier tint so text stays readable, on desktops that support
 //!   see-through windows. Like Windows, it takes effect when the window is created.
 //!
 //! The OS's "reduce transparency" choice always wins: macOS's Accessibility › Display › Reduce
 //! transparency (watched live), and Windows' Transparency effects (checked again whenever the
-//! window comes to the front). The page also honors CSS `prefers-reduced-transparency` where the
-//! web view knows it.
+//! window comes to the front). The page also honors CSS `prefers-reduced-transparency` and
+//! `prefers-contrast: more` where the web view knows them.
 //!
 //! Not tried on Windows or Linux yet: that code is written but has only been built for macOS.
 
@@ -36,7 +39,7 @@ use tauri::{
     AppHandle, Emitter, Manager,
 };
 
-use crate::settings::Theme;
+use crate::settings::{Theme, Translucency};
 
 /// How the page draws its sidebars while they're see-through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -49,14 +52,16 @@ pub enum Look {
     Plain,
 }
 
-/// What the sidebar does now, for the page (`translucency_get` and "translucency-changed").
-/// Must match `Translucency` in src/api.ts.
+/// What the window shows now, for the page (`translucency_get` and "translucency-changed").
+/// Must match `TranslucencyState` in src/api.ts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Translucency {
-    /// None: the sidebar is solid.
+pub struct State {
+    /// None: the window is solid.
     pub look: Option<Look>,
-    /// The OS asks apps to reduce transparency, so the sidebar stays solid.
+    /// The content shows it too, not only the sidebars (Whole window).
+    pub window: bool,
+    /// The OS asks apps to reduce transparency, so the window stays solid.
     pub reduced: bool,
     /// This system has no blur Fontface uses (Windows 10): the setting is greyed out.
     pub unsupported: bool,
@@ -76,11 +81,13 @@ pub struct System {
     pub window_ready: bool,
 }
 
-/// What the sidebar does, for the setting and the system.
-pub fn decide(on: bool, system: System) -> Translucency {
-    let wanted = on && system.look.is_some() && !system.reduced;
-    Translucency {
-        look: if wanted && system.window_ready { system.look } else { None },
+/// What the window shows, for the setting and the system.
+pub fn decide(setting: Translucency, system: System) -> State {
+    let wanted = setting != Translucency::Off && system.look.is_some() && !system.reduced;
+    let look = if wanted && system.window_ready { system.look } else { None };
+    State {
+        look,
+        window: look.is_some() && setting == Translucency::Window,
         reduced: system.reduced,
         unsupported: system.look.is_none(),
         next_launch: wanted && !system.window_ready,
@@ -133,9 +140,9 @@ static WINDOW_READY: AtomicBool = AtomicBool::new(cfg!(target_os = "macos"));
 #[cfg(target_os = "macos")]
 static REDUCED: AtomicBool = AtomicBool::new(false);
 /// What the window and the page show now. None until the first `apply`.
-static SHOWN: Mutex<Option<Translucency>> = Mutex::new(None);
+static SHOWN: Mutex<Option<State>> = Mutex::new(None);
 
-fn shown() -> Option<Translucency> {
+fn shown() -> Option<State> {
     *SHOWN.lock().unwrap_or_else(|p| p.into_inner())
 }
 
@@ -165,8 +172,8 @@ fn system() -> System {
 
 /// Puts the window and the page in step with the setting and the system. Called at launch and
 /// when the setting or Appearance changes; the page hears when what it should draw changes.
-pub fn apply(app: &AppHandle, on: bool, theme: Theme) {
-    let next = decide(on, system());
+pub fn apply(app: &AppHandle, setting: Translucency, theme: Theme) {
+    let next = decide(setting, system());
     let changed = {
         let mut shown = SHOWN.lock().unwrap_or_else(|p| p.into_inner());
         std::mem::replace(&mut *shown, Some(next)) != Some(next)
@@ -188,26 +195,26 @@ pub fn apply(app: &AppHandle, on: bool, theme: Theme) {
 /// applies the saved setting again, only if that changes anything.
 pub fn refresh(app: &AppHandle) {
     let Some(state) = app.try_state::<crate::AppState>() else { return };
-    let (on, theme) = {
+    let (setting, theme) = {
         let s = state.settings();
-        (s.translucent_sidebar, s.theme)
+        (s.translucency, s.theme)
     };
-    if shown() != Some(decide(on, system())) {
-        apply(app, on, theme);
+    if shown() != Some(decide(setting, system())) {
+        apply(app, setting, theme);
     }
 }
 
-/// What the sidebar does now.
+/// What the window shows now.
 #[tauri::command]
-pub fn translucency_get() -> Translucency {
+pub fn translucency_get() -> State {
     shown().unwrap_or_default()
 }
 
 /// Windows and Linux: makes the main window (tauri.windows.conf.json and tauri.linux.conf.json
 /// leave it to this), see-through only when the setting is on and the system can show it.
 #[cfg(not(target_os = "macos"))]
-pub fn create_main_window(app: &tauri::App, on: bool) -> tauri::Result<()> {
-    let see_through = on && system().look.is_some();
+pub fn create_main_window(app: &tauri::App, setting: Translucency) -> tauri::Result<()> {
+    let see_through = setting != Translucency::Off && system().look.is_some();
     let Some(config) = app.config().app.windows.iter().find(|w| w.label == "main").cloned() else { return Ok(()) };
     tauri::WebviewWindowBuilder::from_config(app, &config)?.transparent(see_through).build()?;
     WINDOW_READY.store(see_through, Relaxed);
@@ -334,26 +341,31 @@ mod tests {
     const MAC: System = System { look: Some(Look::Blur), reduced: false, window_ready: true };
 
     #[test]
-    fn on_with_nothing_in_the_way_the_sidebar_is_see_through() {
-        let t = decide(true, MAC);
-        assert_eq!(t.look, Some(Look::Blur));
-        assert!(!t.reduced && !t.unsupported && !t.next_launch);
-        assert_eq!(decide(false, MAC), Translucency::default(), "off: solid, and nothing to explain");
+    fn with_nothing_in_the_way_the_chosen_parts_are_see_through() {
+        let sidebar = decide(Translucency::Sidebar, MAC);
+        assert_eq!((sidebar.look, sidebar.window), (Some(Look::Blur), false));
+        let window = decide(Translucency::Window, MAC);
+        assert_eq!((window.look, window.window), (Some(Look::Blur), true));
+        assert!(!window.reduced && !window.unsupported && !window.next_launch);
+        assert_eq!(decide(Translucency::Off, MAC), State::default(), "off: solid, and nothing to explain");
     }
 
     #[test]
     fn reduce_transparency_always_wins() {
         let reduced = System { reduced: true, ..MAC };
-        assert_eq!(decide(true, reduced).look, None);
-        assert!(decide(true, reduced).reduced, "the page says why the switch is greyed out");
-        assert!(!decide(true, System { window_ready: false, ..reduced }).next_launch, "nothing waits for the next launch either");
+        for setting in [Translucency::Sidebar, Translucency::Window] {
+            let t = decide(setting, reduced);
+            assert_eq!((t.look, t.window), (None, false));
+            assert!(t.reduced, "the page says why the choice is greyed out");
+            assert!(!decide(setting, System { window_ready: false, ..reduced }).next_launch, "nothing waits for the next launch either");
+        }
     }
 
     #[test]
     fn windows_10_has_nothing_to_show() {
         let win10 = System { look: None, reduced: false, window_ready: false };
-        let t = decide(true, win10);
-        assert_eq!(t.look, None);
+        let t = decide(Translucency::Window, win10);
+        assert_eq!((t.look, t.window), (None, false));
         assert!(t.unsupported && !t.next_launch);
         assert!(!has_mica(19_045), "Windows 10 22H2");
         assert!(has_mica(22_000) && has_mica(26_100), "Windows 11");
@@ -362,11 +374,12 @@ mod tests {
     #[test]
     fn turned_on_after_a_solid_window_was_made_it_waits_for_the_next_launch() {
         let linux = System { look: Some(Look::Plain), reduced: false, window_ready: false };
-        let t = decide(true, linux);
-        assert_eq!(t.look, None, "a window made solid can't turn see-through");
+        let t = decide(Translucency::Window, linux);
+        assert_eq!((t.look, t.window), (None, false), "a window made solid can't turn see-through");
         assert!(t.next_launch);
-        assert_eq!(decide(true, System { window_ready: true, ..linux }).look, Some(Look::Plain), "plain: nothing blurs it");
-        assert_eq!(decide(false, linux), Translucency::default(), "turned off again: nothing waits");
+        let ready = decide(Translucency::Window, System { window_ready: true, ..linux });
+        assert_eq!((ready.look, ready.window), (Some(Look::Plain), true), "plain: nothing blurs it");
+        assert_eq!(decide(Translucency::Off, linux), State::default(), "turned off again: nothing waits");
     }
 
     #[test]
@@ -381,19 +394,20 @@ mod tests {
 
     #[test]
     fn the_page_hears_the_shape_src_api_ts_expects() {
-        let t = Translucency { look: Some(Look::Blur), reduced: false, unsupported: false, next_launch: true };
+        let t = State { look: Some(Look::Blur), window: true, reduced: false, unsupported: false, next_launch: true };
         assert_eq!(
             serde_json::to_value(t).unwrap(),
-            serde_json::json!({ "look": "blur", "reduced": false, "unsupported": false, "nextLaunch": true })
+            serde_json::json!({ "look": "blur", "window": true, "reduced": false, "unsupported": false, "nextLaunch": true })
         );
-        assert_eq!(serde_json::to_value(Translucency::default()).unwrap()["look"], serde_json::Value::Null);
+        assert_eq!(serde_json::to_value(State::default()).unwrap()["look"], serde_json::Value::Null);
     }
 
     #[test]
-    fn index_css_has_a_see_through_sidebar_for_each_look() {
+    fn index_css_has_see_through_parts_for_each_look() {
         let css = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/index.css")).unwrap();
         for look in ["blur", "plain"] {
             assert!(css.contains(&format!("[data-translucent=\"{look}\"]")), "index.css has no sidebar for the {look} look");
+            assert!(css.contains(&format!("[data-translucent=\"{look}\"][data-translucent-window]")), "index.css has no content for the {look} look");
         }
     }
 }

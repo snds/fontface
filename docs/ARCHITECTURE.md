@@ -564,6 +564,17 @@ them and keeps their fonts' activation state. This guarantees each file belongs 
   `commands::switch` and `sync::activation_chosen`, as the user's own switch, then sends
   `activation-changed` (the page reloads the list and says what happened, `src/trayMenu.ts`).
   The macOS icon is drawn in code (`tray::glyph`), a template image.
+- **Translucent window** (`translucency.rs`): the window is see-through and the OS draws its blur
+  under the page through Tauri's window effects (macOS `Effect::Sidebar`, following the window's
+  active state; Windows 11 Mica). The back end decides from the setting, the system and its
+  reduce-transparency choice (macOS: `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification`;
+  Windows: the Transparency effects registry value, read when the window comes to the front), and
+  sends `translucency-changed`. The page (`src/settings/translucent.ts`) sets `data-translucent`
+  and `data-translucent-window` on `<html>`; `src/index.css` swaps `--sidebar` and `--pane` for
+  tinted ones and clears the body, and `src/translucency.test.ts` checks the text contrast left.
+  macOS windows are always made see-through (`tauri.macos.conf.json`), so it switches live; on
+  Windows and Linux setup makes the window (`"create": false`), see-through only if the setting
+  is on at launch.
 - **The Dock (macOS):** with "Show in the Dock: only while open" (the default) and the menu bar icon there,
   Fontface switches to an accessory app (no Dock icon, no Cmd-Tab) once its window has closed,
   and back to a regular app just before it opens (`window::dock`). It never switches away within

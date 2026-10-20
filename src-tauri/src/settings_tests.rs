@@ -14,7 +14,7 @@ use crate::{
     backups, db,
     settings::{
         self, ActivationMode, AppSettings, DockIcon, FontPageTab, Layout, PreviewAlign, PreviewCase, PreviewOptions,
-        RestorePolicy, SidebarSections, SortKey, SortOrder, TableColumn, TableDensity, Theme,
+        RestorePolicy, SidebarSections, SortKey, SortOrder, TableColumn, TableDensity, Theme, Translucency,
     },
     tags,
     tray::{self, OnClose, TrayAction, TraySlot},
@@ -38,7 +38,11 @@ fn error_text(r: crate::error::AppResult<AppSettings>) -> String {
 fn defaults_match_the_spec() {
     let d = AppSettings::default();
     assert_eq!(d.theme, Theme::System);
-    assert_eq!(d.translucent_sidebar, !cfg!(target_os = "linux"), "see-through where the system blurs it; Linux has no blur");
+    assert_eq!(
+        d.translucency,
+        if cfg!(target_os = "linux") { Translucency::Off } else { Translucency::Window },
+        "see-through where the system blurs it; Linux has no blur"
+    );
     assert_eq!(d.preview_text, "");
     assert_eq!(d.preview_size, 32);
     assert!(d.restore_last_view);
@@ -97,7 +101,7 @@ fn serializes_in_the_shape_the_ui_expects() {
         v,
         json!({
             "theme": "system",
-            "translucentSidebar": settings::TRANSLUCENT_BY_DEFAULT,
+            "translucency": if cfg!(target_os = "linux") { "off" } else { "window" },
             "previewText": "",
             "previewSize": 32,
             "restoreLastView": true,
@@ -459,7 +463,7 @@ fn every_setting_can_be_changed_by_a_patch() {
     // Guards against a field added to the struct but not to apply_key.
     let custom = AppSettings {
         theme: Theme::Light,
-        translucent_sidebar: !settings::TRANSLUCENT_BY_DEFAULT,
+        translucency: Translucency::Sidebar,
         preview_text: "Hamburgefonstiv".into(),
         preview_size: 77,
         restore_last_view: false,
@@ -1150,13 +1154,17 @@ fn a_chosen_check_item_keeps_the_mark_the_page_gave_it() {
 // ------------------------------------------------------------------------------- menu bar
 
 #[test]
-fn the_translucent_sidebar_changes_by_patch_and_refuses_bad_values() {
-    let off = settings::apply_patch(&AppSettings::default(), &json!({ "translucentSidebar": false })).unwrap();
-    assert!(!off.translucent_sidebar);
-    assert_eq!(AppSettings { translucent_sidebar: settings::TRANSLUCENT_BY_DEFAULT, ..off.clone() }, AppSettings::default(), "nothing else changed");
-    let on = settings::apply_patch(&off, &json!({ "translucentSidebar": true })).unwrap();
-    assert!(on.translucent_sidebar);
-    assert_eq!(error_text(settings::apply_patch(&on, &json!({ "translucentSidebar": "yes" }))), "“Translucent sidebar” must be on or off");
+fn the_translucent_window_changes_by_patch_and_refuses_bad_values() {
+    let mut s = AppSettings::default();
+    for (name, value) in [("off", Translucency::Off), ("sidebar", Translucency::Sidebar), ("window", Translucency::Window)] {
+        s = settings::apply_patch(&s, &json!({ "translucency": name })).unwrap();
+        assert_eq!(s.translucency, value);
+        assert_eq!(AppSettings { translucency: settings::TRANSLUCENCY_BY_DEFAULT, ..s.clone() }, AppSettings::default(), "nothing else changed");
+    }
+    assert_eq!(
+        error_text(settings::apply_patch(&s, &json!({ "translucency": true }))),
+        "Translucent window must be “off”, “sidebar” or “window”"
+    );
 }
 
 #[test]

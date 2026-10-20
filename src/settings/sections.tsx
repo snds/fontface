@@ -17,14 +17,7 @@ import { createTipHandle, ROW_TIP_DELAY, Tip, TipHost } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { openTagDialog } from "@/tags/dialogs";
 import { useSyncSection } from "@/sync/SyncSection";
-import {
-  PLATFORM,
-  TRANSLUCENT_LABEL,
-  translucentDescription,
-  translucentDisabledReason,
-  translucentSwitchOn,
-  translucentSwitchTip,
-} from "@/translucency";
+import { PLATFORM, TRANSLUCENCY_LABEL, translucencyDescription, translucencyDisabledReason, translucencyOptions, translucencyShown } from "@/translucency";
 import { ConfirmButton, describe, NumberField, SECTION_LIST, TextSetting, type RowDef, type RowIds, type SectionDef, type SectionId } from "./parts";
 import { useTranslucency } from "./translucent";
 import { useSettings } from "./useSettings";
@@ -349,27 +342,20 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             ),
           },
           {
-            id: "translucentSidebar",
-            label: TRANSLUCENT_LABEL,
-            description: translucentDescription(PLATFORM, translucency),
-            keywords: "transparent transparency translucent see-through blur frosted glass vibrancy mica window background reduce transparency",
-            labelsControl: true,
-            control: (ids) => {
-              const on = translucentSwitchOn(s.translucentSidebar, translucency);
-              const disabledReason = translucentDisabledReason(PLATFORM, translucency);
-              return (
-                <Tip tip={translucentSwitchTip(on, PLATFORM)} disabledReason={disabledReason}>
-                  <Switch
-                    id={ids.control}
-                    {...describe(ids)}
-                    checked={on}
-                    disabled={!!disabledReason}
-                    focusableWhenDisabled
-                    onCheckedChange={(translucentSidebar) => update({ translucentSidebar })}
-                  />
-                </Tip>
-              );
-            },
+            id: "translucency",
+            label: TRANSLUCENCY_LABEL,
+            description: translucencyDescription(PLATFORM, translucency),
+            keywords: "transparent transparency translucent see-through blur frosted glass vibrancy mica sidebar window background reduce transparency contrast",
+            control: (ids) => (
+              <ChoiceGroup
+                labelledBy={ids.label}
+                describedBy={ids.description}
+                value={translucencyShown(s.translucency, translucency)}
+                onChange={(translucency) => update({ translucency })}
+                disabledReason={translucencyDisabledReason(PLATFORM, translucency)}
+                options={translucencyOptions(PLATFORM)}
+              />
+            ),
           },
           {
             id: "previewText",

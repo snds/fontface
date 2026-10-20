@@ -7,7 +7,7 @@
     <!--
       Light or dark before the first paint, from the last Appearance used (kept in localStorage
       by src/settings/theme.ts, which takes over once the app loads), and the see-through
-      sidebar's look likewise (src/settings/translucent.ts). A plain inline script runs
+      window's likewise (src/settings/translucent.ts). A plain inline script runs
       before the body is drawn; the app's module script only runs after. Tauri adds this
       script's hash to the Content Security Policy when it builds the app.
     -->
@@ -18,8 +18,11 @@
           if (theme === "dark" || (theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
             document.documentElement.classList.add("dark");
           }
-          var look = localStorage.getItem("fontface.translucent");
-          if (look === "blur" || look === "plain") document.documentElement.setAttribute("data-translucent", look);
+          var shown = (localStorage.getItem("fontface.translucent") || "").split("+");
+          if (shown[0] === "blur" || shown[0] === "plain") {
+            document.documentElement.setAttribute("data-translucent", shown[0]);
+            if (shown[1] === "window") document.documentElement.setAttribute("data-translucent-window", "");
+          }
         } catch (e) {}
       })();
     </script>

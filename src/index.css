@@ -46,6 +46,7 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    --color-pane: var(--pane);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -126,23 +127,36 @@
     --active: oklch(0.72 0.17 150);
 }
 
-/* The see-through sidebar: Settings › General › Translucent sidebar. The window is see-through
-   and the OS blurs what's behind it (src-tauri/src/translucency.rs); src/settings/translucent.ts
-   puts data-translucent on <html> while it does. Only the sidebars (bg-sidebar) let it show: the
-   page behind them goes clear, while the library's content, pages, cards, menus and dialogs keep
-   their own solid backgrounds, so previews and text keep their contrast.
-   "blur": the OS softens what's behind (macOS, Windows 11), so a light tint is enough.
-   "plain": nothing does (Linux), so the tint stays heavy enough to read on. */
+/* The see-through window: Settings › General › Translucent window. The window is see-through and
+   the OS blurs what's behind it (src-tauri/src/translucency.rs); src/settings/translucent.ts puts
+   data-translucent (and, for Whole window, data-translucent-window) on <html> while it does.
+   The page behind everything goes clear. The sidebars (bg-sidebar) take a light tint; with Whole
+   window, the font lists, pages and settings (bg-pane) take a heavy one, so only a faint wash of
+   the desktop shows. Dialogs, menus, cards and the Table keep their solid backgrounds.
+   "blur": the OS softens what's behind (macOS, Windows 11). "plain": nothing does (Linux), so
+   the tints are heavier.
+   Contrast: faint text (--muted-foreground) gets stronger wherever the desktop shows through.
+   src/translucency.test.ts checks every tint here keeps text at WCAG AA or better against a
+   worst-case desktop; change these values and it says if they still do. */
 :root {
-    --sidebar-glass: oklch(0.985 0 0 / 30%);
+    --pane: var(--background);
+    --sidebar-glass: oklch(0.985 0 0 / 45%);
     --sidebar-glass-plain: oklch(0.985 0 0 / 88%);
     --sidebar-glass-accent: oklch(0.145 0 0 / 7%);
+    --pane-glass: oklch(1 0 0 / 92%);
+    --pane-glass-plain: oklch(1 0 0 / 97%);
+    --muted-foreground-glass: oklch(0.4 0 0);
+    --muted-foreground-pane-glass: oklch(0.53 0 0);
 }
 
 .dark {
-    --sidebar-glass: oklch(0.205 0 0 / 35%);
+    --sidebar-glass: oklch(0.205 0 0 / 60%);
     --sidebar-glass-plain: oklch(0.205 0 0 / 90%);
-    --sidebar-glass-accent: oklch(0.985 0 0 / 9%);
+    --sidebar-glass-accent: oklch(0.985 0 0 / 7%);
+    --pane-glass: oklch(0.145 0 0 / 92%);
+    --pane-glass-plain: oklch(0.145 0 0 / 96%);
+    --muted-foreground-glass: oklch(0.8 0 0);
+    --muted-foreground-pane-glass: oklch(0.708 0 0);
 }
 
 [data-translucent="blur"] {
@@ -155,8 +169,24 @@
     --sidebar-accent: var(--sidebar-glass-accent);
 }
 
+[data-translucent="blur"][data-translucent-window] {
+    --pane: var(--pane-glass);
+}
+
+[data-translucent="plain"][data-translucent-window] {
+    --pane: var(--pane-glass-plain);
+}
+
 [data-translucent] body {
     background-color: transparent;
+}
+
+[data-translucent] aside {
+    --muted-foreground: var(--muted-foreground-glass);
+}
+
+[data-translucent][data-translucent-window] main {
+    --muted-foreground: var(--muted-foreground-pane-glass);
 }
 
 @layer base {

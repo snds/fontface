@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { api, type AppSettings, type AppSettingsPatch } from "@/api";
 import { DEFAULT_PREVIEW } from "@/previewStyle";
-import { TRANSLUCENT_BY_DEFAULT } from "@/translucency";
+import { TRANSLUCENCY_BY_DEFAULT } from "@/translucency";
 
 /**
  * The app settings, loaded once in App and shared through context.
@@ -18,7 +18,7 @@ import { TRANSLUCENT_BY_DEFAULT } from "@/translucency";
 /** The back end's defaults (settings.rs), used only if the settings can't be read at all. */
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
-  translucentSidebar: TRANSLUCENT_BY_DEFAULT,
+  translucency: TRANSLUCENCY_BY_DEFAULT,
   previewText: "",
   previewSize: 32,
   restoreLastView: true,

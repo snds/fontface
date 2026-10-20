@@ -1218,11 +1218,11 @@ pub fn settings_reset(app: AppHandle, state: State<'_, AppState>) -> AppResult<A
     Ok(next)
 }
 
-/// After a change is saved: the window's color and see-through sidebar follow the Appearance and
-/// Translucent sidebar settings, the menu bar icon follows its setting, and the page hears.
+/// After a change is saved: the window's color and see-through parts follow the Appearance and
+/// Translucent window settings, the menu bar icon follows its setting, and the page hears.
 fn settings_changed(app: &AppHandle, before: &AppSettings, next: &AppSettings) {
-    if next.translucent_sidebar != before.translucent_sidebar || next.theme != before.theme {
-        crate::translucency::apply(app, next.translucent_sidebar, next.theme);
+    if next.translucency != before.translucency || next.theme != before.theme {
+        crate::translucency::apply(app, next.translucency, next.theme);
     }
     if next.theme != before.theme {
         crate::window::paint_background(app, next.theme);

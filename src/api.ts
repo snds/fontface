@@ -510,6 +510,8 @@ export interface ReplaceResult {
 // TemporaryOffReport, after "Turn Off Temporary Fonts"; the list reloads).
 
 export type ThemeSetting = "system" | "light" | "dark";
+/** How much of the window the desktop shows through: none, the sidebars, or the whole window. */
+export type TranslucencySetting = "off" | "sidebar" | "window";
 /** "persistent": fonts stay on after quitting and restarting. "temporary": on until logout or restart. */
 export type ActivationMode = "persistent" | "temporary";
 
@@ -595,9 +597,10 @@ export interface SidebarSections {
 
 export interface AppSettings {
   theme: ThemeSetting;
-  /** "Translucent sidebar": the desktop shows softly through the sidebars (src-tauri/src/translucency.rs).
-   *  On by default on macOS and Windows, off on Linux. The OS's "reduce transparency" choice wins. */
-  translucentSidebar: boolean;
+  /** "Translucent window": the desktop shows softly through the sidebars, or the whole window
+   *  (src-tauri/src/translucency.rs). The whole window by default on macOS and Windows, off on
+   *  Linux. The OS's "reduce transparency" choice wins. */
+  translucency: TranslucencySetting;
   /** Empty: each family previews its own name. */
   previewText: string;
   /** 10–128 (clamped). */
@@ -653,15 +656,17 @@ export type AppSettingsPatch = Partial<Omit<AppSettings, "sidebar" | "preview">>
   preview?: Partial<PreviewOptions>;
 };
 
-/** How the sidebars look while see-through: "blur" (the OS blurs what's behind: macOS, Windows 11)
+/** How the see-through parts look: "blur" (the OS blurs what's behind: macOS, Windows 11)
  *  or "plain" (nothing blurs it: Linux). */
 export type TranslucentLook = "blur" | "plain";
 
-/** What the sidebar does now (src-tauri/src/translucency.rs, `Translucency`). */
-export interface Translucency {
+/** What the window shows now (src-tauri/src/translucency.rs, `State`). */
+export interface TranslucencyState {
   /** Null: solid. */
   look: TranslucentLook | null;
-  /** The OS asks apps to reduce transparency, so the sidebar stays solid. */
+  /** The content shows it too, not only the sidebars (Whole window). */
+  window: boolean;
+  /** The OS asks apps to reduce transparency, so the window stays solid. */
   reduced: boolean;
   /** This system has no blur Fontface uses (Windows 10). */
   unsupported: boolean;
@@ -855,8 +860,8 @@ export const api = {
   settingsGet: () => invoke<AppSettings>("settings_get"),
   settingsUpdate: (patch: AppSettingsPatch) => invoke<AppSettings>("settings_update", { patch }),
   settingsReset: () => invoke<AppSettings>("settings_reset"),
-  /** What the sidebar does now; "translucency-changed" says when that changes. */
-  translucencyGet: () => invoke<Translucency>("translucency_get"),
+  /** What the window shows now; "translucency-changed" says when that changes. */
+  translucencyGet: () => invoke<TranslucencyState>("translucency_get"),
   /** Waits until launch has worked out what to ask about, so it's safe to call once at startup. */
   activationPendingRestore: () => invoke<PendingRestore>("activation_pending_restore"),
   activationRestoreDecide: (restore: boolean) => invoke<RestoreReport>("activation_restore_decide", { restore }),

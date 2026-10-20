@@ -195,13 +195,13 @@ pub fn run() {
             settings::refresh_launch_at_login();
             let mut app_settings = settings::load(&conn)?;
             app_settings.launch_at_login = settings::launch_at_login_enabled();
-            // Windows and Linux: the window is made here, see-through only if the sidebar will be.
+            // Windows and Linux: the window is made here, see-through only if it will be.
             #[cfg(not(target_os = "macos"))]
-            translucency::create_main_window(app, app_settings.translucent_sidebar)?;
+            translucency::create_main_window(app, app_settings.translucency)?;
             window::paint_background(app.handle(), app_settings.theme);
             #[cfg(target_os = "macos")]
             translucency::watch(app.handle());
-            translucency::apply(app.handle(), app_settings.translucent_sidebar, app_settings.theme);
+            translucency::apply(app.handle(), app_settings.translucency, app_settings.theme);
             #[cfg(target_os = "macos")]
             if let Some(main) = app.get_webview_window("main") {
                 window::full_screen::watch(&main);

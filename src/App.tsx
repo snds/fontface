@@ -1744,7 +1744,7 @@ export default function App() {
               onShowSkipped={showSkipped}
               onFontList={openFontList}
             />
-            <main className="relative flex min-h-0 min-w-0 flex-col bg-background outline-none" tabIndex={-1}>
+            <main className="relative flex min-h-0 min-w-0 flex-col bg-pane outline-none" tabIndex={-1}>
               {/* The list layer: the place picked in the sidebar. While a page is open it stays as it
                   was (scroll, selection, loaded previews), hidden and out of reach underneath. */}
               <div inert={pageOpen} className={cn("flex min-h-0 flex-1 flex-col", pageOpen && "invisible")}>
@@ -1896,7 +1896,7 @@ export default function App() {
                     key={page.id}
                     inert={covered}
                     data-page-top={covered ? undefined : ""}
-                    className={cn("absolute inset-0 flex flex-col bg-background", covered && "invisible")}
+                    className={cn("absolute inset-0 flex flex-col bg-pane", covered && "invisible")}
                   >
                     {page.kind === "groups" ? (
                       <FamilyGroupsPage
