@@ -18,6 +18,7 @@ import {
   type PreviewOptions,
   type PurchaseFind,
   type PurchaseImported,
+  type PurchasesStatus,
   type ScanProgress,
   type ServiceId,
   type ServiceInfo,
@@ -97,6 +98,7 @@ import { RemoveFontsDialog, type RemovalRequest } from "@/components/RemoveFonts
 import { SKIPPED_DETAILS_TIP, SkippedFilesDialog, type SkippedRequest } from "@/components/SkippedFilesDialog";
 import { FontListDialog } from "@/components/FontListDialog";
 import { skippedSummary } from "@/skippedFiles";
+import { newPurchaseCount } from "@/purchaseWatch";
 import { REVEAL_LABEL } from "@/components/fontPage/InfoTab";
 import { ViewOptions } from "@/components/ViewOptions";
 import { PreviewStyleContext, usePreviewStyleValue } from "@/components/PreviewStyle";
@@ -234,6 +236,12 @@ export default function App() {
   /** Purchases: bumped when the watcher finds something or an import/removal finishes. */
   const [purchasesVersion, setPurchasesVersion] = useState(0);
   const [newPurchases, setNewPurchases] = useState(0);
+  /** Whether watching for purchases is on (from the last status). While off, nothing checks the folders. */
+  const purchasesWatching = useRef(false);
+  const onPurchasesStatus = useCallback((st: PurchasesStatus) => {
+    purchasesWatching.current = st.watching;
+    setNewPurchases(newPurchaseCount(st));
+  }, []);
   const [purchaseBusy, setPurchaseBusy] = useState<Set<string>>(new Set());
   const purchaseBusyRef = useRef(new Set<string>());
   /** The first library read is done (folders and fonts). */
@@ -462,7 +470,7 @@ export default function App() {
       timer = setTimeout(() => {
         loadFonts().catch(() => {});
         // A watched folder that wasn't available (e.g. an unplugged drive) may be back.
-        api.purchasesRetryWatch().catch(() => {});
+        if (purchasesWatching.current) api.purchasesRetryWatch().catch(() => {});
       }, 300);
     });
     return () => {
@@ -598,9 +606,9 @@ export default function App() {
     const my = ++purchaseCountSeq.current;
     api
       .purchasesStatus()
-      .then((st) => my === purchaseCountSeq.current && setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length))
+      .then((st) => my === purchaseCountSeq.current && onPurchasesStatus(st))
       .catch(() => {});
-  }, []);
+  }, [onPurchasesStatus]);
   useEffect(() => {
     const unlisten = listen<number[]>("purchases-changed", (e) => {
       setPurchasesVersion((v) => v + 1);
@@ -1894,7 +1902,7 @@ export default function App() {
                           <PurchasesPanel
                             version={purchasesVersion}
                             busy={purchaseBusy}
-                            onStatus={(st) => setNewPurchases(st.finds.filter((f) => f.status === "new" && !f.missing).length)}
+                            onStatus={onPurchasesStatus}
                             onImport={importPurchase}
                             onImportPath={importPurchasePath}
                             onReplace={replacePurchase}

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { api, type AppSettings, type FontSummary, type PurchasesStatus, type RemovedFile, type SidebarSections, type TagBackup, type TurnOffAllReport } from "@/api";
 import { previewCacheButton } from "@/googlePreviews";
 import { refreshGooglePreviews, useGooglePreviewAnswers } from "@/googlePreviewStore";
 import { INSTALLED_LABEL } from "@/library";
+import { PRIVACY_SETTINGS_LABEL, PRIVACY_SETTINGS_TIP, PRIVACY_SETTINGS_URL, WATCH_LABEL, watchExplainer, watchNotice, watchSwitchTip } from "@/purchaseWatch";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
 import { IS_MAC } from "@/components/TitleBar";
 import { Button } from "@/components/ui/button";
@@ -100,6 +102,8 @@ function useOutsideState(onPurchasesChanged: () => void) {
   const [purchases, setPurchases] = useState<PurchasesStatus | null>(null);
   const [purchasesError, setPurchasesError] = useState<string | null>(null);
   const [watchBusy, setWatchBusy] = useState(false);
+  /** Why turning watching on didn't fully work (a folder macOS wouldn't let Fontface see). */
+  const [watchNote, setWatchNote] = useState<string | null>(null);
   const [backups, setBackups] = useState<TagBackup[] | null>(null);
   const [backingUp, setBackingUp] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
@@ -148,7 +152,7 @@ function useOutsideState(onPurchasesChanged: () => void) {
     setPurchases((p) => p && { ...p, watching: on });
     setWatchBusy(true);
     try {
-      await api.purchasesSetWatching(on);
+      setWatchNote(watchNotice(await api.purchasesSetWatching(on), IS_MAC));
     } catch (e) {
       toast.error("Couldn't change watching", { description: String(e) });
     } finally {
@@ -190,6 +194,7 @@ function useOutsideState(onPurchasesChanged: () => void) {
     purchases,
     purchasesError,
     watchBusy,
+    watchNote,
     setWatching,
     backups,
     backingUp,
@@ -750,13 +755,26 @@ export function useSections(props: SectionProps): SectionDef[] | null {
         rows: [
           {
             id: "watchPurchases",
-            label: "Watch for font purchases",
-            description: "Fontface notices fonts you download from stores like MyFonts and Fontspring, and offers to add them.",
-            keywords: "downloads watcher store myfonts fontspring",
+            label: WATCH_LABEL,
+            description: watchExplainer(IS_MAC),
+            keywords: "downloads watcher store myfonts fontspring privacy permission access",
             labelsControl: true,
+            below: () =>
+              outside.watchNote && (
+                <div role="status" className="flex flex-col items-start gap-2 text-xs text-pretty">
+                  <p>{outside.watchNote}</p>
+                  {IS_MAC && (
+                    <Tip tip={PRIVACY_SETTINGS_TIP}>
+                      <Button size="sm" variant="outline" onClick={() => openUrl(PRIVACY_SETTINGS_URL).catch((e) => toast.error(String(e)))}>
+                        {PRIVACY_SETTINGS_LABEL}
+                      </Button>
+                    </Tip>
+                  )}
+                </div>
+              ),
             control: (ids) => (
               <Tip
-                tip={purchases?.watching ? "Stops watching for font purchases" : "Watches your download folders for fonts you buy"}
+                tip={watchSwitchTip(purchases?.watching ?? false, IS_MAC)}
                 disabledReason={
                   !purchases
                     ? outside.purchasesError

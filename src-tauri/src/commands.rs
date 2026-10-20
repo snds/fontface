@@ -902,24 +902,6 @@ pub fn adobe_status() -> services::adobe::AdobeStatus {
 
 use services::purchases;
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WatchFolder {
-    path: String,
-    /// Why it can't be read right now, if it can't (missing, or no permission).
-    problem: Option<String>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PurchasesStatus {
-    watching: bool,
-    folders: Vec<WatchFolder>,
-    finds: Vec<purchases::Find>,
-    imported: Vec<purchases::Imported>,
-    stores: &'static [purchases::Store],
-}
-
 /// (Re)starts or stops the purchases watcher to match the saved settings, and checks the
 /// watched folders once in the background (catching downloads made while the app was closed).
 /// The settings are read while holding the watcher lock, so the last of several quick changes wins.
@@ -950,49 +932,33 @@ pub fn restart_purchase_watcher(app: &AppHandle) {
     });
 }
 
+/// What the Purchases page shows. While watching is off, no watched folder is looked at.
 #[tauri::command]
-pub async fn purchases_status(app: AppHandle) -> AppResult<PurchasesStatus> {
+pub async fn purchases_status(app: AppHandle) -> AppResult<purchases::Status> {
     blocking(move || {
         let state = app.state::<AppState>();
-        let conn = db::open(&state.db_path)?;
-        let watching = purchases::watching(&conn);
         let failed = state.purchase_watch_failed.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        let mut finds = purchases::finds(&conn)?;
-        purchases::link_replacements(&mut finds, &state.data_dir);
-        Ok(PurchasesStatus {
-            watching,
-            folders: purchases::watch_folders(&conn)?
-                .into_iter()
-                .map(|path| WatchFolder {
-                    problem: purchases::folder_problem(&path).or_else(|| {
-                        failed.get(&path).filter(|_| watching).map(|e| format!("Not being watched: {e}"))
-                    }),
-                    path,
-                })
-                .collect(),
-            finds,
-            imported: purchases::imported(&state.data_dir),
-            stores: purchases::STORES,
-        })
+        purchases::status(&db::open(&state.db_path)?, &state.data_dir, &failed)
     })
     .await
 }
 
-/// Turns watching on or off. The first time it's turned on with no folders, Downloads is added.
+/// Turns watching on or off. Turning it on is when macOS asks for access to Downloads (see
+/// `purchases::turn_on`); the first time, with no folders, Downloads is added.
 #[tauri::command]
-pub async fn purchases_set_watching(app: AppHandle, on: bool) -> AppResult<()> {
+pub async fn purchases_set_watching(app: AppHandle, on: bool) -> AppResult<purchases::WatchChange> {
     blocking(move || {
         let state = app.state::<AppState>();
-        let downloads = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Downloads"));
-        state.write(|conn| {
-            if on && purchases::watch_folders(conn)?.is_empty() {
-                let downloads = downloads.ok_or_else(|| AppError::Other("Couldn't find your Downloads folder".into()))?;
-                purchases::add_watch_folder(conn, &purchases::validate_watch_folder(&downloads)?)?;
-            }
-            purchases::set_watching(conn, on)
-        })?;
+        let change = if on {
+            // Its own connection: the library stays usable while macOS waits for an answer.
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            purchases::turn_on(&db::open(&state.db_path)?, home.as_deref())?
+        } else {
+            state.write(|conn| purchases::set_watching(conn, false))?;
+            purchases::WatchChange { watching: false, denied: Vec::new() }
+        };
         restart_purchase_watcher(&app);
-        Ok(())
+        Ok(change)
     })
     .await
 }
@@ -1028,7 +994,11 @@ pub async fn purchases_remove_folder(app: AppHandle, path: String) -> AppResult<
 pub async fn purchases_check_now(app: AppHandle) -> AppResult<usize> {
     blocking(move || {
         let state = app.state::<AppState>();
-        Ok(purchases::check_folders(&db::open(&state.db_path)?, &state.data_dir)?.len())
+        let conn = db::open(&state.db_path)?;
+        if !purchases::watching(&conn) {
+            return Err(AppError::Invalid("Watching is off. Turn it on to check your folders.".into()));
+        }
+        Ok(purchases::check_folders(&conn, &state.data_dir)?.len())
     })
     .await
 }
@@ -1079,12 +1049,16 @@ pub async fn purchases_import_path(app: AppHandle, path: String, store: Option<S
 
 /// Called when the window comes back to the front: if a watched folder couldn't be watched
 /// before (a drive that wasn't connected) and can be read now, the watcher is restarted.
+/// While watching is off, nothing is looked at.
 #[tauri::command]
 pub async fn purchases_retry_watch(app: AppHandle) -> AppResult<bool> {
     blocking(move || {
         let state = app.state::<AppState>();
         let failed: Vec<String> = state.purchase_watch_failed.lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect();
-        let back = failed.iter().any(|f| purchases::folder_problem(f).is_none());
+        if failed.is_empty() {
+            return Ok(false);
+        }
+        let back = purchases::watch_retry_due(&db::open(&state.db_path)?, &failed);
         if back {
             restart_purchase_watcher(&app);
         }
