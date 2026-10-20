@@ -32,15 +32,6 @@ export function setSwitchFonts(fn: SwitchFonts | null) {
   switchFonts = fn;
 }
 
-const switched = new Set<(id: number) => void>();
-
-/** Hears each tag switch as it starts, from anywhere (the menu bar icon's Tags menu lists the
- *  recent ones first). Returns a function that stops listening. */
-export function onTagSwitch(fn: (id: number) => void): () => void {
-  switched.add(fn);
-  return () => void switched.delete(fn);
-}
-
 /** A tag switch in progress: which way, and how many of its fonts are done. */
 export interface TagRun {
   on: boolean;
@@ -82,7 +73,6 @@ export interface SwitchWording {
  */
 export async function switchTag(tag: Tag, set: readonly Face[], on: boolean, scope: ActivationMode | null, wording: SwitchWording): Promise<void> {
   if (runs.has(tag.id)) return;
-  for (const fn of switched) fn(tag.id);
   const run = switchFonts;
   const plan = planTagSwitch(set, on);
   const name = tag.name;

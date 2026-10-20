@@ -17,7 +17,7 @@ use crate::{
         RestorePolicy, SidebarSections, SortKey, SortOrder, TableColumn, TableDensity, Theme,
     },
     tags,
-    tray::{self, OnClose, TagState, TrayAction, TrayModel, TraySlot, TrayTag},
+    tray::{self, OnClose, TrayAction, TraySlot},
     window::{self, DoubleClick},
 };
 
@@ -45,7 +45,6 @@ fn defaults_match_the_spec() {
     assert!(!d.keep_running_in_background);
     assert!(d.show_in_menu_bar, "Fontface is in the menu bar unless that's turned off");
     assert_eq!(d.dock_icon, DockIcon::WhileOpen, "with its window closed, Fontface is in the menu bar alone");
-    assert!(d.recent_tags.is_empty());
     assert!(d.scan_at_launch);
     assert!(d.show_installed_in_all);
     assert_eq!(
@@ -127,8 +126,7 @@ fn serializes_in_the_shape_the_ui_expects() {
                 "ink": null, "paper": null, "features": []
             },
             "googlePreviews": true,
-            "catalogYoursFirst": true,
-            "recentTags": []
+            "catalogYoursFirst": true
         })
     );
 }
@@ -506,7 +504,6 @@ fn every_setting_can_be_changed_by_a_patch() {
         },
         google_previews: false,
         catalog_yours_first: false,
-        recent_tags: vec![7, 3],
     };
     let patch = serde_json::to_value(&custom).unwrap();
     assert_eq!(settings::apply_patch(&AppSettings::default(), &patch).unwrap(), custom);
@@ -1166,14 +1163,27 @@ fn the_menu_bar_and_dock_settings_change_by_patch_and_refuse_bad_values() {
 }
 
 #[test]
-fn recent_tags_keep_each_tag_once_newest_first_and_at_most_eight() {
-    let d = AppSettings::default();
-    let next = settings::apply_patch(&d, &json!({ "recentTags": [5, 3, 5, 9, 1, 2, 4, 6, 7, 8, 10] })).unwrap();
-    assert_eq!(next.recent_tags, vec![5, 3, 9, 1, 2, 4, 6, 7], "a repeat keeps its first place; the rest past eight are dropped");
-    assert_eq!(settings::apply_patch(&next, &json!({ "recentTags": [] })).unwrap().recent_tags, Vec::<i64>::new());
-    for bad in [json!({ "recentTags": [1, "2"] }), json!({ "recentTags": [0] }), json!({ "recentTags": [1.5] }), json!({ "recentTags": 3 })] {
-        assert_eq!(error_text(settings::apply_patch(&next, &bad)), "Recent tags must be a list of tag numbers");
-    }
+fn a_recent_tags_row_saved_by_an_earlier_build_still_loads() {
+    // An earlier build of the menu bar icon kept the recently switched tags as a setting.
+    let dir = temp("storage-recent-tags");
+    let mut conn = db::open(&dir.join("library.sqlite3")).unwrap();
+    settings::ensure_schema(&conn).unwrap();
+    let mut custom = AppSettings::default();
+    custom.show_in_menu_bar = false;
+    custom.preview_size = 40;
+    settings::save(&mut conn, &custom).unwrap();
+    conn.execute("INSERT INTO app_settings (key, value) VALUES ('recentTags', '[7,3]')", []).unwrap();
+
+    assert_eq!(settings::load(&conn).unwrap(), custom, "the old row is ignored; everything else loads");
+    assert_eq!(
+        settings::apply_patch(&custom, &json!({ "recentTags": [1, 2], "previewSize": 48 })).unwrap(),
+        AppSettings { preview_size: 48, ..custom.clone() },
+        "a change that still names it is fine too"
+    );
+    settings::save(&mut conn, &custom).unwrap();
+    let kept: String = conn.query_row("SELECT value FROM app_settings WHERE key = 'recentTags'", [], |r| r.get(0)).unwrap();
+    assert_eq!(kept, "[7,3]", "left alone, like any row this version doesn't know");
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -1206,103 +1216,40 @@ fn a_launch_at_login_starts_closed_only_with_the_icon_there() {
     assert!(!tray::starts_hidden(false, true), "opened by hand: the window opens");
 }
 
-fn tag(id: i64, name: &str, state: TagState) -> TrayTag {
-    TrayTag { id, name: name.into(), state }
-}
-
-/// The menu as (id or "-", text, enabled, checked) lines; a submenu's items are indented.
+/// The menu as lines: the text, or "-" for a separator.
 fn lines(slots: &[TraySlot]) -> Vec<String> {
-    fn walk(slots: &[TraySlot], depth: usize, out: &mut Vec<String>) {
-        for slot in slots {
-            let pad = "  ".repeat(depth);
-            match slot {
-                TraySlot::Separator => out.push(format!("{pad}-")),
-                TraySlot::Item { action, text, enabled, checked } => {
-                    let mark = match checked {
-                        Some(true) => "[x] ",
-                        Some(false) => "[ ] ",
-                        None => "",
-                    };
-                    out.push(format!("{pad}{mark}{text}{}", if *enabled { "" } else { " (disabled)" }));
-                    assert_eq!(TrayAction::parse(&action.id()), Some(*action), "{} reads back", action.id());
-                }
-                TraySlot::Submenu { text, items } => {
-                    out.push(format!("{pad}{text} >"));
-                    walk(items, depth + 1, out);
-                }
+    slots
+        .iter()
+        .map(|slot| match slot {
+            TraySlot::Separator => "-".to_string(),
+            TraySlot::Item { action, text, enabled } => {
+                assert_eq!(TrayAction::parse(action.id()), Some(*action), "{} reads back", action.id());
+                format!("{text}{}", if *enabled { "" } else { " (disabled)" })
             }
-        }
-    }
-    let mut out = Vec::new();
-    walk(slots, 0, &mut out);
-    out
+        })
+        .collect()
 }
 
 #[test]
 fn the_menu_is_short_and_says_what_each_item_does() {
-    let quiet = tray::menu_slots(&TrayModel::default());
     assert_eq!(
-        lines(&quiet),
-        vec![
-            "Open Fontface",
-            "Turn On Fonts from a List…",
-            "-",
-            "Turn Off Temporary Fonts (disabled)",
-            "-",
-            "Settings…",
-            "-",
-            "Quit Fontface",
-        ],
-        "no tags until the page sends them; nothing temporary to turn off"
+        lines(&tray::menu_slots(0)),
+        vec!["Open Fontface", "-", "Turn Off Temporary Fonts (disabled)", "-", "Settings…", "-", "Quit Fontface"],
+        "nothing on until logout: nothing to turn off"
     );
-
-    let busy = TrayModel {
-        temporary: 12,
-        tags: Some(vec![tag(4, "Sci-Fi", TagState::On), tag(9, "Sci-Fi/Star Trek", TagState::Partly), tag(2, "Display", TagState::Off)]),
-    };
     assert_eq!(
-        lines(&tray::menu_slots(&busy)),
-        vec![
-            "Open Fontface",
-            "Turn On Fonts from a List…",
-            "-",
-            "Tags >",
-            "  [x] Sci-Fi",
-            "  [ ] Sci-Fi/Star Trek (some on)",
-            "  [ ] Display",
-            "Turn Off Temporary Fonts (12)",
-            "-",
-            "Settings…",
-            "-",
-            "Quit Fontface",
-        ]
+        lines(&tray::menu_slots(12)),
+        vec!["Open Fontface", "-", "Turn Off Temporary Fonts (12)", "-", "Settings…", "-", "Quit Fontface"]
     );
-
-    let none = TrayModel { temporary: 0, tags: Some(vec![]) };
-    assert!(!lines(&tray::menu_slots(&none)).iter().any(|l| l.starts_with("Tags")), "no tags with fonts: no Tags menu");
-
-    let many = TrayModel { temporary: 0, tags: Some((1..=15).map(|i| tag(i, &format!("Tag {i}"), TagState::Off)).collect()) };
-    let slots = tray::menu_slots(&many);
-    let Some(TraySlot::Submenu { items, .. }) = slots.iter().find(|s| matches!(s, TraySlot::Submenu { .. })) else { panic!("a Tags menu") };
-    assert_eq!(items.len(), tray::MAX_TAGS, "the Tags menu stays short");
-}
-
-#[test]
-fn tag_names_show_as_typed_on_one_short_line() {
-    assert_eq!(tray::menu_text("Arts & Crafts"), "Arts && Crafts", "a single & would be taken as the access key and vanish");
-    assert_eq!(tray::menu_text("Two\nlines   here"), "Two lines here");
-    let long = "A very long tag name that goes on and on and on";
-    let shown = tray::menu_text(long);
-    assert!(shown.ends_with('…') && shown.chars().count() <= 40, "{shown}");
-    assert_eq!(tray::menu_text("Ünïcödé ✓"), "Ünïcödé ✓");
 }
 
 #[test]
 fn only_the_menu_bar_menu_items_are_its_own() {
     assert_eq!(TrayAction::parse("tray.open"), Some(TrayAction::Open));
-    assert_eq!(TrayAction::parse("tray.tag.42"), Some(TrayAction::Tag(42)));
+    assert_eq!(TrayAction::parse("tray.temporaryOff"), Some(TrayAction::TemporaryOff));
+    assert_eq!(TrayAction::parse("tray.settings"), Some(TrayAction::Settings));
     assert_eq!(TrayAction::parse("tray.quit"), Some(TrayAction::Quit));
-    for other in ["settings", "file.fontList", "view.tiles", "tray.tag.", "tray.tag.x", "tray.tag.-3", "tray.tag.0", "tray.nope", "quit"] {
+    for other in ["settings", "file.fontList", "view.tiles", "tray.fontList", "tray.tag.4", "tray.nope", "quit", ""] {
         assert_eq!(TrayAction::parse(other), None, "{other}");
     }
 }

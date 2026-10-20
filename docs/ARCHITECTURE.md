@@ -557,15 +557,13 @@ them and keeps their fonts' activation state. This guarantees each file belongs 
   (`window::reachable`).
 - **Menu bar icon** (`tray.rs`; Windows: the notification area): made once at launch (or when
   the setting is turned on), then only shown or hidden, because Tauri never lets go of an icon's
-  handlers; its menu items go through the app's one menu handler (`lib.rs`). The menu is rebuilt
-  only when what it shows changes: the count of fonts on until logout (read when the pointer
-  reaches the icon, when the page sends tags, and after launch's restore) and the tags the page
-  sends (`set_tray_tags`; which tags, and what choosing one does, are worked out by the page in
-  `src/trayMenu.ts`, since tag sets live there). Choosing a tag sends `tray-tag` to the page,
-  which runs the sidebar's tag switch. Turn Off Temporary Fonts runs in Rust through
+  handlers; its menu items go through the app's one menu handler (`lib.rs`). The menu is Open
+  Fontface, Turn Off Temporary Fonts, Settings… and Quit Fontface, rebuilt only when the count
+  of fonts on until logout changes (read when the pointer reaches the icon, after each switch
+  and Turn Off All, and after launch's restore). Turn Off Temporary Fonts runs in Rust through
   `commands::switch` and `sync::activation_chosen`, as the user's own switch, then sends
-  `activation-changed` (the page reloads the list and says what happened). The macOS icon is
-  drawn in code (`tray::glyph`), a template image.
+  `activation-changed` (the page reloads the list and says what happened, `src/trayMenu.ts`).
+  The macOS icon is drawn in code (`tray::glyph`), a template image.
 - **The Dock (macOS):** with "Show in the Dock: only while open" (the default) and the menu bar icon there,
   Fontface switches to an accessory app (no Dock icon, no Cmd-Tab) once its window has closed,
   and back to a regular app just before it opens (`window::dock`). It never switches away within

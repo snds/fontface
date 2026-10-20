@@ -42,7 +42,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   preview: DEFAULT_PREVIEW,
   googlePreviews: true,
   catalogYoursFirst: true,
-  recentTags: [],
 };
 
 export interface Settings {

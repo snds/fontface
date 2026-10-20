@@ -497,8 +497,7 @@ export interface ReplaceResult {
 // launch when restoreOnLaunch is "ask" and there's something to ask about) and "open-settings"
 // (no payload: the macOS app menu's Settings… item, ⌘,, or the menu bar icon's Settings…).
 //
-// The menu bar icon (src-tauri/src/tray.rs) also sends "tray-tag" (payload: a tag id, to turn
-// its fonts on or off as its sidebar switch would) and "activation-changed" (payload:
+// The menu bar icon (src-tauri/src/tray.rs) also sends "activation-changed" (payload:
 // TemporaryOffReport, after "Turn Off Temporary Fonts"; the list reloads).
 
 export type ThemeSetting = "system" | "light" | "dark";
@@ -634,9 +633,6 @@ export interface AppSettings {
   /** "Installed" (yours first) on a font service's catalog page: families you have (downloaded, or already
    *  in your library) come before the rest. On by default. */
   catalogYoursFirst: boolean;
-  /** The tags turned on or off most recently, newest first (at most 8): the menu bar icon's
-   *  Tags menu always lists them. Remembered by the UI. */
-  recentTags: number[];
 }
 
 /** Only the keys given change; `sidebar` and `preview` may be partial too. */
@@ -655,14 +651,6 @@ export interface PendingRestore {
 export interface RestoreReport {
   restored: number;
   failed: number;
-}
-
-/** A tag in the menu bar icon's Tags menu. Must match TrayTag in src-tauri/src/tray.rs.
- *  "on": all its fonts (choosing it turns them off); "some": some (it turns on the rest). */
-export interface TrayTag {
-  id: number;
-  name: string;
-  state: "on" | "some" | "off";
 }
 
 /** What the menu bar icon's "Turn Off Temporary Fonts" did ("activation-changed"). Must match
@@ -863,8 +851,6 @@ export const api = {
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
   /** The macOS View and Font menus follow the page (fontActions.nativeMenuState). Elsewhere it does nothing. */
   setMenuState: (state: import("./fontActions").NativeMenuState) => invoke<void>("set_menu_state", { state }),
-  /** The menu bar icon's Tags menu (src/trayMenu.ts): at most 10, recently used first. */
-  setTrayTags: (tags: TrayTag[]) => invoke<void>("set_tray_tags", { tags }),
   /** Remove from Library: these fonts' files are turned off and no longer listed. Files aren't touched. */
   fontsRemove: (fontIds: number[]) => invoke<RemoveReport>("fonts_remove", { fontIds }),
   fontsRemoved: () => invoke<RemovedFile[]>("fonts_removed"),

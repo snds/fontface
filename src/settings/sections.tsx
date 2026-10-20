@@ -394,7 +394,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
           {
             id: "showInMenuBar",
             label: `Show Fontface in the ${TRAY_PLACE}`,
-            description: `Its menu opens Fontface, turns your recent tags on and off, and turns off fonts that are on until logout. While it's there, closing the window keeps Fontface running.`,
+            description: "Its menu opens Fontface and turns off fonts that are on until logout. While it's there, closing the window keeps Fontface running.",
             keywords: "menu bar tray status icon notification area system tray background close window quit",
             labelsControl: true,
             control: (ids) =>

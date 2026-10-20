@@ -118,7 +118,6 @@ import { useLocations } from "@/tags/locations";
 import { leafOf, useFilterContext, useTagIndex } from "@/tags/model";
 import { openTagDialog } from "@/tags/dialogs";
 import { TagDialogHost } from "@/tags/TagDialogs";
-import { TrayTags } from "@/tags/TrayTags";
 import { temporaryOffMessage } from "@/trayMenu";
 import { useLastView } from "@/settings/lastView";
 import type { SectionId } from "@/settings/parts";
@@ -2004,8 +2003,6 @@ export default function App() {
           onDeleted={(ids) => setView((v) => (v.kind === "tag" && ids.includes(v.id) ? { kind: "all" } : v))}
           switchFonts={(ids, on, scope, report) => setActivation(ids, on, undefined, scope, "switch", report)}
         />
-        {/* The menu bar icon's Tags menu. */}
-        <TrayTags families={allFamilies} settings={settings} onRecent={(recentTags) => void settingsStore.update({ recentTags })} />
         {/* The library search for Compare and Pair, and Remove from Library's confirmation. */}
         <FontPickerDialog request={picker} families={pickerFamilies} onClose={() => setPicker(null)} />
         <RemoveFontsDialog request={removal} onConfirm={(r) => void confirmRemoval({ ...r, closePage: removal?.closePage ?? null })} onCancel={() => setRemoval(null)} />

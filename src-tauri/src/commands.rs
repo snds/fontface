@@ -366,6 +366,7 @@ pub fn get_font(state: State<'_, AppState>, font_id: i64) -> AppResult<FontDetai
 /// shared with their other computers by sync.
 #[tauri::command(async)]
 pub fn set_activation(
+    app: AppHandle,
     state: State<'_, AppState>,
     font_ids: Vec<i64>,
     active: bool,
@@ -377,6 +378,8 @@ pub fn set_activation(
         SwitchOrigin::Switch => crate::sync::activation_chosen(&state, &font_ids, active, &outcomes),
         SwitchOrigin::Arrival => crate::sync::activation_arrived(&state, &font_ids, &outcomes),
     }
+    // The menu bar icon's count of fonts on until logout.
+    crate::tray::refresh_soon(&app);
     Ok(outcomes)
 }
 
@@ -1331,7 +1334,7 @@ pub struct TurnOffAllReport {
 /// Turns off every font Fontface turned on (outside the macOS font folders), exactly as if each
 /// were switched off: same locks, same checks with the OS, and each is recorded as off.
 #[tauri::command(async)]
-pub fn activation_turn_off_all(state: State<'_, AppState>) -> AppResult<TurnOffAllReport> {
+pub fn activation_turn_off_all(app: AppHandle, state: State<'_, AppState>) -> AppResult<TurnOffAllReport> {
     let ids: Vec<i64> = state
         .conn()?
         .prepare(
@@ -1347,6 +1350,7 @@ pub fn activation_turn_off_all(state: State<'_, AppState>) -> AppResult<TurnOffA
             Some(why) => report.failed.push((outcome.path, why)),
         }
     }
+    crate::tray::refresh_soon(&app);
     Ok(report)
 }
 

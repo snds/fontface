@@ -12,11 +12,10 @@
 //! **Opening at login** (`starts_hidden`). The login item starts Fontface with `--login`
 //! (login_item.rs). With the icon there, it starts with its window closed.
 //!
-//! **The menu** (`menu_slots`) is rebuilt only when what it shows changes: the count of fonts
-//! that are on until logout, read from the library, and the tags the page sends
-//! (`set_tray_tags`), which it turns on or off when one is chosen ("tray-tag"). Which fonts a
-//! tag covers is the page's to work out (src/tagActions.ts), so a tag switch runs there, with its
-//! progress and its summary.
+//! **The menu** (`menu_slots`) is short: Open Fontface, Turn Off Temporary Fonts, Settings… and
+//! Quit Fontface. It's rebuilt only when what it shows changes: the count of fonts that are on
+//! until logout, read from the library when the pointer reaches the icon, after a switch, and
+//! after launch's restore.
 //!
 //! Native menus can't show tooltips, so each label says what it does.
 
@@ -131,136 +130,60 @@ fn glyph_covers(x: f64, y: f64) -> bool {
 
 // ----------------------------------------------------------------------------- the menu
 
-/// A tag in the menu, as the page sends it: its name and whether its fonts are on.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrayTag {
-    pub id: i64,
-    pub name: String,
-    pub state: TagState,
-}
-
-/// Whether a tag's fonts are on, as its sidebar switch shows it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TagState {
-    /// All of them (the switch is on): choosing it turns them off.
-    On,
-    /// Some of them: choosing it turns on the rest.
-    #[serde(rename = "some")]
-    Partly,
-    Off,
-}
-
-/// At most this many tags are listed (the page picks recently used ones first).
-pub const MAX_TAGS: usize = 10;
-/// A tag name longer than this is shortened, with "…".
-const MAX_NAME: usize = 40;
-
-/// What the menu shows.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TrayModel {
-    /// Fonts that are on until logout (or until Fontface quits).
-    pub temporary: usize,
-    /// None until the page has sent its tags.
-    pub tags: Option<Vec<TrayTag>>,
-}
-
 /// What a menu item does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     Open,
-    FontList,
-    Tag(i64),
     TemporaryOff,
     Settings,
     Quit,
 }
 
-const ID_PREFIX: &str = "tray.";
-const TAG_PREFIX: &str = "tray.tag.";
+const ACTIONS: [TrayAction; 4] = [TrayAction::Open, TrayAction::TemporaryOff, TrayAction::Settings, TrayAction::Quit];
 
 impl TrayAction {
-    pub fn id(self) -> String {
+    pub fn id(self) -> &'static str {
         match self {
-            TrayAction::Open => "tray.open".into(),
-            TrayAction::FontList => "tray.fontList".into(),
-            TrayAction::Tag(id) => format!("{TAG_PREFIX}{id}"),
-            TrayAction::TemporaryOff => "tray.temporaryOff".into(),
-            TrayAction::Settings => "tray.settings".into(),
-            TrayAction::Quit => "tray.quit".into(),
+            TrayAction::Open => "tray.open",
+            TrayAction::TemporaryOff => "tray.temporaryOff",
+            TrayAction::Settings => "tray.settings",
+            TrayAction::Quit => "tray.quit",
         }
     }
 
     /// The action of a chosen menu item, if it's one of this menu's (the app menu's items come
     /// through the same handler).
     pub fn parse(id: &str) -> Option<TrayAction> {
-        if !id.starts_with(ID_PREFIX) {
-            return None;
-        }
-        if let Some(tag) = id.strip_prefix(TAG_PREFIX) {
-            return tag.parse().ok().filter(|t| *t > 0).map(TrayAction::Tag);
-        }
-        [TrayAction::Open, TrayAction::FontList, TrayAction::TemporaryOff, TrayAction::Settings, TrayAction::Quit]
-            .into_iter()
-            .find(|a| a.id() == id)
+        ACTIONS.into_iter().find(|a| a.id() == id)
     }
 }
 
 /// One line of the menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TraySlot {
-    Item { action: TrayAction, text: String, enabled: bool, checked: Option<bool> },
+    Item { action: TrayAction, text: String, enabled: bool },
     Separator,
-    Submenu { text: String, items: Vec<TraySlot> },
 }
 
 fn item(action: TrayAction, text: impl Into<String>, enabled: bool) -> TraySlot {
-    TraySlot::Item { action, text: text.into(), enabled, checked: None }
+    TraySlot::Item { action, text: text.into(), enabled }
 }
 
-/// The menu, top to bottom: open the window, the font list, the tags, temporary fonts off,
-/// Settings and Quit.
-pub fn menu_slots(model: &TrayModel) -> Vec<TraySlot> {
-    let mut slots = vec![
+/// The menu, top to bottom: open the window, temporary fonts off (`temporary`: how many fonts
+/// are on until logout, or until Fontface quits), Settings and Quit.
+pub fn menu_slots(temporary: usize) -> Vec<TraySlot> {
+    vec![
         item(TrayAction::Open, "Open Fontface", true),
-        item(TrayAction::FontList, "Turn On Fonts from a List…", true),
         TraySlot::Separator,
-    ];
-    if let Some(tags) = model.tags.as_ref().filter(|t| !t.is_empty()) {
-        let items = tags.iter().take(MAX_TAGS).map(tag_item).collect();
-        slots.push(TraySlot::Submenu { text: "Tags".into(), items });
-    }
-    slots.push(match model.temporary {
-        0 => item(TrayAction::TemporaryOff, "Turn Off Temporary Fonts", false),
-        n => item(TrayAction::TemporaryOff, format!("Turn Off Temporary Fonts ({n})"), true),
-    });
-    slots.extend([
+        match temporary {
+            0 => item(TrayAction::TemporaryOff, "Turn Off Temporary Fonts", false),
+            n => item(TrayAction::TemporaryOff, format!("Turn Off Temporary Fonts ({n})"), true),
+        },
         TraySlot::Separator,
         item(TrayAction::Settings, "Settings…", true),
         TraySlot::Separator,
         item(TrayAction::Quit, "Quit Fontface", true),
-    ]);
-    slots
-}
-
-/// A tag's line: its name, checked while all its fonts are on, "(some on)" while some are.
-fn tag_item(tag: &TrayTag) -> TraySlot {
-    let name = menu_text(&tag.name);
-    let text = if tag.state == TagState::Partly { format!("{name} (some on)") } else { name };
-    TraySlot::Item { action: TrayAction::Tag(tag.id), text, enabled: true, checked: Some(tag.state == TagState::On) }
-}
-
-/// A name as a menu item shows it: on one line, shortened past `MAX_NAME` characters, and with
-/// "&" doubled, since a single one marks the access key in a native menu (and is dropped).
-pub fn menu_text(name: &str) -> String {
-    let line: String = name.split_whitespace().collect::<Vec<_>>().join(" ");
-    let short = if line.chars().count() > MAX_NAME {
-        format!("{}…", line.chars().take(MAX_NAME - 1).collect::<String>().trim_end())
-    } else {
-        line
-    };
-    short.replace('&', "&&")
+    ]
 }
 
 // ------------------------------------------------------------------------- the running app
@@ -275,10 +198,9 @@ pub fn icon_shown() -> bool {
     ICON_SHOWN.load(Relaxed)
 }
 
-/// The menu's inputs and what it shows now.
+/// What the menu shows now.
 #[derive(Default)]
 pub struct TrayState {
-    tags: Mutex<Option<Vec<TrayTag>>>,
     shown: Mutex<Option<Vec<TraySlot>>>,
 }
 
@@ -306,7 +228,7 @@ pub fn show_icon(app: &AppHandle, on: bool) -> tauri::Result<()> {
 
 fn build(app: &AppHandle) -> tauri::Result<tauri::tray::TrayIcon> {
     use tauri::tray::TrayIconBuilder;
-    let slots = menu_slots(&TrayModel::default());
+    let slots = menu_slots(0);
     let menu = build_menu(app, &slots)?;
     let builder = TrayIconBuilder::with_id(TRAY_ID).tooltip("Fontface").menu(&menu);
     #[cfg(target_os = "macos")]
@@ -329,41 +251,23 @@ fn build(app: &AppHandle) -> tauri::Result<tauri::tray::TrayIcon> {
 }
 
 fn build_menu(app: &AppHandle, slots: &[TraySlot]) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-    type Item = Box<dyn IsMenuItem<tauri::Wry>>;
-    fn items(app: &AppHandle, slots: &[TraySlot]) -> tauri::Result<Vec<Item>> {
-        let mut out: Vec<Item> = Vec::with_capacity(slots.len());
-        for slot in slots {
-            out.push(match slot {
-                TraySlot::Separator => Box::new(PredefinedMenuItem::separator(app)?),
-                TraySlot::Item { action, text, enabled, checked: Some(checked) } => {
-                    Box::new(CheckMenuItem::with_id(app, action.id(), text, *enabled, *checked, None::<&str>)?)
-                }
-                TraySlot::Item { action, text, enabled, checked: None } => {
-                    Box::new(MenuItem::with_id(app, action.id(), text, *enabled, None::<&str>)?)
-                }
-                TraySlot::Submenu { text, items: inner } => {
-                    let inner = items(app, inner)?;
-                    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = inner.iter().map(|i| i.as_ref()).collect();
-                    Box::new(Submenu::with_items(app, text, true, &refs)?)
-                }
-            });
-        }
-        Ok(out)
+    use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+    let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::with_capacity(slots.len());
+    for slot in slots {
+        items.push(match slot {
+            TraySlot::Separator => Box::new(PredefinedMenuItem::separator(app)?),
+            TraySlot::Item { action, text, enabled } => Box::new(MenuItem::with_id(app, action.id(), text, *enabled, None::<&str>)?),
+        });
     }
-    let all = items(app, slots)?;
-    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = all.iter().map(|i| i.as_ref()).collect();
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|i| i.as_ref()).collect();
     Menu::with_items(app, &refs)
 }
 
-/// What the menu should show now.
-fn model(app: &AppHandle) -> TrayModel {
-    let temporary = app
-        .try_state::<AppState>()
+/// How many fonts are on until logout now, for the menu.
+fn temporary_now(app: &AppHandle) -> usize {
+    app.try_state::<AppState>()
         .and_then(|state| state.conn().ok().and_then(|conn| activation::temporary_on_count(&conn).ok()))
-        .unwrap_or(0);
-    let tags = app.try_state::<TrayState>().and_then(|s| s.tags.lock().unwrap_or_else(|p| p.into_inner()).clone());
-    TrayModel { temporary, tags }
+        .unwrap_or(0)
 }
 
 /// Brings the menu up to date, if the icon is there and something it shows has changed. Reads
@@ -373,7 +277,7 @@ pub fn refresh(app: &AppHandle) {
         return;
     }
     let (Some(state), Some(tray)) = (app.try_state::<TrayState>(), app.tray_by_id(TRAY_ID)) else { return };
-    let slots = menu_slots(&model(app));
+    let slots = menu_slots(temporary_now(app));
     let mut shown = state.shown.lock().unwrap_or_else(|p| p.into_inner());
     if shown.as_ref() == Some(&slots) {
         return;
@@ -400,17 +304,9 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
     };
     match action {
         TrayAction::Open => open(),
-        TrayAction::FontList => {
-            open();
-            let _ = app.emit_to("main", "open-font-list", ());
-        }
         TrayAction::Settings => {
             open();
             let _ = app.emit_to("main", "open-settings", ());
-        }
-        // The page turns the tag's fonts on or off; the window stays as it is.
-        TrayAction::Tag(id) => {
-            let _ = app.emit_to("main", "tray-tag", id);
         }
         TrayAction::TemporaryOff => {
             let app = app.clone();
@@ -472,17 +368,6 @@ fn turn_off_temporary(app: &AppHandle) -> AppResult<TemporaryOff> {
         }
     }
     Ok(report)
-}
-
-/// The page's tags for the menu: recently used ones first, at most `MAX_TAGS`, with whether
-/// their fonts are on. Sent again whenever that changes.
-#[tauri::command(async)]
-pub fn set_tray_tags(app: AppHandle, tags: Vec<TrayTag>) -> AppResult<()> {
-    if let Some(state) = app.try_state::<TrayState>() {
-        *state.tags.lock().unwrap_or_else(|p| p.into_inner()) = Some(tags.into_iter().take(MAX_TAGS).collect());
-    }
-    refresh(&app);
-    Ok(())
 }
 
 /// After a settings change: the icon follows "Show Fontface in the menu bar".

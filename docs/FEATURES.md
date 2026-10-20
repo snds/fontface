@@ -263,7 +263,7 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Export tags as CSV or a Typeface backup | ✅ | ⬜ |
 | Export tags as Finder tags or Font Book collections | ✅ | n/a |
 | Export / import the rest of the library (folders, on/off choices) | ⬜ | ⬜ |
-| Menu bar icon (Windows: notification area), `src-tauri/src/tray.rs`: Open Fontface, Turn On Fonts from a List…, Tags (up to 10, recently switched ones first, checked when all on, "(some on)" when some; choosing one works like its sidebar switch), Turn Off Temporary Fonts (with how many are on until logout), Settings…, Quit Fontface. A template image on macOS, so it suits light and dark menu bars. On Windows a click opens the window and a right-click the menu; written but not yet built there. Not yet checked in the running app | 🟡 | ⬜ |
+| Menu bar icon (Windows: notification area), `src-tauri/src/tray.rs`: Open Fontface, Turn Off Temporary Fonts (with how many are on until logout; greyed out when none are), Settings…, Quit Fontface. A template image on macOS, so it suits light and dark menu bars. On Windows a click opens the window and a right-click the menu; written but not yet built there. Not yet checked in the running app | 🟡 | ⬜ |
 | Launch at login | 🟡 | ⬜ |
 | Auto-activate fonts a design file needs | ⬜ | ⬜ |
 | Auto-activation test, listen and log (`FONTFACE_LISTEN_FONT_REQUESTS=1` at launch): logs which apps ask macOS for a missing font, what each request holds and whether the library has it; answers "no fonts", so nothing changes for the asking app (docs/AUTO-ACTIVATION-TEST.md). Not yet tried with other apps | 🟡 | n/a |

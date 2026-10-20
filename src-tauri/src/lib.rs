@@ -354,7 +354,6 @@ pub fn run() {
             commands::app_data_reveal,
             window::title_bar_double_click,
             window::set_menu_state,
-            tray::set_tray_tags,
             removed::fonts_remove,
             removed::fonts_removed,
             removed::fonts_put_back,

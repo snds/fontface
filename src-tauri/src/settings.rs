@@ -289,9 +289,6 @@ pub struct AppSettings {
     /// "Installed" (yours first) on a font service's catalog page (Google Fonts): families you have,
     /// downloaded or already in your library, come before the rest. On by default.
     pub catalog_yours_first: bool,
-    /// The tags turned on or off most recently, newest first: the menu bar icon's Tags menu
-    /// always lists them. Remembered by the UI, at most `RECENT_TAGS`.
-    pub recent_tags: Vec<i64>,
 }
 
 impl Default for AppSettings {
@@ -323,7 +320,6 @@ impl Default for AppSettings {
             preview: PreviewOptions::default(),
             google_previews: true,
             catalog_yours_first: true,
-            recent_tags: Vec::new(),
         }
     }
 }
@@ -335,8 +331,6 @@ pub const COLUMN_WIDTH: RangeInclusive<u32> = 32..=1200;
 pub const MAX_COLUMNS: usize = 40;
 pub const BACKUP_KEEP: RangeInclusive<u32> = 1..=50;
 pub const MAX_PREVIEW_TEXT: usize = 500;
-/// How many recently used tags are remembered.
-pub const RECENT_TAGS: usize = 8;
 
 // ------------------------------------------------------------------------------- changes
 
@@ -433,7 +427,6 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
         "preview" => s.preview = preview_options(&s.preview, value)?,
         "googlePreviews" => s.google_previews = flag(value, "Show previews of Google Fonts you haven't downloaded")?,
         "catalogYoursFirst" => s.catalog_yours_first = flag(value, "Installed")?,
-        "recentTags" => s.recent_tags = recent_tags(value)?,
         // A setting from a newer Fontface, or a typo: ignored.
         _ => {}
     }
@@ -491,20 +484,6 @@ fn preview_features(value: &Value) -> AppResult<Vec<String>> {
         asked.push(item.as_str().ok_or_else(bad)?);
     }
     Ok(PREVIEW_FEATURES.iter().filter(|f| asked.contains(f)).map(|f| f.to_string()).collect())
-}
-
-/// A list of tag ids, newest first. Each is kept once, in its first place, and only the first
-/// `RECENT_TAGS`. Tags that no longer exist are the UI's to skip.
-fn recent_tags(value: &Value) -> AppResult<Vec<i64>> {
-    let bad = || invalid("Recent tags must be a list of tag numbers");
-    let mut ids: Vec<i64> = Vec::new();
-    for item in value.as_array().ok_or_else(bad)? {
-        let id = item.as_i64().filter(|id| *id > 0).ok_or_else(bad)?;
-        if ids.len() < RECENT_TAGS && !ids.contains(&id) {
-            ids.push(id);
-        }
-    }
-    Ok(ids)
 }
 
 /// `{ key, desc }`: the key is required, the direction defaults to the usual one.
