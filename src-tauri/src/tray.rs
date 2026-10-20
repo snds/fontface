@@ -170,16 +170,14 @@ fn item(action: TrayAction, text: impl Into<String>, enabled: bool) -> TraySlot 
 }
 
 /// The menu, top to bottom: open the window, temporary fonts off (`temporary`: how many fonts
-/// are on until logout, or until Fontface quits), Settings and Quit.
+/// are on until logout, or until Fontface quits) and Settings, then one line, then Quit.
 pub fn menu_slots(temporary: usize) -> Vec<TraySlot> {
     vec![
         item(TrayAction::Open, "Open Fontface", true),
-        TraySlot::Separator,
         match temporary {
             0 => item(TrayAction::TemporaryOff, "Turn Off Temporary Fonts", false),
             n => item(TrayAction::TemporaryOff, format!("Turn Off Temporary Fonts ({n})"), true),
         },
-        TraySlot::Separator,
         item(TrayAction::Settings, "Settings…", true),
         TraySlot::Separator,
         item(TrayAction::Quit, "Quit Fontface", true),

@@ -1234,12 +1234,12 @@ fn lines(slots: &[TraySlot]) -> Vec<String> {
 fn the_menu_is_short_and_says_what_each_item_does() {
     assert_eq!(
         lines(&tray::menu_slots(0)),
-        vec!["Open Fontface", "-", "Turn Off Temporary Fonts (disabled)", "-", "Settings…", "-", "Quit Fontface"],
+        vec!["Open Fontface", "Turn Off Temporary Fonts (disabled)", "Settings…", "-", "Quit Fontface"],
         "nothing on until logout: nothing to turn off"
     );
     assert_eq!(
         lines(&tray::menu_slots(12)),
-        vec!["Open Fontface", "-", "Turn Off Temporary Fonts (12)", "-", "Settings…", "-", "Quit Fontface"]
+        vec!["Open Fontface", "Turn Off Temporary Fonts (12)", "Settings…", "-", "Quit Fontface"]
     );
 }
 
