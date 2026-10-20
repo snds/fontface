@@ -194,9 +194,9 @@ export function TagMenuItems({ kit, tag, set }: { kit: Kit; tag: Tag; set: reado
   );
 }
 
-/** What a source's color is for: its icon in the sidebar, and the dots that mark where each font
- *  in a list lives. */
-const LOCATION_COLOR_TIP = "Changes the color of its icon and of the dots that mark its fonts";
+/** What a source's color is for: the dots that mark where each font in a list lives. (Its sidebar
+ *  icon is an outline in the text color.) */
+const LOCATION_COLOR_TIP = "Changes the color of the dots that mark its fonts in lists";
 
 /** "Locate…", for a folder that can't be found. */
 function LocateItem({ onLocate }: { onLocate: () => void }) {

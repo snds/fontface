@@ -139,6 +139,9 @@ export interface TipProps {
   description?: string;
   /** Keeps the tooltip from showing (the control is unchanged), e.g. while its own menu is open. */
   hide?: boolean;
+  /** false: a click leaves the tooltip open. Only for a button whose whole job is to show its
+   *  tooltip (an (i) that explains a section). Default true: a click closes it. */
+  closeOnClick?: boolean;
   /** Classes for the tooltip's popup (e.g. "max-w-64" for a longer one). */
   contentClassName?: string;
   /** A shared tooltip (createTipHandle, TipHost), for rows of a virtualised list. */
@@ -163,6 +166,7 @@ export function Tip({
   describe = true,
   description,
   hide = false,
+  closeOnClick = true,
   contentClassName,
   handle,
   children,
@@ -188,10 +192,10 @@ export function Tip({
   );
   // The trigger takes the control's own id, so Base UI's and the DOM's agree.
   const tooltip = handle ? (
-    <TooltipTrigger handle={handle} payload={{ content, side, align, className: contentClassName }} delay={delay} disabled={hide} id={own.id} render={trigger} />
+    <TooltipTrigger handle={handle} payload={{ content, side, align, className: contentClassName }} delay={delay} disabled={hide} closeOnClick={closeOnClick} id={own.id} render={trigger} />
   ) : (
     <Tooltip disabled={hide}>
-      <TooltipTrigger delay={delay} id={own.id} render={trigger} />
+      <TooltipTrigger delay={delay} closeOnClick={closeOnClick} id={own.id} render={trigger} />
       <TooltipContent side={side} align={align} className={contentClassName}>
         {content}
       </TooltipContent>

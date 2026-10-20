@@ -1249,7 +1249,7 @@ fn only_the_menu_bar_menu_items_are_its_own() {
     assert_eq!(TrayAction::parse("tray.temporaryOff"), Some(TrayAction::TemporaryOff));
     assert_eq!(TrayAction::parse("tray.settings"), Some(TrayAction::Settings));
     assert_eq!(TrayAction::parse("tray.quit"), Some(TrayAction::Quit));
-    for other in ["settings", "file.fontList", "view.tiles", "tray.fontList", "tray.tag.4", "tray.nope", "quit", ""] {
+    for other in ["settings", "file.quit", "view.tiles", "tray.fontList", "tray.tag.4", "tray.nope", "quit", ""] {
         assert_eq!(TrayAction::parse(other), None, "{other}");
     }
 }

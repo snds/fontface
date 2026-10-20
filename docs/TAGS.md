@@ -8,7 +8,8 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 
 ## Using tags
 
-- **Make a tag:** the "+" (New tag) button in the sidebar's Tags section, or "Create" in any tag picker.
+- **Make a tag:** the "+" at the bottom of the sidebar › New Tag…, right-click the Tags divider ›
+  New Tag…, or "Create" in any tag picker.
 - **Tag fonts:** right-click a row, a selection or a font page and choose **Add to tag**
   (the tag tree, plus **Find a tag…** to search and **New tag…**). **Remove from tag** lists the
   tags they have, with "2/5" when only some of them have it. The tag button on a row (shown on
@@ -32,25 +33,29 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
   tag opens it), onto "Move to the top level" (shown while dragging a nested tag), or use **Move
   to** in its menu. Tags are listed alphabetically, so there's no manual order.
 - **Open and close** nested tags with the arrow, Option-click it to open or close every tag inside,
-  or use "Open all tags" and "Close all tags" in the Tags "…" menu. With a tag focused, Right
-  opens it and Left closes it (or moves to the tag above).
-- **Turn a whole tag on or off.** The small switch on a tag's row turns on every font in the tag
-  and in the tags inside it; switching a nested tag covers only that tag (and the tags inside
-  it). The switch shows the state: on when they all are, a paler track when some are. While none
-  are on it shows only when the row is hovered or focused, like the "…" button. Option-click
-  turns them on the other way (until logout, or to stay), as on a font's switch. The tag's menu
-  has the same: **Turn on all fonts**, the same until logout (or to stay), and **Turn off all
-  fonts**, each greyed out with a reason when there's nothing to do. It goes through the same path
-  as a font's switch (one request at a time, busy marks, sync), in about ten requests for a big
-  tag, with a toast that counts up and a last one that says how many turned on and why any
-  didn't. Fonts installed in a macOS font folder are always on and left alone. Turning a tag off
-  turns off every font in it, however it was turned on (its own switch, its family's or another
-  tag's): Fontface records whether a font should be on, not why, and a family switch works the
-  same way.
+  or use "Open All Tags" and "Close All Tags" in the Tags divider's right-click menu. With a tag
+  focused, Right opens it and Left closes it (or moves to the tag above, its group's heading, or
+  the Tags divider).
+- **Turn a whole tag on or off** from its "…" button or its right-click menu: **Turn on all
+  fonts**, the same until logout (or to stay), and **Turn off all fonts**, each greyed out with a
+  reason when there's nothing to do. It covers every font in the tag and in the tags inside it;
+  on a nested tag, only that tag (and the tags inside it). (The small switch that rows had until
+  2026-10-20 is gone, to keep the sidebar quiet.) It goes through the same path as a font's
+  switch (one request at a time, busy marks, sync), in about ten requests for a big tag, with a
+  toast that counts up and a last one that says how many turned on and why any didn't. Fonts
+  installed in a macOS font folder are always on and left alone. Turning a tag off turns off
+  every font in it, however it was turned on (a font's switch, its family's or another tag's):
+  Fontface records whether a font should be on, not why, and a family switch works the same way.
 - **Rename, recolor, nest, export or delete** a tag from its "…" button or by right-clicking it.
   Renaming moves the tags inside it too. Deleting removes the tags inside it as well; the fonts
   themselves are never touched. Every item in the tag menus has a tooltip saying what it does,
   or why it's greyed out.
+- **The Tags section** has no heading: a divider with a label icon starts it. Click the icon, or
+  press Left or Right on it, to collapse or expand the section; right-click the divider (or
+  Shift-F10 on it) for New Tag…, Import Tags…, Export Tags…, Open and Close All Tags and Collapse
+  Section. The (i) beside the icon explains tags in one tooltip (hover it, or focus it with Tab);
+  tags and group headings have no tooltips of their own. A tag shows its style count only while
+  it's hovered, focused or being viewed; screen readers always hear it.
 - **My tags and Built-in.** Tags come in two groups, each under a small heading in the sidebar
   that opens and closes it (click it, or Right and Left with it focused) and shows how many tags
   it holds. **My tags** comes first and starts open. **Built-in** holds tags that came with other
@@ -82,9 +87,10 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 
 Sources are colored from their row in the sidebar: right-click the row (or focus it and press
 Shift-F10) and pick a color. Picking the color marked "(default)", or "Use default color", goes
-back to the default. The color tints the source's icon, and each font row shows a small dot in
-the color of the sources its copies come from (hover for the list of places; screen readers
-hear the places, after the row's name, with its tags). A font always takes its source's color:
+back to the default. The sidebar's source icons are outlines in the text color, so the color
+shows on fonts: each font row shows a small dot in the color of the sources its copies come from
+(hover for the list of places; screen readers hear the places, after the row's name, with its
+tags). A font always takes its source's color:
 folders inside a source have no color of their own.
 
 Earlier versions could color a folder inside a source, or one of Font Book's three macOS font
@@ -206,8 +212,8 @@ clashing. `ensure_schema` uses `CREATE TABLE IF NOT EXISTS`. Add any new column 
 
 ## Importing
 
-Import tags… (the "…" button next to Tags) opens a preview first. It lists each tag, how many
-styles in your library it will be on, how many are new, and how many of its fonts aren't in
+Import Tags… (in the sidebar's "+" menu, or the Tags divider's right-click menu) opens a preview
+first. It lists each tag, how many styles in your library it will be on, how many are new, and how many of its fonts aren't in
 the library. Nothing changes until you press Import. Running the same import again adds
 nothing: tags merge by name and each font gets a tag once.
 
@@ -453,7 +459,7 @@ covers `check_edit`: every change refused on a built-in tag and inside it, your 
 before, imports still filling them, and everything open again once it's yours.
 
 `npm run test:ui` covers the rest in `src/tagActions.test.ts`: a tag's set (a parent includes
-its nested tags' fonts, a nested tag only its own subtree, each font once), the switch plan (off
+its nested tags' fonts, a nested tag only its own subtree, each font once), the on/off plan (off
 fonts only, one copy each, every copy to turn off, whole files in about ten requests), the result
 and its words, the menu items' states and tooltips, and the read-only rules.
 

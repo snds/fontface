@@ -1,5 +1,5 @@
 //! The main window's native side: the macOS menu bar (with the View and Font menus the page
-//! drives), double-clicking the title bar, the window's color before the page paints, and hiding
+//! drives), the window's File menu on Windows and Linux, double-clicking the title bar, the window's color before the page paints, and hiding
 //! the window when it's closed (with the Dock icon, on macOS; see tray.rs).
 //!
 //! On macOS the title bar is an overlay (src-tauri/tauri.macos.conf.json): the page draws the
@@ -10,9 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 #[cfg(target_os = "macos")]
 use std::sync::Mutex;
 
-#[cfg(target_os = "macos")]
-use tauri::Emitter;
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 use crate::{
     error::{AppError, AppResult},
@@ -21,14 +19,14 @@ use crate::{
 
 // ----------------------------------------------------------------------------------- menu
 
-/// The id of the app menu's "Settings…" item.
-#[cfg(target_os = "macos")]
+/// The id of the "Settings…" item: in the app menu on macOS, in the window's File menu
+/// elsewhere. There's no Settings button in the window itself.
 const SETTINGS_ITEM: &str = "settings";
 
-/// The id of the File menu's "Turn On Fonts from a List…" item. Always there, whatever the page
-/// shows: it opens a dialog of its own.
-#[cfg(target_os = "macos")]
-const FONT_LIST_ITEM: &str = "file.fontList";
+/// The id of the File menu's "Exit" (Windows) or "Quit" (Linux) item. macOS quits from the app
+/// menu instead.
+#[cfg(not(target_os = "macos"))]
+const QUIT_ITEM: &str = "file.quit";
 
 /// One item of the View or Font menu. Choosing it sends "menu" to the page with its id, and the
 /// page keeps the items' state in step with what's on screen (`set_menu_state`). The ids must
@@ -307,8 +305,7 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
             &Item::quit(app, None)?,
         ],
     )?;
-    let font_list = MenuItem::with_id(app, FONT_LIST_ITEM, "Turn On Fonts from a List…", true, None::<&str>)?;
-    let file = Submenu::with_items(app, "File", true, &[&font_list, &Item::separator(app)?, &Item::close_window(app, None)?])?;
+    let file = Submenu::with_items(app, "File", true, &[&Item::close_window(app, None)?])?;
     let edit = Submenu::with_items(
         app,
         "Edit",
@@ -345,8 +342,7 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
 }
 
 /// "Settings…": brings the window back if it was closed (see `hide`) and sends "open-settings"
-/// to the page, which opens the settings screen. "Turn On Fonts from a List…" does the same with
-/// "open-font-list", which opens that dialog. A View or Font menu item brings it back too and
+/// to the page, which opens the settings screen. A View or Font menu item brings it back too and
 /// sends "menu" with the item's id; the page checks it still applies (the menus can lag a
 /// moment behind the page) and that its own key handler hasn't already acted on the same key
 /// press (src/fontActions.ts, `createShortcutGuard`).
@@ -354,7 +350,7 @@ pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>>
 pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref();
     let page_id = page_menu_id(id);
-    if id != SETTINGS_ITEM && id != FONT_LIST_ITEM && page_id.is_none() {
+    if id != SETTINGS_ITEM && page_id.is_none() {
         return;
     }
     // A check item's mark goes back to what the page said (macOS flipped it on the click); the
@@ -371,12 +367,42 @@ pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         Some(id) => {
             let _ = app.emit_to("main", "menu", id);
         }
-        None if id == FONT_LIST_ITEM => {
-            let _ = app.emit_to("main", "open-font-list", ());
-        }
         None => {
             let _ = app.emit_to("main", "open-settings", ());
         }
+    }
+}
+
+/// Windows and Linux: the window's own menu bar, with File › Settings… (Ctrl+,), since there's no
+/// app menu as on macOS and no Settings button in the window, then File › Exit (Windows) or
+/// Quit (Linux, Ctrl+Q). The page handles Ctrl+, itself too (App.tsx); if both act on one key
+/// press, the second only moves to the settings' search field.
+#[cfg(not(target_os = "macos"))]
+pub fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem as Item, Submenu};
+    let settings = MenuItem::with_id(app, SETTINGS_ITEM, "Settings…", true, Some("CmdOrCtrl+,"))?;
+    let quit = if cfg!(target_os = "windows") {
+        MenuItem::with_id(app, QUIT_ITEM, "Exit", true, None::<&str>)?
+    } else {
+        MenuItem::with_id(app, QUIT_ITEM, "Quit", true, Some("CmdOrCtrl+Q"))?
+    };
+    let file = Submenu::with_items(app, "File", true, &[&settings, &Item::separator(app)?, &quit])?;
+    Menu::with_items(app, &[&file])
+}
+
+/// Windows and Linux: File › Settings… brings the window back (see `hide`) and sends
+/// "open-settings" to the page; File › Exit quits, as the menu bar icon's Quit does.
+#[cfg(not(target_os = "macos"))]
+pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
+    match event.id().as_ref() {
+        SETTINGS_ITEM => {
+            if let Some(window) = app.get_webview_window("main") {
+                show(&window);
+            }
+            let _ = app.emit_to("main", "open-settings", ());
+        }
+        QUIT_ITEM => app.exit(0),
+        _ => {}
     }
 }
 

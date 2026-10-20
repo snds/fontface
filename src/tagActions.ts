@@ -1,13 +1,14 @@
 import type { ActivationMode, ActivationOutcome } from "./api.ts";
-import { optionClickHint, otherMode } from "./fontActions.ts";
-import { summarize, switchLook, type StateSummary } from "./fontState.ts";
+import { otherMode } from "./fontActions.ts";
+import { summarize } from "./fontState.ts";
 import { activationIds, INSTALLED_LABEL, type Face, type Family } from "./library.ts";
 
 /**
- * What can be done to a tag, and what it covers: the tag's right-click and "…" menus, the switch
- * on its sidebar row, and which tags take fonts or other tags by hand. One set of rules and one
- * set of words, so every place says the same thing. Pure (no React, no DOM), so `npm run
- * test:ui` covers it; src/tags/ draws it and src/tags/switching.ts runs the switch.
+ * What can be done to a tag, and what it covers: the tag's right-click and "…" menus (turning
+ * its fonts on or off among them), and which tags take fonts or other tags by hand. One set of
+ * rules and one set of words, so every place says the same thing. Pure (no React, no DOM), so
+ * `npm run test:ui` covers it; src/tags/ draws it and src/tags/switching.ts turns the fonts on
+ * or off.
  *
  * **A tag's set.** Turning a tag on or off works on every font tagged with it or with any tag
  * nested inside it: "Sci-Fi" covers "Sci-Fi/Star Trek" too, while "Sci-Fi/Star Trek" covers only
@@ -274,23 +275,6 @@ export function tagSwitchStates(name: string, set: readonly Face[], ctx: TagSwit
   return { turnOn: turnOn(ctx.mode), turnOnOther: turnOn(otherMode(ctx.mode)), turnOff };
 }
 
-/** What the switch on a tag's sidebar row says in its tooltip. `mac`: Option-click, else Alt-click. */
-export function tagSwitchTip(name: string, s: StateSummary, { mode, untilQuit = false, mac = true }: TagSwitchContext & { mac?: boolean }): string {
-  if (s.lock) return ALWAYS_ON_TIP;
-  const { checked, partial } = switchLook(s);
-  const one = s.total === 1;
-  if (checked) {
-    if (s.on === 0) return `The fonts in “${name}” are set to turn on, but none are on right now. Click to turn them off.`;
-    if (s.waiting > 0) {
-      return `${s.on.toLocaleString()} of ${fonts(s.total)} in “${name}” ${s.on === 1 ? "is" : "are"} on. ${fonts(s.waiting)} ${s.waiting === 1 ? "is" : "are"} set to turn on but ${s.waiting === 1 ? "isn't" : "aren't"} on yet. Click to turn them all off.`;
-    }
-    return one ? `The font in “${name}” is on. Click to turn it off.` : `All ${fonts(s.total)} in “${name}” are on. Click to turn them off.`;
-  }
-  const hint = optionClickHint(mode, mac, untilQuit);
-  if (partial) return `${s.on.toLocaleString()} of ${fonts(s.total)} in “${name}” ${s.on === 1 ? "is" : "are"} on. Click to turn on the rest. ${hint}`;
-  return `${one ? "Turns on the font" : `Turns on all ${fonts(s.total)}`} in “${name}”. ${hint}`;
-}
-
 // ------------------------------------------------------------------------ editing a tag
 
 /** Enough of a tag for the rules. */
@@ -303,10 +287,6 @@ export type TagEditId = "rename" | "color" | "newInside" | "moveTo" | "export" |
 
 /** Said wherever fonts would be added to a built-in tag or taken off it. */
 export const BUILTIN_FONTS_TIP = "Fonts can't be added to built-in tags or taken off them by hand. Choose “Make it my tag” first.";
-
-/** What a built-in tag is, for its group's heading in the sidebar. */
-export const BUILTIN_HINT =
-  "Tags another app made for you, such as Fixed Width and Style. They're read-only: you can view, turn on and export them. To change one, choose “Make it my tag”.";
 
 /**
  * The tag menu's editing actions for `tag` (`top`: its top-level tag, which decides its group).

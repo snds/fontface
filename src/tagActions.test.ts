@@ -1,8 +1,8 @@
-// Run with `npm run test:ui`. A tag's set of fonts, its switch, and what can be done to it (tagActions.ts).
+// Run with `npm run test:ui`. A tag's set of fonts, turning it on or off, and what can be done to it
+// (tagActions.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ActivationOutcome, FontSummary } from "./api.ts";
-import { summarize } from "./fontState.ts";
 import { groupFamilies, type Face } from "./library.ts";
 import {
   canNestIn,
@@ -13,7 +13,6 @@ import {
   tagSwitchMessage,
   tagSwitchResult,
   tagSwitchStates,
-  tagSwitchTip,
   type TagLookup,
 } from "./tagActions.ts";
 
@@ -258,19 +257,6 @@ test("the tag menu's on and off items", () => {
   const nothing = tagSwitchStates("Empty", [], { mode: "persistent" });
   assert.ok(!nothing.turnOn.enabled && !nothing.turnOnOther.enabled && !nothing.turnOff.enabled);
   assert.equal(nothing.turnOff.tip, "No fonts in your library have this tag");
-
-  // The row switch's tooltip.
-  assert.equal(
-    tagSwitchTip("Sci-Fi", summarize([lib.face(a)]), { mode: "persistent", mac: true }),
-    "Turns on the font in “Sci-Fi”. Option-click to turn on until you log out.",
-  );
-  assert.match(tagSwitchTip("Sci-Fi", summarize(set), { mode: "persistent" }), /^1 of 2 fonts in “Sci-Fi” is on\. Click to turn on the rest\./);
-  assert.equal(tagSwitchTip("Sci-Fi", summarize([lib.face(b)]), { mode: "persistent" }), "The font in “Sci-Fi” is on. Click to turn it off.");
-  const waiting = library([font("W", "Regular", WAITING), font("X", "Regular", ON)].map((f) => [f, [SCIFI]] as [FontSummary, number[]]));
-  assert.equal(
-    tagSwitchTip("Sci-Fi", summarize(facesByTag(waiting.families, waiting.lookup).get(SCIFI)!), { mode: "persistent" }),
-    "1 of 2 fonts in “Sci-Fi” is on. 1 font is set to turn on but isn't on yet. Click to turn them all off.",
-  );
 });
 
 test("built-in tags are read-only, except to export them or make them your own", () => {

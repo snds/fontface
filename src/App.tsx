@@ -8,7 +8,6 @@ import {
   type ActivationMode,
   type ActivationOutcome,
   type Folder,
-  type FoundFace,
   type RemoveReport,
   type FontPageTab,
   type FontSummary,
@@ -39,7 +38,6 @@ import {
   sortFamilies,
   ungroup,
   viewKey,
-  type Face,
   type Family,
   type FilterContext,
   type LibraryView,
@@ -88,7 +86,7 @@ import { Icon } from "@/components/ui/icon";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { SETTINGS_BUTTON_ID, Sidebar, scanStatus } from "@/components/Sidebar";
+import { Sidebar, currentSidebarRow, scanStatus } from "@/components/Sidebar";
 import { LIBRARY_SEARCH_ID, Toolbar } from "@/components/Toolbar";
 import { LibraryPane, type ListHandle, type OpenRequest } from "@/components/library/LibraryPane";
 import { FontActionsContext, type FontActionsApi } from "@/components/FontActions";
@@ -97,7 +95,6 @@ import { ComparePage, type FaceRef } from "@/components/ComparePage";
 import { PairPage } from "@/components/PairPage";
 import { RemoveFontsDialog, type RemovalRequest } from "@/components/RemoveFontsDialog";
 import { SKIPPED_DETAILS_TIP, SkippedFilesDialog, type SkippedRequest } from "@/components/SkippedFilesDialog";
-import { FontListDialog } from "@/components/FontListDialog";
 import { skippedSummary } from "@/skippedFiles";
 import { newPurchaseCount } from "@/purchaseWatch";
 import { REVEAL_LABEL } from "@/components/fontPage/InfoTab";
@@ -218,9 +215,6 @@ export default function App() {
   /** The source whose skipped files are listed (Show Skipped Files…, or a scan's Details). */
   const [skippedList, setSkippedList] = useState<SkippedRequest | null>(null);
   const showSkipped = useCallback((name: string, skipped: SkippedFiles) => setSkippedList({ name, skipped, returnFocus: noteFocus() }), []);
-  /** Turn On Fonts from a List… is open, with what takes focus when it closes. */
-  const [fontList, setFontList] = useState<{ returnFocus: () => HTMLElement | null } | null>(null);
-  const openFontList = useCallback(() => setFontList((open) => open ?? { returnFocus: noteFocus() }), []);
   /** Files with an on/off request queued or in progress. The OS acts on whole files, so every
    *  style with a copy in one of these files shows as busy. */
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -307,7 +301,7 @@ export default function App() {
   }, [loadFonts]);
 
   // Settings open over the library (which stays as it was underneath). Focus comes back to
-  // where it was, or to the Settings button.
+  // where it was, or to the sidebar's current place.
   const settingsOpenRef = useRef(false);
   settingsOpenRef.current = settingsOpen;
   const focusBack = useRef<Element | null>(null);
@@ -332,7 +326,7 @@ export default function App() {
     openSettings();
   }, [openSettings]);
   /** `restoreFocus: false`: the same action opens a page, whose heading takes focus (focus going
-   *  back to the Settings button a frame later would pull it off the page). */
+   *  back to where it was a frame later would pull it off the page). */
   const closeSettings = useCallback(({ restoreFocus = true }: { restoreFocus?: boolean } = {}) => {
     if (!settingsOpenRef.current) return;
     setSettingsOpen(false);
@@ -342,7 +336,7 @@ export default function App() {
     }
     requestAnimationFrame(() => {
       const back = focusBack.current;
-      const target = back instanceof HTMLElement && back.isConnected && back !== document.body ? back : document.getElementById(SETTINGS_BUTTON_ID);
+      const target = back instanceof HTMLElement && back.isConnected && back !== document.body ? back : currentSidebarRow();
       target?.focus();
     });
   }, []);
@@ -624,7 +618,7 @@ export default function App() {
             goToPlace({ kind: "service", id: "purchases" });
             openCatalog("purchases");
             // The page opens in the library, so leave settings if they're open. Its heading
-            // takes focus, so focus doesn't go back to the Settings button.
+            // takes focus, so focus doesn't go back to where it was before settings.
             closeSettings({ restoreFocus: false });
           },
         },
@@ -725,14 +719,6 @@ export default function App() {
       unlisten.then((fn) => fn()).catch(() => {});
     };
   }, [openSettingsByShortcut]);
-
-  // File › Turn On Fonts from a List… (macOS) sends "open-font-list".
-  useEffect(() => {
-    const unlisten = listen("open-font-list", openFontList);
-    return () => {
-      unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, [openFontList]);
 
   const addFolder = async () => {
     const path = await open({ directory: true, multiple: false, title: "Add a font folder" });
@@ -1142,8 +1128,6 @@ export default function App() {
   const library = useMemo(() => groupLibrary(fonts, grouping), [fonts, grouping]);
   const allFamilies = library.families;
   const fontById = useMemo(() => new Map(fonts.map((f) => [f.id, f])), [fonts]);
-  /** Every style by face key: Turn On Fonts from a List… finds styles by key. */
-  const faceByKey = useMemo(() => new Map(allFamilies.flatMap((family) => family.faces.map((face) => [face.key, face] as const))), [allFamilies]);
   // Per-folder style counts, matching what each folder's view lists.
   const folderCounts = useMemo(() => {
     const map = new Map<number, number>();
@@ -1193,22 +1177,6 @@ export default function App() {
   const activationMode = settings?.activationMode ?? DEFAULT_SETTINGS.activationMode;
   const stateWording = useMemo<SwitchWording>(() => ({ untilQuit, mode: activationMode }), [untilQuit, activationMode]);
 
-  /** The library's styles for what Turn On Fonts from a List… found. */
-  const listedFaces = (found: readonly FoundFace[]): Face[] => found.flatMap((f) => faceByKey.get(f.key) ?? []);
-  /** Turn On Fonts from a List…'s Turn On: one copy of each style, as a switch would (the user's
-   *  own choice), then says how many came on. */
-  const turnOnFromList = async (found: FoundFace[], scope: ActivationMode | null) => {
-    const faces = listedFaces(found);
-    // A style the list on screen doesn't have yet (a scan is adding it): its first copy.
-    const unlisted = found.filter((f) => !faceByKey.has(f.key) && !f.installed && f.ids.length).map((f) => f.ids[0]);
-    const on = await setActivation([...activationIds(faces, true), ...unlisted], true, undefined, scope);
-    const turned = faces.filter((face) => face.copies.some((c) => on.has(c.path))).length + unlisted.length;
-    if (!on.size) return;
-    const until = (scope ?? activationMode) === "temporary" ? (untilQuit ? " until you quit Fontface" : " until logout") : "";
-    const words = `Turned on ${turned.toLocaleString()} ${turned === 1 ? "style" : "styles"} from the list${until}`;
-    toast.success(words);
-    announce(words);
-  };
   const chooseLayout = useCallback(
     (next: LibraryLayout) => {
       updateSettings({ layout: next });
@@ -1738,11 +1706,13 @@ export default function App() {
               onRemoveFolder={setPendingRemoval}
               onRescan={(f) => scan(f)}
               onCancelScan={(f) => api.cancelScan(f.id).catch((e) => toast.error(String(e)))}
-              onOpenSettings={openSettings}
+              onImportPurchases={() => {
+                goToPlace({ kind: "service", id: "purchases" });
+                openCatalog("purchases");
+              }}
               onLocateFolder={relocate}
               onRevealFolder={(f) => api.revealFolder(f.id).catch((e) => toast.error(`Couldn't show ${f.label}`, { description: String(e) }))}
               onShowSkipped={showSkipped}
-              onFontList={openFontList}
             />
             <main className="relative flex min-h-0 min-w-0 flex-col outline-none" tabIndex={-1}>
               {/* The list layer: the place picked in the sidebar. While a page is open it stays as it
@@ -1993,7 +1963,7 @@ export default function App() {
               onOpenPurchases={() => {
                 goToPlace({ kind: "service", id: "purchases" });
                 openCatalog("purchases");
-                // The page's heading takes focus (not the Settings button).
+                // The page's heading takes focus (not where focus was before settings).
                 closeSettings({ restoreFocus: false });
               }}
               onReviewFamilyGroups={() => openFamilyGroups()}
@@ -2016,21 +1986,6 @@ export default function App() {
         <RemoveFontsDialog request={removal} onConfirm={(r) => void confirmRemoval({ ...r, closePage: removal?.closePage ?? null })} onCancel={() => setRemoval(null)} />
         {/* The files a source's latest scan found but didn't add, and why. */}
         <SkippedFilesDialog request={skippedList} onClose={() => setSkippedList(null)} />
-        {/* Turn On Fonts from a List…: paste names, see what the library has, turn on or tag. */}
-        <FontListDialog
-          open={!!fontList}
-          onClose={() => setFontList(null)}
-          faceByKey={faceByKey}
-          mode={activationMode}
-          untilQuit={untilQuit}
-          onTurnOn={turnOnFromList}
-          onAddToTag={(found) => {
-            const returnFocus = fontList?.returnFocus;
-            setFontList(null);
-            openTagDialog({ kind: "pick", faces: listedFaces(found), returnFocus });
-          }}
-          returnFocus={fontList?.returnFocus}
-        />
 
         <AlertDialog open={pendingRemoval !== null} onOpenChange={(o) => !o && setPendingRemoval(null)}>
           <AlertDialogContent>
