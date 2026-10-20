@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActivationMode, FontPageTab } from "@/api";
 import type { Face, Family } from "@/library";
 import type { FontPageEntry, PagePatch } from "@/nav";
@@ -15,15 +15,17 @@ import { pageTarget } from "@/fontActions";
 import type { Locations } from "@/tags/locations";
 import { openMenuFromKeyboard } from "@/tags/menus";
 import { useTagIndex } from "@/tags/model";
+import { variationAt } from "@/axisField";
+import type { CssStyle } from "@/cssExport";
 import { featureSlack, pageFeatureValues, setToggle, type Toggles } from "@/openType";
-import { featureSettings, variationSettings } from "@/previewStyle";
+import { featureSettings } from "@/previewStyle";
 import { usePreviewStyle } from "@/components/PreviewStyle";
 import { AxesTab } from "./AxesTab";
 import { CharactersTab } from "./CharactersTab";
 import { InfoTab } from "./InfoTab";
 import { OpenTypeTab } from "./OpenTypeTab";
 import { BACK_SHORTCUT, BackButton, FontPageHeader } from "./PageHeader";
-import { factsOf, TagChipsRow, useFontDetail, useFontFacts } from "./parts";
+import { copyCss, factsOf, TagChipsRow, useFontDetail, useFontFacts } from "./parts";
 import { SpecimenTab } from "./SpecimenTab";
 
 interface Props {
@@ -88,6 +90,9 @@ function GonePage({ placeName, onBack, headingRef }: { placeName: string; onBack
   );
 }
 
+/** No axes set: every axis at its default (one object, so what's worked out from it is kept). */
+const NO_VALUES: Record<string, number> = {};
+
 const TAB_LABELS: Record<FontPageTab, string> = { specimen: "Specimen", characters: "Characters", opentype: "OpenType", axes: "Axes", info: "Info" };
 
 /** Each tab's tooltip: what it shows, for the chosen style. Cmd+I (Show Info) opens Info. */
@@ -115,10 +120,13 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
   const facts = useFontFacts(font.id, tab === "opentype" || tab === "axes" || tab === "info", `${font.activated}:${font.osActive}`);
   const { profile } = usePreviewProfile(font);
   const [query, setQuery] = useState("");
-  // Axis values belong to one style: another style starts at its defaults.
-  const [axes, setAxes] = useState<{ fontId: number; values: Record<string, number> }>({ fontId: font.id, values: {} });
-  const values = axes.fontId === font.id ? axes.values : {};
-  const variation = variationSettings(values);
+  // Axis values belong to one style: another style starts at its defaults. Optical size follows
+  // each preview's text size unless it's set here (axisField.ts), so each preview gets the
+  // font-variation-settings for its own size.
+  const [axes, setAxes] = useState<{ fontId: number; values: Record<string, number> }>({ fontId: font.id, values: NO_VALUES });
+  const values = axes.fontId === font.id ? axes.values : NO_VALUES;
+  const fontAxes = detail?.axes;
+  const variation = useMemo(() => variationAt(fontAxes ?? [], values), [fontAxes, values]);
   // The OpenType switches are the page's, for every style (a style without a feature ignores it).
   const look = usePreviewStyle();
   const [toggles, setToggles] = useState<Toggles>({});
@@ -128,6 +136,24 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
   const featureValues = pageFeatureValues(look.features, toggles);
   const features = featureSettings(featureValues);
   const slack = featureSlack(featureValues);
+  const factsData = factsOf(facts.state);
+  // Copy as CSS waits for the style's features, so it says the same whenever it's used.
+  const copyWait = facts.state.status === "loading" && "Wait: Fontface is still reading this style's features";
+  const onCopyCss = () => {
+    const style: CssStyle = {
+      family: font.family,
+      generic: font.monospace ? "monospace" : (factsData?.generic ?? null),
+      weight: font.weight,
+      width: font.width,
+      italic: font.italic,
+      axes: fontAxes ?? [],
+      values,
+      features: featureValues,
+      // A font with Apple's own feature table may follow features its OpenType tables don't list.
+      has: factsData && !factsData.appleFeatures ? new Set(factsData.features.map((f) => f.tag)) : null,
+    };
+    copyCss(style, `${font.family} ${face.style}`);
+  };
 
   return (
     <PageMenu family={family} face={face}>
@@ -191,6 +217,7 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
               setLang(undefined);
             }}
             variation={variation}
+            onCopyCss={onCopyCss}
           />
         </TabsContent>
         {font.variable && (
@@ -200,9 +227,11 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
               values={values}
               onChange={(tag, v) => setAxes({ fontId: font.id, values: { ...values, [tag]: v } })}
               onSet={(next) => setAxes({ fontId: font.id, values: next })}
-              instances={factsOf(facts.state)?.instances ?? null}
+              instances={factsData?.instances ?? null}
               facts={facts.state}
               retry={facts.retry}
+              onCopyCss={onCopyCss}
+              copyWait={copyWait}
             />
           </TabsContent>
         )}

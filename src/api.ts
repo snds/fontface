@@ -212,6 +212,9 @@ export interface FontFacts {
   appleFeatures: boolean;
   instances: NamedInstance[];
   embedding: Embedding | null;
+  /** The kind of font its OS/2 table says it is, as a CSS generic family (Copy as CSS's
+   *  fallback). Null when it doesn't say, as most fonts don't. */
+  generic: "serif" | "sans-serif" | "monospace" | null;
   /** Name IDs 7, 10, 11, 12 and 19. */
   trademark: string | null;
   description: string | null;

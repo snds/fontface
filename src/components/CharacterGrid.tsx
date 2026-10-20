@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api, type CharacterBlock, type FontCharacters } from "@/api";
+import type { VariationAt } from "@/axisField";
 import { codeLabel, findCharacters, parseCharacterQuery, type CharacterMatch } from "@/characterSearch";
 import type { FaceState } from "@/fontLoader";
 import { Button } from "@/components/ui/button";
@@ -96,7 +97,9 @@ interface Props {
   /** The page-only face name (fontLoader's `faceName`): marks the grid, so a color font with an
    *  all-dark palette draws light in the dark theme (colorPalette.ts). */
   face?: string;
-  fontVariationSettings?: string;
+  /** font-variation-settings for the cells' text size (the font page's axes; optical size may
+   *  follow the size). Keep it the same function while the axes are, or every cell redraws. */
+  variation?: VariationAt;
   /** Whether the face has loaded: cells stay hidden (and out of the Tab order) while it loads,
    *  and aren't shown at all if it can't load. */
   fontState: FaceState;
@@ -106,7 +109,7 @@ interface Props {
 
 /** Memoized: the font page re-renders on every keystroke in the preview field, and a block can
  *  hold tens of thousands of cells. */
-export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, face, fontVariationSettings, fontState, query = "" }: Props) {
+export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, face, variation, fontState, query = "" }: Props) {
   const data = state.status === "ready" ? state.data : null;
   const wanted = useMemo(() => parseCharacterQuery(query), [query]);
   const results = useMemo(() => (query.trim() && data ? findCharacters(data.blocks, wanted) : null), [query, data, wanted]);
@@ -128,7 +131,7 @@ export const CharacterGrid = memo(function CharacterGrid({ state, fontFamily, fa
         data={state.data}
         fontFamily={fontFamily}
         face={face}
-        fontVariationSettings={fontVariationSettings}
+        variation={variation}
         ready={fontState === "ready"}
         query={query}
         results={results}
@@ -153,7 +156,7 @@ interface GridProps {
   data: FontCharacters;
   fontFamily: string;
   face?: string;
-  fontVariationSettings?: string;
+  variation?: VariationAt;
   ready: boolean;
   query: string;
   /** The search's matches, or null when not searching. */
@@ -177,7 +180,7 @@ function listCodes(cps: number[], max = 12): string {
   return cps.length > max ? `${shown.join(", ")} and ${(cps.length - max).toLocaleString()} more` : shown.join(", ");
 }
 
-function Grid({ data, fontFamily, face, fontVariationSettings, ready, query, results, resultsText }: GridProps) {
+function Grid({ data, fontFamily, face, variation, ready, query, results, resultsText }: GridProps) {
   const dominant = useMemo(() => [...data.blocks].sort((a, b) => count(b) - count(a))[0]?.name ?? "", [data]);
   const [blockName, setBlockName] = useState(dominant);
   const [showAll, setShowAll] = useState(false);
@@ -214,8 +217,8 @@ function Grid({ data, fontFamily, face, fontVariationSettings, ready, query, res
   const baseline = CELL / 2 + (size * (data.inkTop - data.inkBottom)) / 2;
   const lineHeight = Math.max(0, 2 * baseline - size * (data.ascent - data.descent));
   const glyphStyle = useMemo<React.CSSProperties>(
-    () => ({ height: CELL, fontFamily, fontVariationSettings, fontSize: size, lineHeight: `${lineHeight}px` }),
-    [fontFamily, fontVariationSettings, size, lineHeight],
+    () => ({ height: CELL, fontFamily, fontVariationSettings: variation?.(size), fontSize: size, lineHeight: `${lineHeight}px` }),
+    [fontFamily, variation, size, lineHeight],
   );
   const onCopy = useCallback((cp: number, name: string) => void copyCharacter(cp, name), []);
 

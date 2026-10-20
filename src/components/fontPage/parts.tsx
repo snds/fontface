@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { api, type FactsAnswer, type FontDetail } from "@/api";
+import { cssText, type CssStyle } from "@/cssExport";
 import { unreadWords } from "@/fontInfo";
+import { copyText } from "@/lib/clipboard";
 import type { FaceState } from "@/fontLoader";
 import type { Face } from "@/library";
 import { Button } from "@/components/ui/button";
@@ -125,6 +128,33 @@ export function FactsMessage({ state, retry, what = "details" }: { state: FactsS
         </Tip>
       )}
     </div>
+  );
+}
+
+/**
+ * Copy as CSS: puts the style's CSS on the clipboard (cssExport.ts) and says so in a toast,
+ * with the style's name. Called straight from the click, so the clipboard takes it.
+ */
+export function copyCss(style: CssStyle, name: string) {
+  void copyText(cssText(style)).then((ok) =>
+    ok ? toast.success("Copied as CSS", { description: name }) : toast.error("Couldn't copy the CSS"),
+  );
+}
+
+/** The Axes and OpenType tabs' Copy as CSS button. `variable`: the style has axes (the tooltip
+ *  says they're in it); `waiting`: why it can't copy yet. */
+export function CopyCssButton({ onCopy, variable, waiting }: { onCopy: () => void; variable: boolean; waiting?: string | false }) {
+  return (
+    // Stays focusable while it waits, so its tooltip can say why.
+    <Tip
+      tip={variable ? "Copies this style as CSS, with its axes and OpenType settings" : "Copies this style as CSS, with its OpenType settings"}
+      disabledReason={waiting}
+    >
+      <Button variant="outline" size="sm" disabled={!!waiting} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={onCopy}>
+        <Icon name="content_copy" size={16} />
+        Copy as CSS
+      </Button>
+    </Tip>
   );
 }
 

@@ -1,4 +1,5 @@
 import type { FontSummary } from "@/api";
+import type { VariationAt } from "@/axisField";
 import { faceName, useFontFace } from "@/fontLoader";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
@@ -7,7 +8,8 @@ import { CharacterGrid, type CharactersState } from "@/components/CharacterGrid"
 interface Props {
   font: FontSummary;
   characters: CharactersState;
-  variation: string | undefined;
+  /** The Axes tab's values for each text size (optical size may follow it). */
+  variation: VariationAt;
   query: string;
   onQuery: (q: string) => void;
 }
@@ -41,7 +43,7 @@ export function CharactersTab({ font, characters, variation, query, onQuery }: P
         state={characters}
         fontFamily={`"${pageFace}"`}
         face={pageFace}
-        fontVariationSettings={variation}
+        variation={variation}
         fontState={state}
         query={query}
       />

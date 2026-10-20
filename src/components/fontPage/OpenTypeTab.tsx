@@ -1,5 +1,6 @@
 import { useId } from "react";
 import type { FontSummary, PreviewCase, PreviewInfo } from "@/api";
+import type { VariationAt } from "@/axisField";
 import { faceName, useFontFace } from "@/fontLoader";
 import { featureSettings, styleCss, type FeatureValues } from "@/previewStyle";
 import { fittingText, PANGRAM } from "@/sampleText";
@@ -12,10 +13,13 @@ import { Switch } from "@/components/ui/switch";
 import { Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { usePreviewStyle } from "@/components/PreviewStyle";
-import { FaceStateMessage, factsOf, FactsMessage, SectionTitle, type FactsState } from "./parts";
+import { CopyCssButton, FaceStateMessage, factsOf, FactsMessage, SectionTitle, type FactsState } from "./parts";
 
 /** The test text's words: ligatures, a fraction, figures and punctuation that changes with case. */
 export const OPENTYPE_TEXT = "Fine office affinity, 1/2 (H-O) 0123456789";
+
+/** Each feature's sample size in px (its row's text-[22px]), for optical size. */
+const SAMPLE_SIZE = 22;
 
 const TEXT_TRANSFORM = { asTyped: undefined, upper: "uppercase", lower: "lowercase", title: "capitalize" } as const;
 
@@ -41,17 +45,22 @@ interface Props {
   lang: string | undefined;
   onLang: (lang: string | undefined) => void;
   onReset: () => void;
-  variation: string | undefined;
+  /** font-variation-settings from the Axes tab, for each text size (optical size may follow it). */
+  variation: VariationAt;
+  /** Copy as CSS (FontPage). */
+  onCopyCss: () => void;
 }
 
 /**
  * The features the chosen style really has (its GSUB and GPOS tables), by group, each with a
  * switch and a sample in the font. The switches apply at once to the test text here and to the
  * Specimen, for every style of the family while the page is open; Reset puts them back. The
- * language picker sets the text's language, which turns on the font's own forms for it.
+ * language picker sets the text's language, which turns on the font's own forms for it. Copy
+ * as CSS copies the style with these switches and the Axes tab's values.
  */
 export function OpenTypeTab(props: Props) {
-  const { font, profile, facts, retry, previewText, testText, onTestText, testSize, onTestSize, toggles, values, onToggle, lang, onLang, onReset, variation } = props;
+  const { font, profile, facts, retry, previewText, testText, onTestText, testSize, onTestSize, toggles, values, onToggle, lang, onLang, onReset, variation, onCopyCss } =
+    props;
   const id = useId();
   const state = useFontFace(font, true);
   const look = usePreviewStyle();
@@ -111,6 +120,7 @@ export function OpenTypeTab(props: Props) {
                   </SelectContent>
                 </Select>
               )}
+              <CopyCssButton onCopy={onCopyCss} variable={font.variable} />
               {/* Stays focusable once it has nothing left to undo, so focus doesn't fall out of the page. */}
               <Tip
                 tip="Puts the switches and the language back as they started"
@@ -146,7 +156,7 @@ export function OpenTypeTab(props: Props) {
                 fontSize: testSize,
                 lineHeight: 1.6,
                 fontFeatureSettings: features,
-                fontVariationSettings: variation,
+                fontVariationSettings: variation(testSize),
               }}
             />
           </section>
@@ -177,7 +187,7 @@ export function OpenTypeTab(props: Props) {
                     face={pageFace}
                     ready={state === "ready"}
                     lang={lang}
-                    variation={variation}
+                    variation={variation(SAMPLE_SIZE)}
                     caseMode={look.options.case}
                     onToggle={(on) => onToggle(f.tag, on, f.defaultOn)}
                   />
