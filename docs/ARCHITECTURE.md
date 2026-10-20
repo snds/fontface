@@ -119,6 +119,17 @@ that family. Comparisons ignore case, spaces and punctuation. A line that matche
 to three closest names when that's cheap. Creative Cloud's files are never matched; online-only
 files are, and flagged. It reads only: turning on and tagging go through the usual commands.
 
+**Auto-activation test** (`src-tauri/src/font_requests/`, macOS only). Off unless Fontface is
+started with `FONTFACE_LISTEN_FONT_REQUESTS=1` (docs/AUTO-ACTIVATION-TEST.md). Then setup adds
+CoreText's font request source to the main run loop (common modes). The source's function is
+looked up by name, since Apple deprecated it, so a macOS without it only logs why. The callback
+copies the request into JSON, queues it for the log's own thread without waiting, and answers
+with a new empty array: no fonts, so the asking app carries on as if Fontface weren't there.
+The thread names the asking process's app from its executable path and Info.plist, checks each
+font named with the name matcher (the library read again at most every 10 seconds, plus which
+fonts are on), and appends one JSON line to `font-requests.jsonl` in the app's log folder,
+which starts again past 4 MB. Nothing is ever turned on.
+
 **Matching paths with the OS.**
 CoreText rewrites the paths it reports: one URL per face, symlinks resolved, `/private` dropped,
 and accented names decomposed (NFD). The scanner stores each file's real path (`canonicalize`),

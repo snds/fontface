@@ -40,3 +40,6 @@ xattr = "1"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSNotification", "NSObjCRuntime", "NSObject", "NSString", "NSURL"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSFontCollection", "NSFontDescriptor"] }
+# The auto-activation test's callback is an Objective-C block (font_requests/listen.rs). block2
+# was already in Cargo.lock (the objc2 crates use it); listed so Fontface can use it directly.
+block2 = "0.6"

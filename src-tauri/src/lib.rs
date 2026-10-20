@@ -8,6 +8,8 @@ mod facts;
 mod families;
 mod font_names;
 #[cfg(target_os = "macos")]
+mod font_requests;
+#[cfg(target_os = "macos")]
 mod login_item;
 mod model;
 mod preview;
@@ -204,6 +206,10 @@ pub fn run() {
                 google_previews: services::google::previews::Previews::new(preview_cache, dir.clone()),
             });
             commands::restart_purchase_watcher(app.handle());
+            // The auto-activation test: logs other apps' font requests, only when asked for at
+            // launch (docs/AUTO-ACTIVATION-TEST.md).
+            #[cfg(target_os = "macos")]
+            font_requests::start_if_asked(app.handle());
             sync::start(app.handle());
             // "Added" dates for fonts listed before Fontface recorded them (once; see
             // db::backfill_added_at). After the window's first list; it reloads when done.
