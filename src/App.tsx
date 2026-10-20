@@ -1314,7 +1314,7 @@ export default function App() {
   const noMatch = query ? `No ${kinds}${where} match “${query}”.` : `No ${kinds}${where || " here"}.`;
 
   // "Open where you left off": the view and filters are saved as they change, and reopened at launch.
-  useLastView({
+  const viewSettled = useLastView({
     settings,
     libraryLoaded,
     folders,
@@ -1719,6 +1719,7 @@ export default function App() {
           {/* While settings are open, the library stays as it was, hidden and out of reach underneath. */}
           <div inert={settingsOpen} className={cn("grid h-full grid-cols-[240px_1fr]", settingsOpen && "invisible")}>
             <Sidebar
+              viewSettled={viewSettled}
               folders={folders}
               counts={counts}
               folderCounts={folderCounts}

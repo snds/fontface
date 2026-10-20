@@ -20,6 +20,9 @@ import { TagsSection } from "@/tags/TagsSection";
 import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
 
 interface Props {
+  /** The place to open with is settled (useLastView): until then a change of view is the launch
+   *  restoring it, not a move. */
+  viewSettled: boolean;
   folders: Folder[];
   /** Style counts (duplicate copies count once) for the smart entries and Font Book, matching
    *  what each lists. */
@@ -200,7 +203,7 @@ function SourceRow({ label, icon, missing, scan, count, badge, selected, hint, o
  * folders also show Rescan (or Stop) on hover, and your folders Remove.
  */
 export function Sidebar(props: Props) {
-  const { folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, show, onView, onFallback, onAddFolder } = props;
+  const { viewSettled, folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, show, onView, onFallback, onAddFolder } = props;
   const locations = useLocations(folders, services);
   const titleBar = useTitleBar();
   const smart = smartRows(show);
@@ -213,12 +216,17 @@ export function Sidebar(props: Props) {
   const setSourcesOpen = useCallback((to: boolean) => setOpen(SECTIONS.sources.openId, to, SECTION_STARTS_OPEN), []);
   // The view went to a source while Sources is collapsed (Add Folder… or Import Purchased Fonts…
   // from the "+" or the divider's menu): Sources opens, so that place has its row.
+  // The place reopened at launch ("Open where you left off") isn't such a move: a collapsed
+  // Sources stays collapsed then, so changes up to and including the settling one are skipped.
   const lastSource = useRef(selectedSource);
+  const settledBefore = useRef(viewSettled);
   useEffect(() => {
     const before = lastSource.current;
     lastSource.current = selectedSource;
-    if (sourceRevealed(before, selectedSource)) setSourcesOpen(true);
-  }, [selectedSource, setSourcesOpen]);
+    const wasSettled = settledBefore.current;
+    settledBefore.current = viewSettled;
+    if (wasSettled && sourceRevealed(before, selectedSource)) setSourcesOpen(true);
+  }, [selectedSource, viewSettled, setSourcesOpen]);
 
   /** The sidebar's own commands: the "+" menu's and the Sources divider's. */
   const run = (id: SidebarCommand) => {

@@ -82,4 +82,6 @@ export function useLastView({
   useEffect(() => {
     if (decided) save({ view, status, variableOnly });
   }, [decided, view, status, variableOnly]);
+  /** The place to open with is settled: restored, or the launch view kept. */
+  return decided;
 }
