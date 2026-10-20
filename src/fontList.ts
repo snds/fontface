@@ -119,6 +119,16 @@ const FONT_SIZE = /^(?:[-+]?(?:\d+\.?\d*|\.\d+)(?:[a-z]+|%)|xx-small|x-small|sma
 const isFontProperty = (p: string) => /font/i.test(p) && !/size|weight|feature|variation|stretch|style|width|height|spacing|smoothing|synthesis|kerning|optical/i.test(p);
 /** A CSS value that isn't a name: a number or length ("700", "1.5rem") or a color ("#fff"). */
 const CSS_VALUE = /^(?:[-+]?(?:\d+\.?\d*|\.\d+)(?:[a-z]+|%)?|#[0-9a-f]{3,8})$/i;
+/** One-word CSS properties a pasted rule may hold. Any other "Word: …" on a line that isn't CSS is
+ *  a label ("Headings: Playfair Display"), and the names follow it. Properties with a hyphen
+ *  ("font-weight") and custom ones ("--brand") are always CSS. */
+const CSS_PROPERTIES = new Set(
+  "color src margin padding display content background border width height top left right bottom position opacity transform transition animation outline cursor float clear overflow visibility filter gap order flex grid inset quotes direction zoom appearance resize fill stroke".split(" "),
+);
+const isCssProperty = (p: string) => p.startsWith("--") || p.includes("-") || CSS_PROPERTIES.has(p);
+/** A label before a name ("Body copy: Inter"): words, then a colon, outside quotes. */
+const LABEL = /^\s*[^:"'‘’“”]{1,40}:\s*(.+)$/s;
+
 /** A CSS function ("var(--font-sans)", "local(Inter)"). */
 const CSS_FUNCTION = /^[a-z-]+\(.*\)$/i;
 
@@ -139,6 +149,11 @@ function shorthandFamilies(value: string): string {
  *  quotes, with CSS declarations read for their families. */
 function namesOnLine(raw: string): string[] {
   let line = raw.split("\t")[0].trim().replace(BULLET, "").replace(/!important/gi, "");
+  // An at-rule ("@import url(…);", "@font-face {") holds no names to look up.
+  if (line.startsWith("@")) return [];
+  // Clearly CSS: in or around braces, or a declaration ending in a semicolon. Otherwise a
+  // "Word:" is a label, as a style guide or a list of notes would have it.
+  const css = /[{}]/.test(line) || /;\s*$/.test(line);
   // A rule on one line ("h1 { font-family: Inter }"): only what's inside its braces. A selector
   // on its own ("body {") or a closing brace holds no names.
   const open = line.lastIndexOf("{");
@@ -154,10 +169,13 @@ function namesOnLine(raw: string): string[] {
       if (property === "font-family") list = d[2];
       else if (property === "font") list = shorthandFamilies(d[2]);
       else if (property.startsWith("--") && isFontProperty(property)) [list, values] = [d[2], true];
-      else continue; // another property (font-weight: 700, color: red): no names
+      else if (css || isCssProperty(property)) continue; // another property (font-weight: 700, color: red): no names
+      else list = d[2]; // a label ("Headings: Playfair Display"): the names after it
     }
     for (const part of splitOutsideQuotes(list, ",")) {
-      const trimmed = part.trim();
+      // "Primary: Inter, Secondary: Lora": each name after its own label.
+      const labelled = css ? null : LABEL.exec(part);
+      const trimmed = (labelled ? labelled[1] : part).trim();
       const quoted = CLOSING.has(trimmed[0] ?? "");
       const name = trimmed.replace(QUOTES, "").trim();
       if (!name || !hasLetters(name) || /[{}:]/.test(name)) continue;

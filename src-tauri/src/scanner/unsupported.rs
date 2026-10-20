@@ -108,7 +108,7 @@ pub fn finder_type_code(_: &Path) -> Option<[u8; 4]> {
 
 /// Counts files with no extension by their Finder type codes, on a thread of its own: there,
 /// reading the attribute of an online-only file fails at once instead of downloading it (and
-/// that file isn't counted). Join it for the counts; None when there's nothing to look at.
+/// that file isn't counted). Wait for its counts with `wait_for`, which gives way to a cancel; None when there's nothing to look at.
 pub fn count_type_codes(paths: Vec<PathBuf>, cancel: Arc<AtomicBool>) -> Option<JoinHandle<SkippedFiles>> {
     if paths.is_empty() {
         return None;

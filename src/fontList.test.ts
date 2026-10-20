@@ -222,3 +222,14 @@ test("Copy Not Found copies the names that found nothing, as the list gave them"
   // Before the answers are back, nothing.
   assert.equal(notFoundText(list.entries, []), "");
 });
+
+test("a label before a name gives the name; CSS that isn't about fonts gives nothing", () => {
+  const names = (text: string) => parseFontList(text).entries.map((e) => e.label);
+  assert.deepEqual(names("Headings: Playfair Display\nBody: Inter"), ["Playfair Display", "Inter"]);
+  assert.deepEqual(names("Primary: Inter, Secondary: Lora"), ["Inter", "Lora"]);
+  assert.deepEqual(names("Body copy: Inter"), ["Inter"]);
+  assert.deepEqual(names("color: red;"), []);
+  assert.deepEqual(names("margin: 0"), [], "a one-word CSS property, even without a semicolon");
+  assert.deepEqual(names('@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");'), [], "an at-rule");
+  assert.deepEqual(names("h1 { font-family: Inter; color: red }"), ["Inter"]);
+});
