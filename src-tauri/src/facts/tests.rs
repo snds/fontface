@@ -4,13 +4,13 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{embedding, facts_for, layout, read_facts_with, Embedding, FontFacts};
+use super::{declared_generic, embedding, facts_for, layout, read_facts_with, Embedding, FontFacts};
 use crate::{
     preview::{FaceRow, Unreadable},
     tags::named_styles,
     test_fonts::{
-        fvar_table, layout_table, ligature_lookup, name_table, set_params, single_lookup, variant_params, Cmap, FeatureSpec, FontBuilder,
-        Shape,
+        fvar_table, layout_table, ligature_lookup, name_table, set_params, sfnt, single_lookup, variant_params, Cmap, FeatureSpec,
+        FontBuilder, Shape,
     },
 };
 
@@ -377,6 +377,53 @@ fn embedding_permissions_read_as_the_spec_says() {
     assert_eq!(facts(&none.build()).embedding, None, "no OS/2 table: nothing to say");
 }
 
+/// An OS/2 table with this IBM font class (its high byte) and PANOSE family kind, serif style
+/// and proportion.
+fn os2_with(class: u8, panose_family: u8, serif_style: u8, proportion: u8) -> Vec<u8> {
+    let mut t = vec![0u8; 96];
+    t[30] = class;
+    t[32] = panose_family;
+    t[33] = serif_style;
+    t[35] = proportion;
+    t
+}
+
+#[test]
+fn the_kind_of_font_it_says_it_is_gives_the_css_fallback() {
+    assert_eq!(declared_generic(&os2_with(0, 0, 0, 0)), None, "most fonts say nothing");
+    // The IBM class first.
+    for class in [1, 2, 3, 4, 5, 7] {
+        assert_eq!(declared_generic(&os2_with(class, 0, 0, 0)), Some("serif"), "class {class}");
+    }
+    assert_eq!(declared_generic(&os2_with(8, 0, 0, 0)), Some("sans-serif"));
+    assert_eq!(declared_generic(&os2_with(8, 2, 2, 0)), Some("sans-serif"), "the class beats PANOSE's serif style");
+    for class in [9, 10, 12] {
+        assert_eq!(declared_generic(&os2_with(class, 2, 2, 0)), None, "ornaments, scripts and symbols: class {class}");
+    }
+    // With no class, PANOSE's serif style, for a Latin text face only.
+    assert_eq!(declared_generic(&os2_with(0, 2, 2, 0)), Some("serif"), "cove");
+    assert_eq!(declared_generic(&os2_with(0, 2, 10, 0)), Some("serif"), "triangle");
+    assert_eq!(declared_generic(&os2_with(0, 2, 11, 0)), Some("sans-serif"), "normal sans");
+    assert_eq!(declared_generic(&os2_with(0, 2, 13, 0)), Some("sans-serif"), "perpendicular sans");
+    assert_eq!(declared_generic(&os2_with(0, 2, 15, 0)), None, "rounded says too little");
+    assert_eq!(declared_generic(&os2_with(0, 3, 11, 0)), None, "handwriting digits mean other things");
+    // Monospaced beats both, so code fonts fall back to a code font.
+    assert_eq!(declared_generic(&os2_with(8, 2, 11, 9)), Some("monospace"));
+    assert_eq!(declared_generic(&os2_with(5, 2, 2, 9)), Some("monospace"));
+    assert_eq!(declared_generic(&os2_with(0, 3, 0, 9)), None, "only a Latin text face's proportion means monospaced");
+    assert_eq!(declared_generic(&[0u8; 20]), None, "a cut-short table");
+
+    // Read from the font's own table.
+    let mut tables = FontBuilder::new().named("Classed").chars("ab").tables();
+    let os2 = tables.iter_mut().find(|(tag, _)| tag == b"OS/2").unwrap();
+    os2.1[30] = 8;
+    assert_eq!(facts(&sfnt(&tables)).generic, Some("sans-serif"));
+    assert_eq!(facts(&FontBuilder::new().named("Plain").chars("ab").build()).generic, None);
+    let mut none = FontBuilder::new().named("NoOS2").chars("ab");
+    none.os2 = None;
+    assert_eq!(facts(&none.build()).generic, None, "no OS/2 table: nothing to say");
+}
+
 #[test]
 fn more_of_the_fonts_names() {
     let long = "x".repeat(super::MAX_TEXT + 10);
@@ -401,7 +448,7 @@ fn more_of_the_fonts_names() {
 fn facts_serialize_in_the_shape_the_ui_expects() {
     let f = facts(&featured_font().build());
     let json = serde_json::to_value(&f).unwrap();
-    for key in ["features", "scripts", "appleFeatures", "instances", "embedding", "trademark", "description", "vendorUrl", "designerUrl", "sampleText", "languages"] {
+    for key in ["features", "scripts", "appleFeatures", "instances", "embedding", "generic", "trademark", "description", "vendorUrl", "designerUrl", "sampleText", "languages"] {
         assert!(json.get(key).is_some(), "{key}");
     }
     let ss01 = json["features"].as_array().unwrap().iter().find(|f| f["tag"] == "ss01").unwrap();

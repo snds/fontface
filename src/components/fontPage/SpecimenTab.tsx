@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { ActivationMode } from "@/api";
+import type { VariationAt } from "@/axisField";
 import { activationIds, type Face, type Family } from "@/library";
 import { faceName, useFontFace } from "@/fontLoader";
 import { ROW_HEIGHT } from "@/previewFit";
@@ -26,8 +27,9 @@ interface Props {
   /** The chosen style. */
   face: Face;
   previewText: string;
-  /** font-variation-settings from the Axes tab, if any are set. */
-  variation: string | undefined;
+  /** font-variation-settings from the Axes tab, for each text size: optical size follows the
+   *  size unless it's set by hand, so each waterfall line gets its own. */
+  variation: VariationAt;
   /** font-feature-settings: the View options' features with the OpenType tab's switches on top. */
   features: string | undefined;
   /** Room the fit keeps for features that can draw past the plain ink (openType.featureSlack). */
@@ -96,7 +98,7 @@ export function SpecimenTab({ family, face, previewText, variation, features, sl
               paper={false}
               lang={lang}
               className="min-w-0 flex-1"
-              style={{ fontVariationSettings: variation }}
+              style={{ fontVariationSettings: variation(px) }}
             />
           </div>
         ))}
@@ -112,7 +114,12 @@ export function SpecimenTab({ family, face, previewText, variation, features, sl
             data-face={pageFace}
             aria-hidden={paragraphSample ? true : undefined}
             className={cn("max-w-[68ch] text-lg leading-relaxed break-words transition-opacity", state === "loading" && "preview-loading")}
-            style={{ ...styleCss(look.options, look.colors, PARAGRAPH_SIZE, false), fontFamily, fontVariationSettings: variation, fontFeatureSettings: features }}
+            style={{
+              ...styleCss(look.options, look.colors, PARAGRAPH_SIZE, false),
+              fontFamily,
+              fontVariationSettings: variation(PARAGRAPH_SIZE),
+              fontFeatureSettings: features,
+            }}
           >
             {paragraphShown}
           </p>

@@ -1,6 +1,7 @@
 //! Facts about one face that the library doesn't store, read from its file when the font page
 //! asks (`font_facts`): its OpenType features (layout.rs), its named styles (`fvar` instances),
-//! what its embedding permissions say (OS/2 `fsType`), a few more of its names (trademark,
+//! what its embedding permissions say (OS/2 `fsType`), the kind of font it says it is (OS/2
+//! class and PANOSE, for Copy as CSS's fallback), a few more of its names (trademark,
 //! description, foundry and designer websites, sample text), and on macOS the languages CoreText
 //! says it supports. Plus, from the library, when Fontface last turned it on.
 //!
@@ -75,6 +76,36 @@ pub fn embedding(version: u16, fs_type: u16) -> Embedding {
     Embedding { kind, no_subsetting: version >= 2 && fs_type & 0x100 != 0, bitmap_only: version >= 2 && fs_type & 0x200 != 0 }
 }
 
+/// The CSS generic family that fits what a font says about itself in its OS/2 table, for Copy as
+/// CSS's fallback ("Inter", sans-serif). Only the font's own numbers, which most fonts leave
+/// empty; None when they say nothing CSS has a generic family for.
+///
+/// - "monospace" when its PANOSE (a Latin text face) says every character is the same width.
+/// - Else its IBM font class: the serif classes (old style, transitional, modern, Clarendon,
+///   slab, freeform) are "serif", class 8 is "sans-serif", and scripts, ornaments and symbols
+///   are None.
+/// - Else, with no class, its PANOSE serif style: cove to triangle serifs are "serif", normal,
+///   obtuse and perpendicular sans are "sans-serif" (flared and rounded say too little).
+pub fn declared_generic(os2: &[u8]) -> Option<&'static str> {
+    // sFamilyClass is at byte 30 (its class in the high byte), PANOSE's ten digits from 32.
+    let class = *os2.get(30)?;
+    let panose = os2.get(32..42)?;
+    let latin_text = panose[0] == 2;
+    if latin_text && panose[3] == 9 {
+        return Some("monospace");
+    }
+    match class {
+        1..=5 | 7 => Some("serif"),
+        8 => Some("sans-serif"),
+        0 if latin_text => match panose[1] {
+            2..=10 => Some("serif"),
+            11..=13 => Some("sans-serif"),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// What the font page shows that the list doesn't have.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +118,8 @@ pub struct FontFacts {
     pub instances: Vec<NamedInstance>,
     /// None when the font has no OS/2 table.
     pub embedding: Option<Embedding>,
+    /// "serif", "sans-serif" or "monospace", when the font says so ([`declared_generic`]).
+    pub generic: Option<&'static str>,
     /// Name IDs 7, 10, 11, 12 and 19.
     pub trademark: Option<String>,
     pub description: Option<String>,
@@ -138,13 +171,15 @@ pub fn read_facts_with(
     // fractions to the `morx` its Regular and Italic have), and each style's page should say the same.
     let apple_features = raw(b"morx").is_some();
     let instances = raw(b"fvar").map(|fvar| named_styles::instances(fvar, name)).unwrap_or_default();
-    let embedding = raw(b"OS/2").and_then(|os2| Some(embedding(be16(os2, 0)?, be16(os2, 8)?)));
+    let os2 = raw(b"OS/2");
+    let embedding = os2.and_then(|os2| Some(embedding(be16(os2, 0)?, be16(os2, 8)?)));
     Ok(FontFacts {
         features,
         scripts,
         apple_features,
         instances,
         embedding,
+        generic: os2.and_then(declared_generic),
         trademark: text(name, 7),
         description: text(name, 10),
         vendor_url: text(name, 11),

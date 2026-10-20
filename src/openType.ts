@@ -185,6 +185,9 @@ const KNOWN: Readonly<Record<string, Known>> = {
 /** The registered features Fontface has its own words for, in the order the tab lists them. */
 export const KNOWN_FEATURE_TAGS: readonly string[] = Object.keys(KNOWN);
 
+/** Whether a feature is on unless turned off (the text engine applies it by itself). */
+export const isDefaultOn = (tag: string) => !!KNOWN[tag]?.on;
+
 /** Features that never draw outside the plain text's ink, or that the text engine applies to
  *  the plain text anyway (so its measurement has them already: liga, calt, rvrn…), so fitting
  *  needs no extra room when they're turned on. Anything else (swashes, alternates, sets…) gets
@@ -239,7 +242,7 @@ export function describeFeature(f: FontFeature, missing?: string): FeatureView {
   const detail = f.name && kind ? `${kind} · ${tag}` : tag;
   const fixed = known?.sample && drawable(known.sample, missing) ? known.sample : undefined;
   const sample = known?.ownSample ? (fixed ?? f.sample) : (f.sample ?? fixed);
-  return { tag, label, detail, group, defaultOn: !!known?.on, sample, switchable: group !== "vertical" };
+  return { tag, label, detail, group, defaultOn: isDefaultOn(tag), sample, switchable: group !== "vertical" };
 }
 
 /** The sample a feature's row draws, in the View options' case `mode`. Always as it is: a

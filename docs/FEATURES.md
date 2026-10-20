@@ -31,7 +31,7 @@ Status: ✅ done · 🟡 partial · ⬜ not started. Each item gets checked on m
 | Re-apply activations at launch and after scans | ✅ | ⬜ | Keeps intent if a file is only temporarily unreachable |
 | Font page: waterfall, paragraph, characters, metadata | 🟡 | ⬜ | Replaces the side detail panel (see **Font page and Back**). The waterfall shows the pangram only when the font has its letters (else its own text), and grows a row instead of clipping tall ink. "Character set" on the Info tab, and since the sixth stage embedding, languages, scripts, websites and "Last turned on" (see **Preview styling, OpenType, Axes and full Info**). Not yet checked in the running app |
 | Characters grid | 🟡 | ⬜ | On the font page's Characters tab. Every real character of the font, by Unicode block (the biggest block first), with a summary line ("166 characters, all in Private Use Area …", "Expert set: 60 real characters; 175 slots share one placeholder (hidden)"). Hover shows the code point and glyph name; click or Enter copies the character. Arrow keys move between cells. 512 per block, then "Show all". A search box finds typed characters or U+ codes (also ranges, "U+0041-U+005A"), and says which ones the font doesn't have (screen readers hear each result, the first one too); searching by character name isn't there yet. Not yet checked in the running app |
-| Variable font axis sliders | 🟡 | ⬜ | The font page's Axes tab (variable styles only): a slider and a number field per axis; the values also show in Specimen, Characters and OpenType. In the number field, a value in range shows as you type, Return or leaving the field applies it (kept within the axis's range), and Esc goes back to the value from before you typed. A Named style picker (the font's own styles, from its `fvar` table) sets every slider at once and says "Custom" in between; Reset goes back to the defaults; Show hidden axes lists the axes the font hides. Not yet checked in the running app |
+| Variable font axis sliders | 🟡 | ⬜ | The font page's Axes tab (variable styles only): a slider and a number field per axis; the values also show in Specimen, Characters and OpenType. In the number field, a value in range shows as you type, Return or leaving the field applies it (kept within the axis's range), and Esc goes back to the value from before you typed. A Named style picker (the font's own styles, from its `fvar` table) sets every slider at once and says "Custom" in between; Reset goes back to the defaults; Show hidden axes lists the axes the font hides. Optical size follows the text size: each preview (every waterfall line, the paragraph, the test text, the samples, the character cells) uses its own size, kept within the axis's range, until the axis's "Follow text size" switch is turned off to set it by hand; a named style changes it only when the font's named styles are at different optical sizes. Not yet checked in the running app |
 | Search by family / style / PostScript name | ✅ | ⬜ | |
 | Show in Finder / Explorer | ✅ | ⬜ | |
 
@@ -248,6 +248,8 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Full glyph grid with Unicode info | 🟡 | ⬜ |
 | OpenType feature toggles (liga, ss01…) in previews | 🟡 | ⬜ |
 | Language / script coverage | 🟡 | ⬜ |
+| Copy as CSS: the style with its axes and features, and a fallback (Axes and OpenType tabs; `src/cssExport.ts`) | 🟡 | ⬜ |
+| Optical size follows the text size, or set by hand (Axes tab) | 🟡 | ⬜ |
 
 ## Phase 4: Workflow
 

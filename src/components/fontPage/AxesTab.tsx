@@ -1,14 +1,15 @@
 import { useId, useRef, useState } from "react";
 import type { Axis, NamedInstance } from "@/api";
-import { commitAxis, currentInstance, discardAxis, instanceValues, typeAxis, type AxisDraft } from "@/axisField";
+import { commitAxis, currentInstance, discardAxis, opticalSize, OPSZ, pickNamedStyle, typeAxis, type AxisDraft } from "@/axisField";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Tip } from "@/components/Tip";
-import { FactsMessage, type FactsState } from "./parts";
+import { CopyCssButton, FactsMessage, type FactsState } from "./parts";
 
 interface Props {
   /** Every axis of the style (hidden ones too), or null while they're being read. */
@@ -21,6 +22,9 @@ interface Props {
   instances: NamedInstance[] | null;
   facts: FactsState;
   retry: () => void;
+  /** Copy as CSS, and why it can't copy yet (FontPage). */
+  onCopyCss: () => void;
+  copyWait?: string | false;
 }
 
 const tidy = (v: number) => String(Math.round(v * 100) / 100);
@@ -30,10 +34,12 @@ const CUSTOM = "custom";
 
 /**
  * The style's named styles (a picker that sets every slider), then a slider and a number field
- * per variable axis, Reset, and Show hidden axes when the font hides some (axes its maker keeps
- * for fine-tuning). The values apply to Specimen, Characters and OpenType too, for this style.
+ * per variable axis, Copy as CSS, Reset, and Show hidden axes when the font hides some (axes its
+ * maker keeps for fine-tuning). The values apply to Specimen, Characters and OpenType too, for
+ * this style. Optical size follows each preview's text size until its switch is turned off
+ * (axisField.ts); Reset and turning the switch back on make it follow again.
  */
-export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry }: Props) {
+export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry, onCopyCss, copyWait }: Props) {
   const id = useId();
   const [showHidden, setShowHidden] = useState(false);
   if (!axes) return <p className="px-6 pt-5 text-xs text-muted-foreground">Reading the axes…</p>;
@@ -43,6 +49,7 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
   const named = instances ?? [];
   const current = currentInstance(named, axes, values);
   const changed = Object.keys(values).length > 0;
+  const optical = axes.some((a) => a.tag === OPSZ);
   return (
     <div className="flex max-w-2xl flex-col gap-6 px-6 pt-5 pb-12">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -56,7 +63,7 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
               onValueChange={(v) => {
                 if (typeof v !== "string" || v === CUSTOM) return;
                 const instance = named[Number(v)];
-                if (instance) onSet(instanceValues(instance, axes));
+                if (instance) onSet(pickNamedStyle(instance, named, axes, values));
               }}
               items={[...named.map((n, i) => ({ value: String(i), label: n.name })), { value: CUSTOM, label: "Custom" }]}
             >
@@ -90,9 +97,13 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
             Show hidden axes ({hidden})
           </label>
         )}
+        <CopyCssButton onCopy={onCopyCss} variable waiting={copyWait} />
         {/* Stays focusable once every axis is back at its default (focus doesn't fall out of the
             page, and the tooltip says why it's greyed out). */}
-        <Tip tip="Puts every axis back to its default" disabledReason={!changed && "Nothing to reset yet: every axis is at its default"}>
+        <Tip
+          tip={optical ? "Puts every axis back to its default, with optical size following the text size" : "Puts every axis back to its default"}
+          disabledReason={!changed && "Nothing to reset yet: every axis is at its default"}
+        >
           <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={() => onSet({})}>
             <Icon name="restart_alt" size={16} />
             Reset
@@ -102,13 +113,47 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
       {facts.status !== "ready" || facts.answer.unread ? <FactsMessage state={facts} retry={retry} what="named styles" /> : null}
       <p className="-mt-2 text-xs text-muted-foreground">Changes show in Specimen, Characters and OpenType too, for this style.</p>
       {shown.map((a) => (
-        <AxisRow key={a.tag} axis={a} value={values[a.tag] ?? a.default} onChange={(v) => onChange(a.tag, v)} />
+        <AxisRow
+          key={a.tag}
+          axis={a}
+          value={values[a.tag] ?? a.default}
+          onChange={(v) => onChange(a.tag, v)}
+          // Optical size: follows the text size until it's set by hand (from its default).
+          follow={
+            a.tag === OPSZ
+              ? {
+                  on: !(OPSZ in values),
+                  set: (on) => {
+                    if (!on) return onChange(OPSZ, a.default);
+                    const rest = { ...values };
+                    delete rest[OPSZ];
+                    onSet(rest);
+                  },
+                }
+              : undefined
+          }
+        />
       ))}
     </div>
   );
 }
 
-function AxisRow({ axis, value, onChange }: { axis: Axis; value: number; onChange: (v: number) => void }) {
+/** What following the text size means for this axis, with two sizes as examples. */
+const followText = (axis: Axis) =>
+  `Follows the text size: text at 12 px uses ${tidy(opticalSize(axis, 12))}, and text at 96 px uses ${tidy(opticalSize(axis, 96))}.`;
+
+function AxisRow({
+  axis,
+  value,
+  onChange,
+  follow,
+}: {
+  axis: Axis;
+  value: number;
+  onChange: (v: number) => void;
+  /** Optical size's switch: whether it follows the text size, and to turn that on or off. */
+  follow?: { on: boolean; set: (on: boolean) => void };
+}) {
   const id = useId();
   const name = axis.name ?? axis.tag;
   // What's typed in the number field, until it's finished (Return or leaving the field), and
@@ -119,58 +164,84 @@ function AxisRow({ axis, value, onChange }: { axis: Axis; value: number; onChang
     const v = commitAxis(draft, axis);
     if (v !== undefined) onChange(v);
   };
+  const following = !!follow?.on;
   return (
     <div className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2">
-      <label htmlFor={id} className="text-sm">
+      <label htmlFor={following ? undefined : id} className="text-sm">
         {name} <code className="font-mono text-xs text-muted-foreground">{axis.tag}</code>
         {axis.hidden && <span className="ml-1.5 text-xs text-muted-foreground">(hidden)</span>}
       </label>
-      <Input
-        id={id}
-        type="number"
-        inputMode="decimal"
-        min={axis.min}
-        max={axis.max}
-        step="any"
-        value={draft?.text ?? tidy(value)}
-        onChange={(e) => {
-          // Values in range show as they're typed; anything else waits until the field is left.
-          const next = typeAxis(draft, e.target.value, value, axis);
-          setDraft(next.draft);
-          if (next.apply !== undefined) onChange(next.apply);
-        }}
-        onBlur={() => {
-          if (!discard.current) commit();
-          discard.current = false;
-          setDraft(null);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            commit();
-            setDraft(null);
-          } else if (e.key === "Escape") {
-            // Back to the value from before typing (values applied while typing are undone too), out
-            // of the field; the next Esc goes back.
-            e.preventDefault();
-            const before = discardAxis(draft);
-            if (before !== undefined) onChange(before);
-            discard.current = true;
-            e.currentTarget.blur();
-          }
-        }}
-        className="w-24 text-right font-mono tabular-nums"
-      />
-      <Tip tip={`Sets ${name}, from ${tidy(axis.min)} to ${tidy(axis.max)}`}>
-        <Slider
-          className="col-span-2"
-          min={axis.min}
-          max={axis.max}
-          step={(axis.max - axis.min) / 200 || 1}
-          value={[value]}
-          onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
-          aria-label={name}
-        />
-      </Tip>
+      {/* The switch stays first in here, so it keeps focus as the field comes and goes. */}
+      <div className="flex items-center gap-4">
+        {follow && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span id={`${id}-follow`}>Follow text size</span>
+            <Tip tip={following ? "Stops following the text size, so you can set it by hand" : "Makes optical size follow each preview's text size"}>
+              <Switch
+                size="sm"
+                checked={following}
+                onCheckedChange={(on) => {
+                  setDraft(null);
+                  follow.set(on);
+                }}
+                aria-labelledby={`${id}-follow`}
+              />
+            </Tip>
+          </label>
+        )}
+        {!following && (
+          <Input
+            id={id}
+            type="number"
+            inputMode="decimal"
+            min={axis.min}
+            max={axis.max}
+            step="any"
+            value={draft?.text ?? tidy(value)}
+            onChange={(e) => {
+              // Values in range show as they're typed; anything else waits until the field is left.
+              const next = typeAxis(draft, e.target.value, value, axis);
+              setDraft(next.draft);
+              if (next.apply !== undefined) onChange(next.apply);
+            }}
+            onBlur={() => {
+              if (!discard.current) commit();
+              discard.current = false;
+              setDraft(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commit();
+                setDraft(null);
+              } else if (e.key === "Escape") {
+                // Back to the value from before typing (values applied while typing are undone too), out
+                // of the field; the next Esc goes back.
+                e.preventDefault();
+                const before = discardAxis(draft);
+                if (before !== undefined) onChange(before);
+                discard.current = true;
+                e.currentTarget.blur();
+              }
+            }}
+            className="w-24 text-right font-mono tabular-nums"
+          />
+        )}
+      </div>
+      {following ? (
+        <p className="col-span-2 text-xs text-muted-foreground">{followText(axis)}</p>
+      ) : (
+        <Tip tip={`Sets ${name}, from ${tidy(axis.min)} to ${tidy(axis.max)}`}>
+          <Slider
+            className="col-span-2"
+            min={axis.min}
+            max={axis.max}
+            step={(axis.max - axis.min) / 200 || 1}
+            value={[value]}
+            onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
+            aria-label={name}
+          />
+        </Tip>
+      )}
       <div className="col-span-2 flex justify-between font-mono text-[11px] text-muted-foreground tabular-nums">
         <span>{tidy(axis.min)}</span>
         <span>Default {tidy(axis.default)}</span>

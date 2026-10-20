@@ -1,7 +1,22 @@
-// Run with `npm run test:ui`. The Axes tab's number field (axisField.ts).
+// Run with `npm run test:ui`. The Axes tab's number field, and optical size following the text
+// size (axisField.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { commitAxis, discardAxis, typeAxis, type AxisDraft } from "./axisField.ts";
+import {
+  axisValuesAt,
+  commitAxis,
+  currentInstance,
+  discardAxis,
+  followsSize,
+  namesOpticalSizes,
+  opticalSize,
+  pickNamedStyle,
+  typeAxis,
+  variationAt,
+  type AxisDraft,
+  type AxisInfo,
+  type Instance,
+} from "./axisField.ts";
 
 const WGHT = { min: 100, max: 900 };
 
@@ -46,4 +61,64 @@ test("an empty field, or text that isn't a number, goes back to the value from b
   assert.equal(draft.before, 400, "a draft keeps its starting value while typing goes on");
   assert.equal(commitAxis(draft, WGHT), 400);
   assert.equal(commitAxis(typeAxis(null, "-", 400, WGHT).draft, WGHT), 400);
+});
+
+const OPTICAL: AxisInfo[] = [
+  { tag: "wght", min: 100, max: 900, default: 400 },
+  { tag: "opsz", min: 8, max: 144, default: 14 },
+];
+
+test("optical size follows the text size, within the axis's range, until it's set by hand", () => {
+  const opsz = OPTICAL[1];
+  assert.equal(opticalSize(opsz, 24), 24);
+  assert.equal(opticalSize(opsz, 6), 8, "below the range: its smallest");
+  assert.equal(opticalSize(opsz, 200), 144, "above it: its largest");
+  assert.equal(opticalSize(opsz, 17.333), 17.33);
+  assert.ok(followsSize(OPTICAL, {}));
+  assert.ok(followsSize(OPTICAL, { wght: 700 }), "other axes set by hand don't change it");
+  assert.ok(!followsSize(OPTICAL, { opsz: 30 }), "set by hand");
+  assert.ok(!followsSize([OPTICAL[0]], {}), "no optical size axis: nothing follows");
+  assert.deepEqual(axisValuesAt(OPTICAL, { wght: 700 }, 96), { wght: 700, opsz: 96 });
+  assert.deepEqual(axisValuesAt(OPTICAL, { opsz: 30 }, 96), { opsz: 30 }, "set by hand: as set, at every size");
+  assert.deepEqual(axisValuesAt([OPTICAL[0]], { wght: 700 }, 96), { wght: 700 });
+});
+
+test("each preview size gets its own font-variation-settings while optical size follows", () => {
+  const at = variationAt(OPTICAL, { wght: 650 });
+  assert.equal(at(12), '"wght" 650, "opsz" 12');
+  assert.equal(at(96), '"wght" 650, "opsz" 96');
+  assert.equal(at(4), '"wght" 650, "opsz" 8');
+  assert.equal(variationAt(OPTICAL, {})(40), '"opsz" 40', "at the defaults, optical size still follows");
+  assert.equal(variationAt(OPTICAL, { opsz: 30 })(96), '"opsz" 30');
+  assert.equal(variationAt([OPTICAL[0]], {})(40), undefined, "no axes set: the font's defaults");
+  assert.equal(variationAt([], { wght: 500 })(12), '"wght" 500');
+});
+
+const SAME_SIZE: Instance[] = [
+  { name: "Regular", values: [["wght", 400], ["opsz", 14]] },
+  { name: "Bold", values: [["wght", 700], ["opsz", 14]] },
+];
+const NAMED_SIZES: Instance[] = [
+  { name: "Caption", values: [["wght", 400], ["opsz", 8]] },
+  { name: "Text", values: [["wght", 400], ["opsz", 14]] },
+  { name: "Display", values: [["wght", 400], ["opsz", 72]] },
+];
+
+test("a named style sets optical size only when the font's named styles differ in it", () => {
+  assert.ok(!namesOpticalSizes(SAME_SIZE, OPTICAL));
+  assert.ok(namesOpticalSizes(NAMED_SIZES, OPTICAL));
+  assert.ok(!namesOpticalSizes(NAMED_SIZES, [OPTICAL[0]]), "no optical size axis");
+  assert.deepEqual(pickNamedStyle(SAME_SIZE[1], SAME_SIZE, OPTICAL, {}), { wght: 700 }, "optical size keeps following");
+  assert.deepEqual(pickNamedStyle(SAME_SIZE[1], SAME_SIZE, OPTICAL, { opsz: 30 }), { wght: 700, opsz: 30 }, "or keeps the size set by hand");
+  assert.deepEqual(pickNamedStyle(NAMED_SIZES[2], NAMED_SIZES, OPTICAL, {}), { wght: 400, opsz: 72 }, "Display sets its own optical size");
+  assert.deepEqual(pickNamedStyle(SAME_SIZE[0], SAME_SIZE, [OPTICAL[0]], {}), { wght: 400 });
+});
+
+test("while optical size follows, the picker matches named styles on the other axes", () => {
+  assert.equal(currentInstance(SAME_SIZE, OPTICAL, {}), 0);
+  assert.equal(currentInstance(SAME_SIZE, OPTICAL, { wght: 700 }), 1);
+  assert.equal(currentInstance(SAME_SIZE, OPTICAL, { wght: 700, opsz: 14 }), 1, "set by hand at the styles' own size");
+  assert.equal(currentInstance(SAME_SIZE, OPTICAL, { wght: 700, opsz: 30 }), -1, "set by hand elsewhere: none");
+  assert.equal(currentInstance(NAMED_SIZES, OPTICAL, { opsz: 72 }), 2);
+  assert.equal(currentInstance(NAMED_SIZES, OPTICAL, pickNamedStyle(NAMED_SIZES[0], NAMED_SIZES, OPTICAL, {})), 0);
 });
