@@ -453,12 +453,13 @@ export function Sidebar(props: Props) {
       )}
 
       {/* "+": a new tag, a folder, or an import. Settings live in the app menu (macOS) or the
-          window's File menu, with Cmd+, (Ctrl+,), not here. */}
-      <div className="flex shrink-0 items-center border-t px-2 py-1.5">
+          window's File menu, with Cmd+, (Ctrl+,), not here. As tall as the list's footer rail
+          (FooterRail.tsx, h-7), so the two lines along the bottom of the window meet. */}
+      <div className="flex h-7 shrink-0 items-center border-t px-2">
         <DropdownMenu>
           <Tip tip="Makes a new tag, adds a folder of fonts, or imports fonts or tags">
-            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Add" />}>
-              <Icon name="add" size={18} />
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Add" />}>
+              <Icon name="add" size={16} />
             </DropdownMenuTrigger>
           </Tip>
           <DropdownMenuContent side="top" align="start" className="w-auto min-w-52">

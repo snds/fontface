@@ -159,7 +159,7 @@ Google offers an official API that lists every family and links to complete desk
 - Install: one click per family. The variable font is the default. A "Prefer static fonts" setting installs separate weights instead, which helps older apps.
 - Update: a daily check shows an update badge. Auto-update is optional. Fontface warns if PostScript names change, because documents may lose the link.
 - If Google removes a family, Fontface keeps it and marks it "No longer on Google Fonts".
-- Disconnect deletes the key. Installed fonts stay. A separate "Remove all Google fonts" turns them off and deletes the managed folder.
+- Disconnect deletes the key. Installed fonts stay. A separate "Uninstall all Google fonts" turns them off and deletes the managed folder.
 
 **Technical design**
 

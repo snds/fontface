@@ -31,7 +31,7 @@ interface Props {
   profile: PreviewInfo | undefined;
   facts: FactsState;
   retry: () => void;
-  /** The toolbar's preview text: the test text starts with it, if there is one. */
+  /** The preview bar's text: the test text starts with it, if there is one. */
   previewText: string;
   /** What's typed in the test field (null: not yet, so it shows its starting text). */
   testText: string | null;

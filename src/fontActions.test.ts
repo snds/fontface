@@ -205,7 +205,7 @@ test("on the font page: the family's styles, the chosen style's name and file", 
 
 test("Remove from Library is for fonts in your folders", () => {
   assert.ok(fontActionStates(listTarget("Lora"), ctx).remove.enabled);
-  assert.ok(!fontActionStates(listTarget("Roboto"), ctx).remove.enabled, "Google Fonts have their own Remove");
+  assert.ok(!fontActionStates(listTarget("Roboto"), ctx).remove.enabled, "Google Fonts have their own Uninstall");
 });
 
 test("the removal plan: what goes, what stays, and other styles in the same file", () => {

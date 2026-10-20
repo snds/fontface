@@ -64,7 +64,7 @@ const RESIZE_STEP = 16;
  * move by row, not into cells. The header row is one Tab stop: Left and Right move between
  * headers, Return or Space sorts (announced), Shift+Left and Shift+Right change the width (also
  * announced). Its right-click menu, and the View options, show and hide columns. The Preview
- * column draws at 12–32px following the size slider; turned off, the table loads no font files.
+ * column draws at 12–32px following the preview size; turned off, the table loads no font files.
  *
  * Rows are keyed by family (or style), so a row's controls stay with it when a reload or a new
  * order moves it, and the row at the top stays in place while a scan adds rows above it.

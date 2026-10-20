@@ -250,7 +250,7 @@ export function catalogCounts(families: readonly CatalogFamily[], holdings: Read
   return counts;
 }
 
-/** The toolbar's count: "1,876 families", or "12 of 1,876 families" while something narrows it. */
+/** The catalog's count (the footer rail's, footerCounts.ts): "1,876 families", or "12 of 1,876 families" while something narrows it. */
 export function countText(shown: number, total: number): string {
   const families = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "family" : "families"}`;
   return shown === total ? families(total) : `${shown.toLocaleString("en-US")} of ${families(total)}`;

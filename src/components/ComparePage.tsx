@@ -39,7 +39,7 @@ interface Props {
   faceOf: (key: string) => FaceRef | undefined;
   /** What Back returns to, in words. */
   placeName: string;
-  /** The toolbar's preview text, used until you type text here. */
+  /** The preview bar's text, used until you type text here. */
   previewText: string;
   onBack: () => void;
   onChange: (patch: PagePatch) => void;

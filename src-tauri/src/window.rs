@@ -1,6 +1,7 @@
 //! The main window's native side: the macOS menu bar (with the View and Font menus the page
-//! drives), the window's File menu on Windows and Linux, double-clicking the title bar, the window's color before the page paints, and hiding
-//! the window when it's closed (with the Dock icon, on macOS; see tray.rs).
+//! drives), the window's File menu on Windows and Linux, double-clicking the title bar, the
+//! window's color before the page paints, and hiding the window when it's closed (with the Dock
+//! icon, on macOS; see tray.rs).
 //!
 //! On macOS the title bar is an overlay (src-tauri/tauri.macos.conf.json): the page draws the
 //! top row and marks it as the place to drag the window from (src/components/TitleBar.tsx).

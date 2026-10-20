@@ -16,7 +16,7 @@ interface Props {
   faceOf: (key: string) => FaceRef | undefined;
   /** What Back returns to, in words. */
   placeName: string;
-  /** The toolbar's preview text: the heading, when there is some. */
+  /** The preview bar's text: the heading, when there is some. */
   previewText: string;
   onBack: () => void;
   onChange: (patch: PagePatch) => void;
