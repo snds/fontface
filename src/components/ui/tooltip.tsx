@@ -66,7 +66,9 @@ function TooltipContent({
         // Fixed, so a tooltip that follows its control past the window's edge (a row the list
         // scrolled away) never makes the page taller.
         positionMethod="fixed"
-        className="isolate z-50"
+        // Above everything, toasts too (sonner's layer is 999999999): a button in a toast (a
+        // scan's Details) shows its tooltip over the toast, not under it.
+        className="isolate z-[1000000000]"
       >
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"

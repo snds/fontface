@@ -1,6 +1,7 @@
-import type { Folder, ScanProgress, ServiceInfo, SidebarSections } from "@/api";
+import type { Folder, ScanProgress, ServiceInfo, SidebarSections, SkippedFiles } from "@/api";
 import { INSTALLED_LABEL, type Family, type LibraryView, type PlaceCounts } from "@/library";
 import { smartRows, sourceFolders, sourceOf, sourceRows, sourceView, type SourceKey } from "@/places";
+import { skippedMenuTip, skippedTotal, sumSkipped } from "@/skippedFiles";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -44,6 +45,8 @@ interface Props {
   onLocateFolder?: (f: Folder) => void;
   /** Show a folder in Finder. */
   onRevealFolder: (f: Folder) => void;
+  /** List the files a source's latest scan found but didn't add (Show Skipped Files…). */
+  onShowSkipped: (name: string, skipped: SkippedFiles) => void;
 }
 
 const itemClass = (selected: boolean) =>
@@ -183,8 +186,9 @@ export const SETTINGS_BUTTON_ID = "open-settings";
  * The sidebar: LIBRARY (All Fonts and the smart entries, each with a count), SOURCES (Font Book,
  * Google Fonts, Adobe Fonts, Purchases, then your folders A to Z, one row each), then TAGS.
  * Every source row's commands are on its right-click menu, which Shift-F10 opens too: Rescan or
- * Stop, Show in Finder, Locate… (a folder that moved), its color, and for your folders Remove
- * from Library…. Rows with folders also show Rescan (or Stop) on hover, and your folders Remove.
+ * Stop, Show in Finder, Show Skipped Files… (when its last scan found files it can't use),
+ * Locate… (a folder that moved), its color, and for your folders Remove from Library…. Rows with
+ * folders also show Rescan (or Stop) on hover, and your folders Remove.
  */
 export function Sidebar(props: Props) {
   const { folders, counts, folderCounts, families, services, adobeCount, newPurchases, view, scans, show, onView, onFallback, onAddFolder } = props;
@@ -196,8 +200,12 @@ export function Sidebar(props: Props) {
   const running = folders.filter((f) => scans.has(f.id));
   const user = folders.filter((f) => f.kind === "user");
 
-  /** The commands for a source with library folders: Rescan (or Stop), and Show in Finder for one folder. */
-  const scanActions = (list: Folder[], scanning: boolean): MenuAction[] => {
+  /**
+   * The commands for a source with library folders: Rescan (or Stop), Show in Finder for one
+   * folder, and Show Skipped Files… when its latest scans found files they didn't add. `name`:
+   * the source's.
+   */
+  const scanActions = (list: Folder[], scanning: boolean, name: string): MenuAction[] => {
     const reachable = list.filter((f) => !f.missing);
     if (!reachable.length) return [];
     const out: MenuAction[] = scanning
@@ -205,6 +213,10 @@ export function Sidebar(props: Props) {
       : [{ icon: "refresh", label: "Rescan", tip: RESCAN_TIP, onClick: () => reachable.forEach(props.onRescan) }];
     if (list.length === 1 && !list[0].missing) {
       out.push({ icon: "folder_open", label: `Show in ${FILE_BROWSER}`, tip: `Opens the folder in ${FILE_BROWSER}`, onClick: () => props.onRevealFolder(list[0]) });
+    }
+    const skipped = sumSkipped(list.map((f) => f.skipped));
+    if (skipped && skippedTotal(skipped) > 0) {
+      out.push({ icon: "visibility_off", label: "Show Skipped Files…", tip: skippedMenuTip(skipped), onClick: () => props.onShowSkipped(name, skipped) });
     }
     return out;
   };
@@ -232,7 +244,7 @@ export function Sidebar(props: Props) {
           location={FONT_BOOK_LOCATION}
           color={locations.colorOf(FONT_BOOK_LOCATION)}
           defaultColor={locations.defaultOf(FONT_BOOK_LOCATION)}
-          before={scanActions(list, !!scan)}
+          before={scanActions(list, !!scan, INSTALLED_LABEL)}
         >
           <SourceRow
             label={INSTALLED_LABEL}
@@ -267,6 +279,7 @@ export function Sidebar(props: Props) {
       const folder = list[0];
       const color = folder ? locations.colorOf(folder.path) : undefined;
       const google = source === "google";
+      const name = google ? "Google Fonts" : "Purchases";
       return (
         <LocationMenu
           key={source}
@@ -274,10 +287,10 @@ export function Sidebar(props: Props) {
           color={color ?? "gray"}
           defaultColor={folder ? locations.defaultOf(folder.path) : "gray"}
           disabled={!folder}
-          before={scanActions(list, !!scan)}
+          before={scanActions(list, !!scan, name)}
         >
           <SourceRow
-            label={google ? "Google Fonts" : "Purchases"}
+            label={name}
             icon={google ? "cloud" : "shopping_bag"}
             color={color ? colorVar(color) : undefined}
             scan={scan}
@@ -290,7 +303,7 @@ export function Sidebar(props: Props) {
                 : "Fonts you bought, added from your downloads. Browse to review new downloads."
             }
             onOpen={open}
-            actions={scanButton(list, !!scan, google ? "Google Fonts" : "Purchases")}
+            actions={scanButton(list, !!scan, name)}
           />
         </LocationMenu>
       );
@@ -305,7 +318,7 @@ export function Sidebar(props: Props) {
         color={locations.colorOf(folder.path)}
         defaultColor={locations.defaultOf(folder.path)}
         onLocate={locate}
-        before={scanActions(list, !!scan)}
+        before={scanActions(list, !!scan, folder.label)}
         after={[{ icon: "close", label: "Remove from Library…", tip: REMOVE_TIP, destructive: true, onClick: () => props.onRemoveFolder(folder) }]}
       >
         <SourceRow

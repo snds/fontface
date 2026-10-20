@@ -10,6 +10,9 @@
 //!    to the database, committing about every 400 ms, so fonts show up while the scan runs.
 //! 3. **Clean up.** Files that disappeared are forgotten. This step only runs if the walk could
 //!    list every folder, so an unreachable drive never wipes the library.
+//! 4. **Count what was left out.** Font files in formats Fontface can't use yet, found while
+//!    walking (see unsupported.rs), and files that couldn't be read, are kept with the folder
+//!    for the scan summary and the sidebar.
 //!
 //! Every step checks the cancel flag.
 
@@ -31,11 +34,16 @@ use walkdir::WalkDir;
 use crate::{
     activation, cloud, db,
     error::{AppError, AppResult},
-    model::{Axis, ScanFailure, ScanProgress, ScanReport},
+    model::{Axis, ScanFailure, ScanProgress, ScanReport, SkippedFiles},
     preview,
 };
 
+mod unsupported;
+
 pub const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
+/// Why a file is remembered in `skipped_files` when it held only private macOS fonts. Those are
+/// left out on purpose, so they never count as unreadable.
+const PRIVATE_ONLY: &str = "only private macOS fonts";
 const READ_WORKERS: usize = 8;
 const DOWNLOAD_WORKERS: usize = 3;
 const COMMIT_EVERY: Duration = Duration::from_millis(400);
@@ -348,6 +356,12 @@ pub fn scan_folder(
     // Files with fonts in the library, and files remembered as holding none.
     let mut known = stamps("SELECT path, file_size, mtime FROM fonts WHERE folder_id = ?1 GROUP BY path")?;
     let mut skipped = stamps("SELECT path, file_size, mtime FROM skipped_files WHERE folder_id = ?1")?;
+    // Of those, the ones that held only private macOS fonts. The rest couldn't be read.
+    let mut private_only: HashSet<String> = {
+        let mut stmt = conn.prepare("SELECT path FROM skipped_files WHERE folder_id = ?1 AND reason = ?2")?;
+        let rows = stmt.query_map(params![folder_id, PRIVATE_ONLY], |r| r.get(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
     let other_roots = db::other_roots(&conn, folder_id)?;
     // Files another folder already lists (e.g. two folders that both link to one outside folder).
     let owned_elsewhere: HashSet<String> = {
@@ -363,6 +377,13 @@ pub fn scan_folder(
     let mut seen = HashSet::new();
     let mut pending = Vec::new();
     let mut cloud = 0;
+    // Font files in formats Fontface can't use yet, by kind (step 4). Files with no extension
+    // wait for their Finder type codes. Each counts once, by its real path.
+    let mut left_out = SkippedFiles::default();
+    let mut by_type_code: Vec<PathBuf> = Vec::new();
+    let mut left_out_seen: HashSet<PathBuf> = HashSet::new();
+    // Unchanged files remembered as unreadable: still left out.
+    let mut still_unreadable = 0;
     // Creative Cloud's font store is never read (Adobe's terms), including through symlinks;
     // nor is the Google Fonts preview cache (its files are previews, not fonts to turn on);
     // hidden entries are skipped too.
@@ -397,7 +418,22 @@ pub fn scan_folder(
                 continue;
             }
         };
-        if !entry.file_type().is_file() || !is_font_file(entry.path()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if !is_font_file(entry.path()) {
+            // Not read either way. Counted if it's a font in another format, by the folder that
+            // owns it, and never in Adobe's store or the preview cache.
+            if let Some(look) = unsupported::look(entry.path()) {
+                let real = std::fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path().to_path_buf());
+                let elsewhere = !real.starts_with(root) && other_roots.iter().any(|r| real.starts_with(r));
+                if !off_limits(&real) && !elsewhere && left_out_seen.insert(real.clone()) {
+                    match look {
+                        unsupported::Look::Named(kind) => unsupported::add(&mut left_out, kind, 1),
+                        unsupported::Look::TypeCode => by_type_code.push(real),
+                    }
+                }
+            }
             continue;
         }
         report.files += 1;
@@ -415,6 +451,9 @@ pub fn scan_folder(
         let walked = entry.path().to_string_lossy().into_owned();
         if walked != path_str {
             adopt_walked_path(&conn, &mut known, &mut skipped, &walked, &path_str)?;
+            if private_only.remove(&walked) {
+                private_only.insert(path_str.clone());
+            }
         }
         // Removed from the library (Remove from Library…): never listed, here or elsewhere.
         if removed.skip.contains(&path_str) {
@@ -441,8 +480,14 @@ pub fn scan_folder(
             Ok(meta) => {
                 let (size, mtime) = (meta.len() as i64, mtime_secs(&meta));
                 let previous = known.get(&path_str);
-                if previous == Some(&(size, mtime)) || skipped.get(&path_str) == Some(&(size, mtime)) {
+                let remembered = skipped.get(&path_str) == Some(&(size, mtime));
+                if previous == Some(&(size, mtime)) || remembered {
                     report.unchanged += 1;
+                    // Remembered as unreadable, and unchanged since (any fonts still listed from
+                    // it are from an earlier version of the file).
+                    if remembered && previous != Some(&(size, mtime)) && !private_only.contains(&path_str) {
+                        still_unreadable += 1;
+                    }
                 } else {
                     let dataless = cloud::is_dataless(&meta);
                     cloud += dataless as usize;
@@ -468,6 +513,10 @@ pub fn scan_folder(
             });
         }
     }
+
+    // Files with no extension are looked up by type code meanwhile, on a thread that never
+    // downloads them.
+    let type_codes = unsupported::count_type_codes(by_type_code, cancel.clone());
 
     // 2. Read and parse the changed files. Workers are detached threads (not scoped) so that a
     //    cancel never has to wait for a download stuck inside the kernel.
@@ -559,7 +608,7 @@ pub fn scan_folder(
                                     if item.known { report.updated += 1 } else { report.added += 1 }
                                 } else {
                                     // Only private macOS UI families: nothing to list. Remember it.
-                                    remember_skipped(&conn, folder_id, item, "only private macOS fonts")?;
+                                    remember_skipped(&conn, folder_id, item, PRIVATE_ONLY)?;
                                 }
                             }
                             // Never delete on failure: the file is still there, and its rows carry
@@ -687,6 +736,18 @@ pub fn scan_folder(
             tx.commit()?;
         }
     }
+
+    // 4. Keep what this scan left out with the folder, in place of the last scan's counts.
+    if let Some(type_codes) = type_codes {
+        unsupported::merge(&mut left_out, &type_codes.join().unwrap_or_default());
+    }
+    left_out.unreadable = still_unreadable + report.failed.len();
+    report.skipped = left_out;
+    while db::ui_write_waiting() {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let _turn = db::scan_write_turn();
+    db::save_skipped(&conn, folder_id, &report.skipped)?;
 
     Ok(report)
 }

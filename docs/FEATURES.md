@@ -212,7 +212,7 @@ files. These are currently skipped. Tested on macOS 27.0.1 (2026-10-12) with rea
 | .dfont without FOND | No (error 103) | Skip |
 | PostScript Type 1 (.pfb/.pfm, LWFN) | No (103 / -50) | Can't be activated on current macOS; list as "unsupported" so it's not silent |
 | .eot | No (103) | Skip |
-| Report skipped formats in the scan summary | | ⬜ |
+| Report skipped formats in the scan summary | | ✅ counted per folder and kind (extensionless old Mac files by their Finder type code); one line in the scan's message, and Show Skipped Files… on the source's right-click menu |
 
 ## Phase 2: Organizing
 

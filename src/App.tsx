@@ -20,6 +20,7 @@ import {
   type ScanProgress,
   type ServiceId,
   type ServiceInfo,
+  type SkippedFiles,
   type SortOrder,
   type SwitchOrigin,
 } from "@/api";
@@ -91,6 +92,8 @@ import { FontPickerContext, FontPickerDialog, type PickRequest } from "@/compone
 import { ComparePage, type FaceRef } from "@/components/ComparePage";
 import { PairPage } from "@/components/PairPage";
 import { RemoveFontsDialog, type RemovalRequest } from "@/components/RemoveFontsDialog";
+import { SKIPPED_DETAILS_TIP, SkippedFilesDialog, type SkippedRequest } from "@/components/SkippedFilesDialog";
+import { skippedSummary } from "@/skippedFiles";
 import { REVEAL_LABEL } from "@/components/fontPage/InfoTab";
 import { ViewOptions } from "@/components/ViewOptions";
 import { PreviewStyleContext, usePreviewStyleValue } from "@/components/PreviewStyle";
@@ -205,6 +208,9 @@ export default function App() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [scans, setScans] = useState<Map<number, ScanProgress>>(new Map());
   const [pendingRemoval, setPendingRemoval] = useState<Folder | null>(null);
+  /** The source whose skipped files are listed (Show Skipped Files…, or a scan's Details). */
+  const [skippedList, setSkippedList] = useState<SkippedRequest | null>(null);
+  const showSkipped = useCallback((name: string, skipped: SkippedFiles) => setSkippedList({ name, skipped, returnFocus: noteFocus() }), []);
   /** Files with an on/off request queued or in progress. The OS acts on whole files, so every
    *  style with a copy in one of these files shows as busy. */
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -489,17 +495,51 @@ export default function App() {
         if (removedFolders.current.has(folder.id)) return;
         const changed = r.added + r.updated + r.removed > 0;
         const description = `${r.added.toLocaleString()} added · ${r.updated.toLocaleString()} updated · ${r.removed.toLocaleString()} removed`;
+        // One more line, about files it found but can't use yet, when that's news: on a scan you
+        // asked for, or when they differ from the last scan's. Never a toast of its own. (Files
+        // that couldn't be read have the warning's own words.)
+        const skippedLine = skippedSummary(r.skipped);
+        const skippedNews = skippedLine && (!quiet || skippedLine !== skippedSummary(folder.skipped)) ? skippedLine : null;
+        const toastId = `scan-${folder.id}`;
+        const report = (text: string) =>
+          skippedNews
+            ? {
+                id: toastId,
+                description: (
+                  <>
+                    <span className="block">{text}</span>
+                    <span className="mt-1 block">{skippedNews}</span>
+                  </>
+                ),
+                action: (
+                  <Tip tip={SKIPPED_DETAILS_TIP}>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      className="shrink-0 self-center"
+                      onClick={() => {
+                        toast.dismiss(toastId);
+                        showSkipped(name, r.skipped);
+                      }}
+                    >
+                      Details
+                    </Button>
+                  </Tip>
+                ),
+              }
+            : { description: text };
         if (r.cancelled) {
           toast.info(`Stopped scanning ${name}`, { description: "Fonts read so far are kept." });
         } else if (r.walkErrors > 0) {
-          toast.warning(`${name}: some folders couldn't be opened`, {
-            description: `${description}. Nothing was removed from the library because the scan was incomplete.`,
-          });
+          toast.warning(
+            `${name}: some folders couldn't be opened`,
+            report(`${description}. Nothing was removed from the library because the scan was incomplete.`),
+          );
         } else if (r.failed.length) {
-          toast.warning(`${name}: ${r.failed.length.toLocaleString()} file(s) couldn't be read`, { description });
+          toast.warning(`${name}: ${r.failed.length.toLocaleString()} file(s) couldn't be read`, report(description));
           for (const f of r.failed) console.warn("scan failure", f.path, f.reason);
         } else if (!quiet || changed) {
-          toast.success(name, { description });
+          toast.success(name, report(description));
         }
         if (!quiet || changed || r.failed.length || r.walkErrors) announce(`Finished scanning ${name}`);
       } catch (e) {
@@ -1646,6 +1686,7 @@ export default function App() {
               onOpenSettings={openSettings}
               onLocateFolder={relocate}
               onRevealFolder={(f) => api.revealFolder(f.id).catch((e) => toast.error(`Couldn't show ${f.label}`, { description: String(e) }))}
+              onShowSkipped={showSkipped}
             />
             <main className="relative flex min-h-0 min-w-0 flex-col outline-none" tabIndex={-1}>
               {/* The list layer: the place picked in the sidebar. While a page is open it stays as it
@@ -1779,7 +1820,14 @@ export default function App() {
               ) : filtersOn ? (
                 <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">{noMatch}</div>
               ) : (
-                <EmptyPlace view={view} libraryEmpty={allFamilies.length === 0} onAddFolder={addFolder} onBrowse={openCatalog} />
+                <EmptyPlace
+                  view={view}
+                  libraryEmpty={allFamilies.length === 0}
+                  folder={view.kind === "folder" ? folders.find((f) => f.id === view.id) : undefined}
+                  onAddFolder={addFolder}
+                  onBrowse={openCatalog}
+                  onShowSkipped={showSkipped}
+                />
               )}
               </>
               )}
@@ -1910,6 +1958,8 @@ export default function App() {
         {/* The library search for Compare and Pair, and Remove from Library's confirmation. */}
         <FontPickerDialog request={picker} families={pickerFamilies} onClose={() => setPicker(null)} />
         <RemoveFontsDialog request={removal} onConfirm={(r) => void confirmRemoval({ ...r, closePage: removal?.closePage ?? null })} onCancel={() => setRemoval(null)} />
+        {/* The files a source's latest scan found but didn't add, and why. */}
+        <SkippedFilesDialog request={skippedList} onClose={() => setSkippedList(null)} />
 
         <AlertDialog open={pendingRemoval !== null} onOpenChange={(o) => !o && setPendingRemoval(null)}>
           <AlertDialogContent>
@@ -1980,16 +2030,38 @@ function BrowseButton({ newPurchases, onBrowse }: { newPurchases: number; onBrow
 function EmptyPlace({
   view,
   libraryEmpty,
+  folder,
   onAddFolder,
   onBrowse,
+  onShowSkipped,
 }: {
   view: LibraryView;
   /** No fonts at all yet. */
   libraryEmpty: boolean;
+  /** The folder a folder view shows. */
+  folder?: Folder;
   onAddFolder: () => void;
   onBrowse: (service: CatalogPageEntry["service"]) => void;
+  onShowSkipped: (name: string, skipped: SkippedFiles) => void;
 }) {
   const quiet = (text: string) => <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">{text}</div>;
+  // A folder of fonts Fontface can't use yet (Type 1, say) says so, and what they are.
+  const skipped = folder?.skipped;
+  const skippedLine = skippedSummary(skipped, { unreadable: true });
+  if (folder && skipped && skippedLine) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="text-sm text-muted-foreground">No fonts in this folder.</p>
+        <p className="max-w-sm text-sm text-muted-foreground">{skippedLine}</p>
+        <Tip tip={SKIPPED_DETAILS_TIP}>
+          <Button variant="outline" size="sm" onClick={() => onShowSkipped(folder.label, skipped)}>
+            <Icon name="visibility_off" size={16} />
+            Show Skipped Files…
+          </Button>
+        </Tip>
+      </div>
+    );
+  }
   // (Google Fonts never gets here: its view is the catalog.)
   if (view.kind === "service" && view.id === "purchases") {
     return (
