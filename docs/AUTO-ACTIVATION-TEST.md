@@ -28,14 +28,16 @@ has it, Fontface still runs and the log says so.
    open -n --env FONTFACE_LISTEN_FONT_REQUESTS=1 src-tauri/target/release/bundle/macos/Fontface.app
    ```
 
-4. Check it's listening. The log's first line says so:
+4. Check it's listening. Each launch adds one line that says so, and the log keeps the lines
+   from earlier launches, so look at the newest such line:
 
    ```sh
-   tail -n 1 ~/Library/Logs/design.snds.fontface/font-requests.jsonl
+   grep -E '"event":"(not-)?listening"' ~/Library/Logs/design.snds.fontface/font-requests.jsonl | tail -n 1
    ```
 
    `"event":"listening"` means it's ready. `"event":"not-listening"` gives the reason (for
-   example, the call is gone from this macOS).
+   example, another font manager is already listening, or the call is gone from this macOS),
+   with the macOS version and the global auto-activation setting.
 
 To stop, quit Fontface and open it the usual way. Without the variable, nothing listens.
 
@@ -55,8 +57,8 @@ Apps worth trying, in three groups:
 - **Design:** Figma (the desktop app), Sketch.
 - **Adobe:** InDesign, Illustrator.
 - **Office, Affinity and Apple:** TextEdit (rich text), Pages, Keynote, Word, PowerPoint,
-  Affinity Designer, Photo and Publisher (both the App Store and the direct versions, if you
-  have them).
+  Affinity (the all-in-one app from late 2025), and Affinity Designer, Photo or Publisher 2 if
+  you still have them (both the App Store and the direct versions).
 
 Things to watch for:
 
@@ -96,7 +98,7 @@ Some ways to read it (`jq` comes with macOS):
 
 ```sh
 # Every request: when, which app, which fonts, and whether the library has them.
-jq -c 'select(.event == "request") | {time, app: (.asker.app.name // .asker.executable), fonts: [.fonts[] | {name: (.postscriptName // .displayName), found: .library.hasMatch}]}' ~/Library/Logs/design.snds.fontface/font-requests.jsonl
+jq -c 'select(.event == "request") | {time, app: (.asker.app.name // .asker.executable), fonts: [.fonts[] | {name: (.postscriptName // .displayName // ([.family, .style] | map(select(. != null)) | join(" "))), found: .library.hasMatch}]}' ~/Library/Logs/design.snds.fontface/font-requests.jsonl
 
 # How many requests each app made.
 jq -r 'select(.event == "request") | .asker.app.name // .asker.executable' ~/Library/Logs/design.snds.fontface/font-requests.jsonl | sort | uniq -c | sort -rn

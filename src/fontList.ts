@@ -12,6 +12,11 @@ import type { FoundFace, LineMatch, NameLine, NameMatchHow } from "./api.ts";
  * - Several on a line, between commas or semicolons, as in a CSS font-family list
  *   (`font-family: "Inter", sans-serif;`). CSS's own words (sans-serif, system-ui…) aren't
  *   fonts, so they're left out. Quotes, list bullets and a ".otf" or ".ttf" ending are ignored.
+ *   A comma inside quotes is part of the name.
+ * - CSS copied from a style sheet: the families in `font-family`, in the `font` shorthand (after
+ *   its size), and in a custom property for fonts (`--font-sans: "Inter", ui-sans-serif;`, as
+ *   Tailwind's theme writes it). Selectors, braces and other properties (`font-weight: 700`)
+ *   give no names.
  * - A line copied from a table: its first column (up to a tab).
  * - JSON, pasted whole: {"fonts":[{"family":"Inter","style":"Bold","postscriptName":"Inter-Bold"}]}
  *   (the Figma plugin's Copy as JSON), or the list on its own. Each font needs a family or a
@@ -63,25 +68,102 @@ export interface ParsedList {
   badJson: boolean;
 }
 
-/** How the matcher compares names: lowercase letters and digits only (name_key in Rust). */
-export const nameKey = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+/** How the matcher compares names: lowercase letters and digits only (name_key in Rust). An
+ *  accent is kept however it's written: as one letter, or as a letter and a separate mark (file
+ *  names from older Mac disks), since both are put in the one-letter form (NFC) first. */
+export const nameKey = (s: string) => s.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 
 const QUOTES = /^["'`“”‘’]+|["'`“”‘’]+$/g;
 const BULLET = /^(?:[-*•‣◦]|\d+[.)])\s+/;
 const hasLetters = (s: string) => /[\p{L}\p{N}]/u.test(s);
 
-/** The names on one line of text: its first column, split at commas and semicolons. */
+/** The quote marks a name can start with, and the mark that ends each. */
+const CLOSING = new Map([
+  ['"', '"'],
+  ["'", "'"],
+  ["`", "`"],
+  ["“", "”"],
+  ["”", "”"],
+  ["‘", "’"],
+]);
+
+/** `text` cut at each of `separators` outside quotes. As in CSS, a quote mark starts a quote only
+ *  at the start of a part, so an apostrophe inside a name ("Mom's Typewriter") doesn't. */
+function splitOutsideQuotes(text: string, separators: string): string[] {
+  const parts: string[] = [];
+  let part = "";
+  let closing: string | undefined;
+  for (const ch of text) {
+    if (closing) {
+      if (ch === closing) closing = undefined;
+    } else if (separators.includes(ch)) {
+      parts.push(part);
+      part = "";
+      continue;
+    } else if (!part.trim()) {
+      closing = CLOSING.get(ch);
+    }
+    part += ch;
+  }
+  parts.push(part);
+  return parts;
+}
+
+/** A CSS declaration: its property, and its value. */
+const DECLARATION = /^\s*(--[\w-]+|[a-z][a-z-]*)\s*:(.*)$/is;
+/** A size in the `font` shorthand ("16px", "1.2rem", "120%", "large"), with any line height after
+ *  a slash ("16px/1.5"). The families come after it. */
+const FONT_SIZE = /^(?:[-+]?(?:\d+\.?\d*|\.\d+)(?:[a-z]+|%)|xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)(?:\/.*)?$/i;
+/** A custom property that holds fonts: "font" in its name, but not a font's size, weight or other
+ *  setting (Tailwind's `--font-weight-bold: 700`). */
+const isFontProperty = (p: string) => /font/i.test(p) && !/size|weight|feature|variation|stretch|style|width|height|spacing|smoothing|synthesis|kerning|optical/i.test(p);
+/** A CSS value that isn't a name: a number or length ("700", "1.5rem") or a color ("#fff"). */
+const CSS_VALUE = /^(?:[-+]?(?:\d+\.?\d*|\.\d+)(?:[a-z]+|%)?|#[0-9a-f]{3,8})$/i;
+/** A CSS function ("var(--font-sans)", "local(Inter)"). */
+const CSS_FUNCTION = /^[a-z-]+\(.*\)$/i;
+
+/** The family list in a `font` shorthand: what follows its size. Nothing when it has no size (a
+ *  system font, such as `font: menu`). */
+function shorthandFamilies(value: string): string {
+  const tokens = splitOutsideQuotes(value.trim(), " \t").filter((t) => t.trim());
+  const at = tokens.findIndex((t) => FONT_SIZE.test(t));
+  if (at < 0) return "";
+  let rest = tokens.slice(at + 1);
+  // A line height after a spaced slash ("16px / 1.5", "16px /1.5").
+  if (rest[0] === "/") rest = rest.slice(2);
+  else if (rest[0]?.startsWith("/")) rest = rest.slice(1);
+  return rest.join(" ");
+}
+
+/** The names on one line of text: its first column, split at commas and semicolons outside
+ *  quotes, with CSS declarations read for their families. */
 function namesOnLine(raw: string): string[] {
-  let line = raw.split("\t")[0].trim().replace(BULLET, "");
-  line = line.replace(/^font-family\s*:/i, "").replace(/!important/gi, "");
+  let line = raw.split("\t")[0].trim().replace(BULLET, "").replace(/!important/gi, "");
+  // A rule on one line ("h1 { font-family: Inter }"): only what's inside its braces. A selector
+  // on its own ("body {") or a closing brace holds no names.
+  const open = line.lastIndexOf("{");
+  if (open >= 0) line = line.slice(open + 1);
+  line = line.replace(/}/g, "");
   const out: string[] = [];
-  for (const part of line.split(/[,;]/)) {
-    const trimmed = part.trim();
-    const quoted = /^["'`“‘]/.test(trimmed);
-    const name = trimmed.replace(QUOTES, "").trim();
-    if (!name || !hasLetters(name)) continue;
-    if (!quoted && CSS_WORDS.has(name.toLowerCase())) continue;
-    out.push(name);
+  for (const declaration of splitOutsideQuotes(line, ";")) {
+    let list = declaration;
+    let values = false;
+    const d = DECLARATION.exec(declaration);
+    if (d) {
+      const property = d[1].toLowerCase();
+      if (property === "font-family") list = d[2];
+      else if (property === "font") list = shorthandFamilies(d[2]);
+      else if (property.startsWith("--") && isFontProperty(property)) [list, values] = [d[2], true];
+      else continue; // another property (font-weight: 700, color: red): no names
+    }
+    for (const part of splitOutsideQuotes(list, ",")) {
+      const trimmed = part.trim();
+      const quoted = CLOSING.has(trimmed[0] ?? "");
+      const name = trimmed.replace(QUOTES, "").trim();
+      if (!name || !hasLetters(name) || /[{}:]/.test(name)) continue;
+      if (!quoted && (CSS_WORDS.has(name.toLowerCase()) || CSS_FUNCTION.test(name) || (values && CSS_VALUE.test(name)))) continue;
+      out.push(name);
+    }
   }
   return out;
 }
@@ -196,15 +278,21 @@ const HOW_WORDS: Record<NameMatchHow, string> = {
 
 export const howText = (how: NameMatchHow) => HOW_WORDS[how];
 
-/** What a row found, in a few words: "Inter Bold", "Inter, 18 styles", "Roboto Flex (variable)". */
+/** How a row found its styles, to show after what it found. None for a variable font: what it
+ *  found says so already. */
+export const foundHowText = (match: LineMatch) => (match.how && match.how !== "namedStyle" ? howText(match.how) : null);
+
+/** What a row found, in a few words: "Inter Bold", "Inter, 18 styles", "Roboto Flex (variable
+ *  font)". A variable font is named by its family alone: its file's own style ("Regular") isn't
+ *  the style the line asked for, which lives inside it. */
 export function foundText(match: LineMatch): string {
   const faces = match.faces;
   if (!faces.length) return match.near.length ? `Closest: ${match.near.join(", ")}` : "";
   const families = [...new Set(faces.map((f) => f.family))];
   if (match.how === "family" && families.length === 1) return `${families[0]}, ${count(faces.length, "style")}`;
   const first = faces[0];
+  if (match.how === "namedStyle") return faces.length === 1 ? `${first.family} (variable font)` : `${first.family}, ${count(faces.length, "variable font")}`;
   const name = `${first.family} ${first.style}`;
-  if (match.how === "namedStyle") return faces.length === 1 ? `${name} (variable)` : `${first.family}, ${count(faces.length, "variable font")}`;
   return faces.length === 1 ? name : `${name} and ${count(faces.length - 1, "other")}`;
 }
 

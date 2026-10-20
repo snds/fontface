@@ -84,7 +84,11 @@ pub fn start(queue: fn(i32, Value)) -> Result<(), String> {
     // SAFETY: a valid block of the right shape; order 0 like any other source.
     let source = unsafe { create(0, block) };
     if source.is_null() {
-        return Err("CoreText didn't make a font request listener (another one may already be listening in this app)".into());
+        // Fontface asks only once (see start_if_asked), so it isn't a second listener of its
+        // own. The header gives two causes: a request port name already taken (another font
+        // manager listening with auto-activation on) or a bad context. A deprecated call that
+        // now always fails would look the same.
+        return Err("CoreText returned no font request listener: another font manager may already be listening, or this macOS no longer supports it".into());
     }
     // SAFETY: the main run loop and a valid source. The source is kept (+1) until Fontface quits.
     unsafe { CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes) };

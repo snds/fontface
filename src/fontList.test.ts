@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FoundFace, LineMatch } from "./api.ts";
 import {
+  foundHowText,
   foundText,
   MAX_NAMES,
   nameKey,
@@ -41,6 +42,24 @@ test("commas, semicolons and CSS font-family lists give one name each, without C
   assert.deepEqual(labels("“Inter”, ‘Lora’"), ["Inter", "Lora"]);
 });
 
+test("CSS copied from a style sheet gives its families, and nothing else", () => {
+  // Tailwind's theme: a custom property for fonts. Its weights and other settings aren't fonts.
+  assert.deepEqual(labels(`--font-sans: "Inter", ui-sans-serif, system-ui;`), ["Inter"]);
+  assert.deepEqual(labels(`@theme {\n  --font-display: "Fraunces", serif;\n  --font-weight-bold: 700;\n  --color-brand: #ff0000;\n  --font-mono: var(--font-code);\n}`), ["Fraunces"]);
+  // The font shorthand: the families come after the size (and line height).
+  assert.deepEqual(labels(`font: 700 16px/1.5 "Inter", sans-serif;`), ["Inter"]);
+  assert.deepEqual(labels(`font: italic bold 1.2rem / 1.4 'IBM Plex Sans', Georgia, serif`), ["IBM Plex Sans", "Georgia"]);
+  assert.deepEqual(labels("font: menu;"), [], "a system font names no family");
+  // A copied rule: the selector, braces and other properties give no names.
+  assert.deepEqual(labels(`body {\n  font-family: "Inter", sans-serif;\n  color: red;\n}`), ["Inter"]);
+  assert.deepEqual(labels(`h1, h2 { font-family: Lora; font-weight: 700; }`), ["Lora"]);
+  assert.deepEqual(labels("font-family: Inter; font-weight: 700;"), ["Inter"]);
+  assert.deepEqual(labels(`@font-face {\n  font-family: "Söhne";\n  src: url(soehne.woff2) format("woff2");\n}`), ["Söhne"]);
+  // A comma inside quotes is part of the name; an apostrophe inside a name isn't a quote.
+  assert.deepEqual(labels(`font-family: "Foo, Bar", serif;`), ["Foo, Bar"]);
+  assert.deepEqual(labels("Mom's Typewriter, Inter"), ["Mom's Typewriter", "Inter"]);
+});
+
 test("a line from a table gives its first column; punctuation alone isn't a name", () => {
   assert.deepEqual(labels("Inter-Bold\tHeadings, Clients/Acme\nLora\t\n---\n;;\n"), ["Inter-Bold", "Lora"]);
 });
@@ -53,6 +72,10 @@ test("each name is looked up once, however it's spaced or spelt in capitals", ()
   );
   assert.equal(list.repeats, 3);
   assert.equal(nameKey("Inter-Bold™"), "interbold");
+  // An accent as one letter, or as a letter and a separate mark: the same name.
+  assert.equal(nameKey("So\u0308hne"), nameKey("S\u00f6hne"));
+  assert.equal(nameKey("So\u0308hne"), "s\u00f6hne");
+  assert.equal(parseFontList("S\u00f6hne Kr\u00e4ftig\nSo\u0308hne Kra\u0308ftig").repeats, 1);
 });
 
 test("text lines go to the matcher as they are", () => {
@@ -155,7 +178,13 @@ test("what a row found, in a few words, or the closest names", () => {
   assert.equal(foundText(match("family", styles.slice(0, 1))), "Inter, 1 style");
   assert.equal(foundText(match("postScript", [styles[1]])), "Inter Bold");
   assert.equal(foundText(match("postScript", [styles[1], face("Inter", "Bold")])), "Inter Bold and 1 other");
-  assert.equal(foundText(match("namedStyle", [face("Roboto Flex", "Regular", { variable: true })])), "Roboto Flex Regular (variable)");
+  // A variable font: its family, not its file's own style ("Regular"), which isn't what was asked for.
+  const flex = match("namedStyle", [face("Roboto Flex", "Regular", { variable: true })]);
+  assert.equal(foundText(flex), "Roboto Flex (variable font)");
+  assert.equal(foundHowText(flex), null, "not said twice");
+  assert.equal(foundText(match("namedStyle", [face("Fraunces", "Regular", { variable: true }), face("Fraunces", "Italic", { variable: true })])), "Fraunces, 2 variable fonts");
+  assert.equal(foundHowText(match("postScript", [styles[1]])), "PostScript name");
+  assert.equal(foundHowText(match(null, [])), null);
   assert.equal(foundText(match(null, [], ["Inter Bold", "Inter Black"])), "Closest: Inter Bold, Inter Black");
   assert.equal(foundText(match(null, [])), "");
 });

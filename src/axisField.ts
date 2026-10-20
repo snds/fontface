@@ -82,11 +82,19 @@ export function instanceValues(instance: Instance, axes: readonly AxisInfo[]): R
 /** Close enough to count as the same place on an axis. */
 const same = (a: number, b: number, axis: AxisRange) => Math.abs(a - b) <= 1e-3 + (axis.max - axis.min) * 1e-4;
 
-/** The named style the axes are at now (unset axes are at their defaults), or -1 for none.
- *  Optical size that follows the text size isn't at any one place, so then only the other axes
- *  count. */
+/**
+ * The named style the axes are at now (unset axes are at their defaults), or -1 for none. Optical
+ * size counts by the same rule as picking a style (`pickNamedStyle`):
+ * - When the font's named styles all sit at one optical size, it isn't part of any style: only
+ *   the other axes count, whether it follows the text size or is set by hand. Picking Bold then
+ *   reads as Bold, even with optical size set to 36 by hand.
+ * - When they sit at different sizes (Caption, Text, Display), it counts. While it follows the
+ *   text size, each preview is at its own size, so no one named style is showing: -1.
+ */
 export function currentInstance(instances: readonly Instance[], axes: readonly AxisInfo[], values: Readonly<Record<string, number>>): number {
-  const counted = followsSize(axes, values) ? axes.filter((a) => a.tag !== OPSZ) : axes;
+  const named = namesOpticalSizes(instances, axes);
+  if (named && followsSize(axes, values)) return -1;
+  const counted = named ? axes : axes.filter((a) => a.tag !== OPSZ);
   return instances.findIndex((instance) => {
     const wanted = instanceValues(instance, counted);
     return counted.every((a) => same(values[a.tag] ?? a.default, wanted[a.tag], a));

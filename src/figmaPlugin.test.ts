@@ -33,12 +33,13 @@ function search(node: FakeNode, criteria: { types: string[] }) {
   return inside(node).filter((n) => criteria.types.includes(n.type));
 }
 
-/** A text layer with one character per entry of `runs`, each in that font. */
-function text(runs: Font[], options: { missing?: boolean; broken?: boolean } = {}): FakeNode {
+/** A text layer with one character per entry of `runs`, each in that font. `onPath`: text on a
+ *  path, which Figma reads the same way. */
+function text(runs: Font[], options: { missing?: boolean; broken?: boolean; onPath?: boolean } = {}): FakeNode {
   const fonts = runs.map(([family, style]) => ({ family, style }));
   return {
     id: `text-${nextId++}`,
-    type: "TEXT",
+    type: options.onPath ? "TEXT_PATH" : "TEXT",
     characters: "x".repeat(fonts.length),
     fontName: fonts.length === 1 ? fonts[0] : MIXED,
     hasMissingFont: !!options.missing,
@@ -204,6 +205,28 @@ test("styles go by weight, upright before italic, other names after; families A 
   );
 });
 
+test("families spelt alike but for capitals or accents are listed once each, side by side", async () => {
+  const runs: Font[] = [
+    ["Avenir Next", "Regular"],
+    ["Avenir next", "Medium"],
+    ["Avenir Next", "Bold"],
+    ["Söhne", "Bold"],
+    ["Sohne", "Regular"],
+    ["Söhne", "Regular"],
+  ];
+  const p = plugin([page([text(runs)])], []);
+  const result = await p.list("all");
+  assert.deepEqual(
+    result.families.map((f: { family: string; styles: { style: string }[] }) => [f.family, f.styles.map((s) => s.style)]),
+    [
+      ["Avenir Next", ["Regular", "Bold"]],
+      ["Avenir next", ["Medium"]],
+      ["Sohne", ["Regular"]],
+      ["Söhne", ["Regular", "Bold"]],
+    ],
+  );
+});
+
 test("This page reads only the page you're on; Selection reads the selected layers and what's in them, each once", async () => {
   const inFrame = text([["Inter", "Regular"]]);
   const box = frame([inFrame]);
@@ -228,6 +251,35 @@ test("This page reads only the page you're on; Selection reads the selected laye
   const none = await p.list("selection");
   assert.equal(none.nothingSelected, true);
   assert.deepEqual(none.families, []);
+});
+
+test("text on a path is read like any text layer, on every page, on this page and in the selection", async () => {
+  const badge = text([["Fraunces", "Black"]], { onPath: true, missing: true });
+  const current = page([frame([badge]), text([["Inter", "Regular"]])]);
+  const p = plugin([current], [["Inter", "Regular"]]);
+  for (const scope of ["all", "page"]) {
+    const result = await p.list(scope);
+    assert.equal(result.copy.missing, "Fraunces Black", scope);
+    assert.equal(result.layers, 2, scope);
+    assert.equal(result.missingLayers, 1, scope);
+  }
+  current.selection = [badge];
+  assert.equal((await p.list("selection")).copy.all, "Fraunces Black", "selected itself");
+  current.selection = [current.children![0]];
+  assert.equal((await p.list("selection")).copy.all, "Fraunces Black", "inside a selected frame");
+});
+
+test("a Figma that refuses to search for text on a path still lists the text layers", async () => {
+  const current = page([text([["Inter", "Regular"]]), text([["Fraunces", "Black"]], { onPath: true })]);
+  const searchFor = current.findAllWithCriteria;
+  current.findAllWithCriteria = (criteria: { types: string[] }) => {
+    if (criteria.types.includes("TEXT_PATH")) throw new Error("unknown node type TEXT_PATH");
+    return searchFor(criteria);
+  };
+  const p = plugin([current], []);
+  const result = await p.list("page");
+  assert.equal(result.type, "result");
+  assert.equal(result.copy.all, "Inter Regular");
 });
 
 test("a layer that can't be read is counted, and the others are still listed", async () => {
@@ -298,6 +350,20 @@ test("the plugin stays offline: no network in the manifest, nothing loaded from 
     assert.doesNotMatch(source, /https?:|fetch\(|XMLHttpRequest|WebSocket|<script\s+src|<link/);
   }
   assert.doesNotMatch(ui, /\stitle=/, "tooltips come from the window's own Tip, never `title`");
+  // Every control has a tooltip: each data-tip has words, and every button has a data-tip.
+  const tips = [...ui.matchAll(/data-tip="([^"]+)"/g)].map((m) => m[1]);
+  for (const button of ui.match(/<button[^>]*>/g) ?? []) assert.match(button, /data-tip=/, button);
+  for (const key of tips) assert.match(ui, new RegExp(`"?${key}"?: "`), `${key} has words`);
+});
+
+test("the copy-by-hand window shuts off the controls it covers, and gives them back as it closes", () => {
+  const ui = read("ui.html");
+  const open = ui.slice(ui.indexOf("function copyByHand"), ui.indexOf("function closeManual"));
+  const close = ui.slice(ui.indexOf("function closeManual"), ui.indexOf('$("manual-done")'));
+  assert.match(open, /el\.inert = true/);
+  assert.match(close, /el\.inert = false/);
+  // What it covers: everything but itself.
+  assert.match(ui, /body > header, #summary, body > main, body > footer/);
 });
 
 // ------------------------------------------------------- into Turn On Fonts from a List…

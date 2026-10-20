@@ -114,11 +114,22 @@ test("a named style sets optical size only when the font's named styles differ i
   assert.deepEqual(pickNamedStyle(SAME_SIZE[0], SAME_SIZE, [OPTICAL[0]], {}), { wght: 400 });
 });
 
-test("while optical size follows, the picker matches named styles on the other axes", () => {
+test("when the named styles share one optical size, the picker matches them on the other axes", () => {
   assert.equal(currentInstance(SAME_SIZE, OPTICAL, {}), 0);
   assert.equal(currentInstance(SAME_SIZE, OPTICAL, { wght: 700 }), 1);
   assert.equal(currentInstance(SAME_SIZE, OPTICAL, { wght: 700, opsz: 14 }), 1, "set by hand at the styles' own size");
-  assert.equal(currentInstance(SAME_SIZE, OPTICAL, { wght: 700, opsz: 30 }), -1, "set by hand elsewhere: none");
+  assert.equal(currentInstance(SAME_SIZE, OPTICAL, { wght: 700, opsz: 30 }), 1, "set by hand elsewhere: still Bold");
+  // Picking a style keeps a hand-set optical size, and the picker then shows that style.
+  const picked = pickNamedStyle(SAME_SIZE[1], SAME_SIZE, OPTICAL, { opsz: 36 });
+  assert.equal(currentInstance(SAME_SIZE, OPTICAL, picked), 1, "Bold, not Custom");
+  assert.equal(currentInstance(SAME_SIZE, OPTICAL, { wght: 650 }), -1, "between styles: none");
+});
+
+test("when the named styles are optical sizes, the picker matches optical size too", () => {
   assert.equal(currentInstance(NAMED_SIZES, OPTICAL, { opsz: 72 }), 2);
   assert.equal(currentInstance(NAMED_SIZES, OPTICAL, pickNamedStyle(NAMED_SIZES[0], NAMED_SIZES, OPTICAL, {})), 0);
+  assert.equal(currentInstance(NAMED_SIZES, OPTICAL, { opsz: 30 }), -1, "between sizes: none");
+  // Following the text size, each preview is at its own optical size: no one style is showing.
+  assert.equal(currentInstance(NAMED_SIZES, OPTICAL, {}), -1);
+  assert.equal(currentInstance(NAMED_SIZES, OPTICAL, { wght: 400 }), -1);
 });

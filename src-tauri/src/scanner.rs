@@ -737,9 +737,19 @@ pub fn scan_folder(
         }
     }
 
-    // 4. Keep what this scan left out with the folder, in place of the last scan's counts.
+    // 4. Keep what this scan left out with the folder, in place of the last scan's counts. A
+    //    cancel while the type codes are still being read stops here: the counts so far are only
+    //    part of the folder, so the last scan's counts are kept.
     if let Some(type_codes) = type_codes {
-        unsupported::merge(&mut left_out, &type_codes.join().unwrap_or_default());
+        let Some(counts) = unsupported::wait_for(type_codes, cancel) else {
+            report.cancelled = true;
+            return Ok(report);
+        };
+        unsupported::merge(&mut left_out, &counts);
+    }
+    if cancel.load(Relaxed) {
+        report.cancelled = true;
+        return Ok(report);
     }
     left_out.unreadable = still_unreadable + report.failed.len();
     report.skipped = left_out;

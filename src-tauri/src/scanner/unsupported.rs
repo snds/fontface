@@ -128,6 +128,21 @@ pub fn count_type_codes(paths: Vec<PathBuf>, cancel: Arc<AtomicBool>) -> Option<
     }))
 }
 
+/// Waits for `count_type_codes` to finish, and returns its counts. None if `cancel` is set first,
+/// or the thread stopped early because of it: its counts then cover only part of the folder. The
+/// thread isn't joined on a cancel. It's left to finish on its own, like the scanner's read
+/// workers, so a cancel never waits for an attribute read stuck on a network drive.
+pub fn wait_for(handle: JoinHandle<SkippedFiles>, cancel: &AtomicBool) -> Option<SkippedFiles> {
+    while !handle.is_finished() {
+        if cancel.load(Relaxed) {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let counts = handle.join().unwrap_or_default();
+    (!cancel.load(Relaxed)).then_some(counts)
+}
+
 /// Adds `n` files of `kind`.
 pub fn add(counts: &mut SkippedFiles, kind: Kind, n: usize) {
     let count = match kind {
@@ -161,10 +176,13 @@ pub fn merge(counts: &mut SkippedFiles, more: &SkippedFiles) {
 mod tests {
     use std::{
         path::{Path, PathBuf},
-        sync::{atomic::AtomicBool, Arc},
+        sync::{
+            atomic::{AtomicBool, Ordering::Relaxed},
+            Arc,
+        },
     };
 
-    use super::{kind_of_type_code, look, Kind, Look};
+    use super::{kind_of_type_code, look, wait_for, Kind, Look};
     use crate::{db, model::SkippedFiles, scanner};
 
     const ANDALE_MONO: &str = "/System/Library/Fonts/Supplemental/Andale Mono.ttf";
@@ -348,6 +366,44 @@ mod tests {
         let cancelled = scanner::scan_folder(&sb.db(), folder, &sb.fonts(), &Arc::new(AtomicBool::new(true)), |_| {}).unwrap();
         assert!(cancelled.cancelled);
         assert_eq!(sb.stored(folder).map(|s| s.type1), Some(1));
+    }
+
+    #[test]
+    fn a_cancel_never_waits_for_the_type_codes() {
+        // A type-code read stuck on a network drive: the thread doesn't finish until released.
+        let release = Arc::new(AtomicBool::new(false));
+        let stuck = {
+            let release = release.clone();
+            std::thread::spawn(move || {
+                while !release.load(Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                SkippedFiles { type1: 212, ..Default::default() }
+            })
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancelling = {
+            let cancel = cancel.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                cancel.store(true, Relaxed);
+            })
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(wait_for(stuck, &cancel), None, "no partial counts");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "the cancel didn't wait for the read");
+        release.store(true, Relaxed);
+        cancelling.join().unwrap();
+    }
+
+    #[test]
+    fn counts_from_a_thread_that_stopped_for_a_cancel_are_dropped() {
+        // The thread saw the cancel and returned what it had so far.
+        let cancel = AtomicBool::new(true);
+        let partial = std::thread::spawn(|| SkippedFiles { suitcase: 3, ..Default::default() });
+        assert_eq!(wait_for(partial, &cancel), None);
+        let finished = std::thread::spawn(|| SkippedFiles { suitcase: 3, ..Default::default() });
+        assert_eq!(wait_for(finished, &AtomicBool::new(false)), Some(SkippedFiles { suitcase: 3, ..Default::default() }));
     }
 
     #[test]

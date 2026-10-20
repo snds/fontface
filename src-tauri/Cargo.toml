@@ -27,6 +27,10 @@ tokio = { version = "1", features = ["sync"] }
 ureq = "2"
 notify = "8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Unicode normalisation, so a name written with accents as separate marks (as file names from
+# older Mac disks are) matches the same name written with accented letters. Already in
+# Cargo.lock (URL handling uses it); listed so the name matcher can use it directly.
+icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

@@ -135,7 +135,7 @@
   <div id="manual" role="dialog" aria-modal="true" aria-labelledby="manual-text" hidden>
     <p id="manual-text"></p>
     <textarea id="manual-copy" readonly aria-label="Text to copy"></textarea>
-    <button id="manual-done" type="button">Done</button>
+    <button id="manual-done" type="button" data-tip="manual-done">Done</button>
   </div>
   <div id="tip" role="tooltip" hidden></div>
   <div id="said" class="sr" aria-live="polite"></div>
@@ -152,10 +152,11 @@
     "scope-all": "Lists the fonts on every page of this file. A big file takes a moment to read.",
     "scope-page": "Lists the fonts on the page you're on",
     "scope-selection": "Lists the fonts in the selected layers and the layers inside them",
-    refresh: "Reads the fonts again, after you change the file or turn fonts on in Fontface",
+    refresh: "Reads the fonts again, after you change the file. Fonts turned on in Fontface show once you reload this file's tab.",
     "copy-missing": "Copies the missing fonts, one \"Family Style\" per line, to paste into Fontface",
     "copy-all": "Copies every font listed, one \"Family Style\" per line, to paste into Fontface",
     "copy-json": "Copies every font listed as JSON, with each font's family and style",
+    "manual-done": "Closes this and goes back to the list (Esc)",
   };
   /** Why a greyed-out control is greyed out, by its data-tip (absent while it works). */
   const why = {};
@@ -350,12 +351,16 @@
   }
 
   let manualFrom = null; // the button to go back to when the manual copy closes
+  /** What the manual copy covers: out of reach of the keyboard (and screen readers) while it's
+   *  open, so Tab can't land on a control you can't see. */
+  const covered = () => document.querySelectorAll("body > header, #summary, body > main, body > footer");
 
   /** If copying is refused, show the text selected, ready for Command-C. */
   function copyByHand(text, from) {
     manualFrom = from;
     $("manual-text").textContent =
       "Figma didn't let the plugin copy. Press " + (MAC ? "⌘C" : "Ctrl+C") + " to copy this text.";
+    for (const el of covered()) el.inert = true;
     $("manual").hidden = false;
     const box = $("manual-copy");
     box.value = text;
@@ -365,6 +370,7 @@
 
   function closeManual() {
     $("manual").hidden = true;
+    for (const el of covered()) el.inert = false;
     if (manualFrom) manualFrom.focus();
     manualFrom = null;
   }

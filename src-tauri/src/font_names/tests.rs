@@ -4,7 +4,10 @@
 use rusqlite::params;
 
 use super::{name_key, style_words, How, LineMatch, NameIndex, NameLine, MAX_LINE, NEAR_MISSES};
-use crate::tags::{LibraryIndex, LibraryRow};
+use crate::{
+    model::Axis,
+    tags::{LibraryIndex, LibraryRow},
+};
 
 /// A Creative Cloud font store path: never matched.
 const ADOBE: &str = "/Users/me/Library/Application Support/Adobe/CoreSync/plugins/livetype/.r/.12345.otf";
@@ -30,6 +33,7 @@ fn font(path: &str, ps: &str, family: &str, style: &str) -> Font {
             variable: false,
             italic: style.contains("Italic") || style.contains("Oblique"),
             installed: false,
+            axes: Vec::new(),
         },
     }
 }
@@ -46,6 +50,14 @@ impl Font {
     }
     fn variable(mut self) -> Self {
         self.row.variable = true;
+        self
+    }
+    /// A variable font's axes: (tag, lowest, highest).
+    fn axes(mut self, axes: &[(&str, f32, f32)]) -> Self {
+        self.row.axes = axes
+            .iter()
+            .map(|&(tag, min, max)| Axis { tag: tag.into(), name: None, min, default: 100f32.clamp(min, max), max, hidden: false })
+            .collect();
         self
     }
     fn italic(mut self, italic: bool) -> Self {
@@ -106,6 +118,22 @@ fn name_keys_ignore_case_spaces_and_punctuation() {
     assert_eq!(name_key("INTER_BOLD"), "interbold");
     assert_eq!(name_key("Abaddon™ Std."), "abaddonstd");
     assert_eq!(name_key("Ünïcode Sans"), "ünïcodesans");
+}
+
+#[test]
+fn accents_match_however_they_are_written() {
+    // "ö" as one letter (NFC), and as "o" then a separate accent mark (NFD), as file names from
+    // older Mac disks spell it.
+    let (nfc, nfd) = ("S\u{f6}hne Kr\u{e4}ftig", "So\u{308}hne Kra\u{308}ftig");
+    assert_ne!(nfc, nfd);
+    assert_eq!(name_key(nfd), name_key(nfc));
+    assert_eq!(name_key(nfd), "s\u{f6}hnekr\u{e4}ftig", "the accent is kept, not dropped");
+    // A pasted file name in one form finds the library's name in the other, both ways.
+    let lib = index(&[font("/f/Sohne-Kraftig.otf", "Soehne-Kraftig", nfc, "Regular").full(nfc)]);
+    assert_eq!(found(&lib, &format!("{nfd}.otf")).0, Some(How::Family));
+    assert_eq!(found(&lib, &format!("{nfd} Regular")).0, Some(How::FamilyStyle));
+    let lib = index(&[font("/f/Sohne-Kraftig.otf", "Soehne-Kraftig", nfd, "Regular")]);
+    assert_eq!(found(&lib, nfc).0, Some(How::Family));
 }
 
 #[test]
@@ -213,6 +241,39 @@ fn a_style_of_a_variable_family_finds_the_variable_font() {
         font("/f/Fraunces-Black.otf", "Fraunces-Black", "Fraunces", "Black"),
     ]);
     assert_eq!(found(&lib, "Fraunces Blk"), (Some(How::FamilyStyle), names(&["Fraunces Black"])));
+}
+
+#[test]
+fn a_variable_font_holds_only_the_styles_its_axes_can_draw() {
+    // Weight and optical size, but no width axis.
+    let lib = index(&[font("/f/Inter.ttf", "Inter-Regular", "Inter", "Regular").variable().axes(&[("opsz", 14.0, 32.0), ("wght", 100.0, 900.0)])]);
+    assert_eq!(found(&lib, "Inter Bold"), (Some(How::NamedStyle), names(&["Inter Regular"])));
+    assert_eq!(found(&lib, "Inter Thin Italic").0, Some(How::NamedStyle), "the slant is chosen apart");
+    let m = one(&lib, "Inter Condensed Bold");
+    assert_eq!((m.how, m.faces.len()), (None, 0), "no width axis: not in this font");
+    assert_eq!(m.near, names(&["Inter Regular"]), "the family's styles are offered instead");
+    assert_eq!(found(&lib, "Inter Expanded").0, None);
+
+    // A weight axis that stops at Bold doesn't hold Black, but a weight a little past it counts.
+    let lib = index(&[font("/f/Lora.ttf", "Lora-Regular", "Lora", "Regular").variable().axes(&[("wght", 400.0, 700.0)])]);
+    assert_eq!(found(&lib, "Lora Black").0, None);
+    assert_eq!(found(&lib, "Lora Thin").0, None);
+    assert_eq!(found(&lib, "Lora SemiBold").0, Some(How::NamedStyle));
+    let lib = index(&[font("/f/Acme.ttf", "Acme-Regular", "Acme", "Regular").variable().axes(&[("wght", 100.0, 850.0)])]);
+    assert_eq!(found(&lib, "Acme Black").0, Some(How::NamedStyle), "fonts number their weights a little differently");
+
+    // No weight axis at all: a weight isn't in it either.
+    let lib = index(&[font("/f/Optical.ttf", "Optical-Regular", "Optical", "Regular").variable().axes(&[("opsz", 8.0, 72.0)])]);
+    assert_eq!(found(&lib, "Optical Bold").0, None);
+
+    // A width axis: narrower and wider widths, each only the way the axis goes.
+    let lib = index(&[font("/f/Sofia.ttf", "Sofia-Regular", "Sofia", "Regular").variable().axes(&[("wdth", 62.5, 100.0), ("wght", 100.0, 900.0)])]);
+    assert_eq!(found(&lib, "Sofia Condensed Bold").0, Some(How::NamedStyle));
+    assert_eq!(found(&lib, "Sofia ExtraCondensed").0, Some(How::NamedStyle));
+    assert_eq!(found(&lib, "Sofia Expanded").0, None, "its width axis only goes narrower");
+
+    // A variable font stored without its axes: any style counts, as before.
+    assert_eq!(found(&library(), "Roboto Flex Condensed Bold").0, Some(How::NamedStyle));
 }
 
 #[test]
@@ -366,6 +427,19 @@ fn the_library_query_reads_every_name_a_copy_carries() {
     assert_eq!(out[1].how, Some(How::FamilyStyle));
     assert_eq!(out[1].faces[0].ids, vec![md]);
     assert!(out[1].faces[0].installed);
+    // A variable font's axes come with it: weight, but no width.
+    conn.execute(
+        "INSERT INTO fonts (folder_id, path, face_index, file_size, mtime, family, subfamily, postscript_name,
+            weight, width, italic, monospace, variable, axes, glyph_count, format)
+         VALUES (?1, '/fonts/Flex.ttf', 0, 1, 1, 'Flex', 'Regular', 'Flex-Regular', 400, 5, 0, 0, 1,
+            '[{\"tag\":\"wght\",\"name\":\"Weight\",\"min\":100.0,\"default\":400.0,\"max\":900.0,\"hidden\":false}]', 10, 'TrueType')",
+        [user],
+    )
+    .unwrap();
+    let lib = NameIndex::load(&conn).unwrap();
+    let out = lib.match_lines(&[NameLine::Text("Flex Bold".into()), NameLine::Text("Flex Condensed".into())], |_| false);
+    assert_eq!(out[0].how, Some(How::NamedStyle));
+    assert_eq!(out[1].how, None, "the stored axes have no width");
     drop(conn);
     let _ = std::fs::remove_dir_all(&dir);
 }

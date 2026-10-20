@@ -20,8 +20,10 @@
 //!    regular style (else every style with that name).
 //! 7. A family and a style written another way: short forms ("Inter Bold It"), Oblique for
 //!    Italic ("Helvetica Bold Italic" finds Bold Oblique), Roman for Regular, words in any order.
-//! 8. A family and style words, where the family has a variable font: the variable font, since
-//!    its styles live inside it ("Roboto Flex Bold").
+//! 8. A family and style words, where the family has a variable font that can draw them: the
+//!    variable font, since its styles live inside it ("Roboto Flex Bold"). A weight needs a
+//!    weight axis that reaches it, and a width (Condensed, Expanded) needs a width axis: a
+//!    weight-only variable font doesn't hold "Inter Condensed Bold".
 //!
 //! Every comparison ignores letter case, spaces and punctuation ([`name_key`]): "Inter-Bold",
 //! "inter bold" and "INTER_BOLD" are the same. A trailing font file extension (".otf") is ignored
@@ -49,6 +51,7 @@ use tauri::State;
 
 use crate::{
     error::{AppError, AppResult},
+    model::Axis,
     services::adobe::is_adobe_path,
     tags::LibraryIndex,
     AppState,
@@ -133,8 +136,13 @@ pub struct LineMatch {
 
 /// A name as the matcher compares it: lowercase, letters and digits only. "Inter-Bold",
 /// "inter bold" and "INTER_BOLD" all become "interbold"; "Abaddon™" becomes "abaddon".
+///
+/// Accents are kept, however they're written. Text can spell "ö" as one letter, or as "o"
+/// followed by a separate accent mark (file names from older Mac disks do). The name is put in
+/// the one-letter form first (Unicode NFC), so both spellings give "söhne" and match.
 pub fn name_key(s: &str) -> String {
-    s.chars().flat_map(char::to_lowercase).filter(|c| c.is_alphanumeric()).collect()
+    const NFC: icu_normalizer::ComposingNormalizerBorrowed<'static> = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
+    NFC.normalize(s).chars().flat_map(char::to_lowercase).filter(|c| c.is_alphanumeric()).collect()
 }
 
 /// Font file extensions a pasted name may end with (a list of file names).
@@ -259,6 +267,59 @@ pub fn style_words(key: &str) -> Option<Vec<&'static str>> {
         words.push("regular");
     }
     Some(words)
+}
+
+/// The weight a style word names, as CSS numbers weights. Fonts call both 800 and 900 Heavy, so
+/// it sits between them.
+fn weight_of(word: &str) -> Option<f32> {
+    Some(match word {
+        "hairline" | "thin" => 100.0,
+        "extralight" => 200.0,
+        "light" => 300.0,
+        "book" => 400.0,
+        "medium" => 500.0,
+        "semibold" => 600.0,
+        "bold" => 700.0,
+        "extrabold" => 800.0,
+        "heavy" => 850.0,
+        "black" => 900.0,
+        "extrablack" => 950.0,
+        _ => return None,
+    })
+}
+
+/// For a width word: true if it asks for wider letters than normal, false for narrower.
+fn is_wider(word: &str) -> Option<bool> {
+    match word {
+        "condensed" | "semicondensed" | "extracondensed" | "ultracondensed" | "compressed" | "narrow" => Some(false),
+        "expanded" | "semiexpanded" | "extraexpanded" => Some(true),
+        _ => None,
+    }
+}
+
+/// How far a weight may be outside a weight axis and still count as in it. Fonts number their
+/// named weights a little differently ("Black" at 850, "Thin" at 150).
+const WEIGHT_MARGIN: f32 = 50.0;
+
+/// Whether a variable font with these axes can draw the style `wanted` names (from
+/// [`style_words`]). A weight needs a weight axis (`wght`) that reaches it; a width needs a width
+/// axis (`wdth`) that goes that way from normal (100). Regular and Italic need no axis: every
+/// variable font has a default style, and the slant is chosen separately. With no axes known (a
+/// library row stored without them), any style counts, as it did before axes were looked at.
+fn variable_font_draws(axes: &[Axis], wanted: &[&str]) -> bool {
+    if axes.is_empty() {
+        return true;
+    }
+    let axis = |tag: &str| axes.iter().find(|a| a.tag == tag).map(|a| (a.min.min(a.max), a.max.max(a.min)));
+    wanted.iter().all(|&word| {
+        if let Some(weight) = weight_of(word) {
+            return axis("wght").is_some_and(|(min, max)| min - WEIGHT_MARGIN <= weight && weight <= max + WEIGHT_MARGIN);
+        }
+        if let Some(wider) = is_wider(word) {
+            return axis("wdth").is_some_and(|(min, max)| if wider { max > 100.0 } else { min < 100.0 });
+        }
+        true
+    })
 }
 
 // ----------------------------------------------------------------------------- near misses
@@ -495,7 +556,11 @@ impl NameIndex {
             if !same.is_empty() {
                 return (Some(How::FamilyStyle), dedup(same), vec![]);
             }
-            let variable: Vec<usize> = family.faces().into_iter().filter(|&f| self.lib.faces[f].variable).collect();
+            let variable: Vec<usize> = family
+                .faces()
+                .into_iter()
+                .filter(|&f| self.lib.faces[f].variable && variable_font_draws(&self.lib.faces[f].axes, &wanted))
+                .collect();
             if !variable.is_empty() {
                 // The variable fonts with the slant asked for; any of them if none has it (one
                 // file can hold both, on an axis).

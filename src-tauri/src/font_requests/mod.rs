@@ -167,7 +167,16 @@ impl Worker {
             }
             Message::Started(Err(reason)) => {
                 eprintln!("fontface: not listening for font requests: {reason}");
-                Some(json!({ "event": "not-listening", "time": iso_ms(now_ms()), "reason": reason }).to_string())
+                // The same details as a listening line, so the log reads on its own.
+                let line = json!({
+                    "event": "not-listening",
+                    "time": iso_ms(now_ms()),
+                    "reason": reason,
+                    "fontface": self.app.package_info().version.to_string(),
+                    "macos": macos_version(),
+                    "autoActivation": listen::auto_activation_setting(None).map(setting_name),
+                });
+                Some(line.to_string())
             }
             Message::Request(q) => {
                 let asker = asker_of(q.pid);

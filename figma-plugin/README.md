@@ -34,8 +34,10 @@ plugin…**, copy the `id` it gives into `manifest.json`, and import it again.
   **Copy as JSON** gives `{"fonts":[{"family":"…","style":"…"}]}`.
 - Paste either into Fontface's **Turn On Fonts from a List…**. It finds each font in your library
   and turns them on, tags them, or copies the names it doesn't have.
-- **Refresh** reads the file again: after you turn fonts on in Fontface, the marks change from
-  Missing to Available.
+- **Refresh** reads the file again, after you change it.
+- After you turn fonts on in Fontface, reload the file's tab in Figma (right-click the tab ›
+  **Reload tab**), then run the plugin again. Figma loads its list of fonts when a file opens, so
+  it sees fonts turned on since only after a reload; until then they still show as Missing.
 
 Figma names fonts by family and style, not by PostScript name, so the copied lines are
 `Family Style`. Fontface's name matcher understands that form, other spellings of the style
@@ -43,7 +45,8 @@ Figma names fonts by family and style, not by PostScript name, so the copied lin
 
 ## How it works
 
-- `code.js` runs in Figma's plugin sandbox. It walks the text layers, reads each one's fonts with
+- `code.js` runs in Figma's plugin sandbox. It walks the text layers (text on a path too: the
+  `TEXT_PATH` layer type, in beta in the plugin API), reads each one's fonts with
   `getRangeAllFontNames`, counts layers per font, marks a font missing when it isn't in
   `figma.listAvailableFontsAsync()`, and sends the list to the window.
 - `ui.html` is the window. It shows the list and copies the text. Figma's plugin window isn't
@@ -67,6 +70,8 @@ Figma names fonts by family and style, not by PostScript name, so the copied lin
   https://developers.figma.com/docs/plugins/accessing-document/
 - `TextNode` (`getRangeAllFontNames`, `fontName`, `hasMissingFont`):
   https://developers.figma.com/docs/plugins/api/TextNode/
+- `TextPathNode` (text on a path, beta):
+  https://developers.figma.com/docs/plugins/api/TextPathNode/
 - `figma.listAvailableFontsAsync`:
   https://developers.figma.com/docs/plugins/api/figma/#listavailablefontsasync
 - `findAllWithCriteria`:

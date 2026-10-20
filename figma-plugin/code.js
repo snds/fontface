@@ -22,6 +22,25 @@ function isFontName(value) {
   return !!value && typeof value === "object" && typeof value.family === "string" && typeof value.style === "string";
 }
 
+/** The kinds of layer that hold text: text layers, and text on a path ("TEXT_PATH", in beta in
+ *  Figma's plugin API). Both have the characters, fontName, getRangeAllFontNames and
+ *  hasMissingFont that the fonts are read from. */
+var TEXT_TYPES = ["TEXT", "TEXT_PATH"];
+
+function isText(node) {
+  return TEXT_TYPES.indexOf(node.type) >= 0;
+}
+
+/** The text layers inside `node` (a page or a frame), text on a path included. If this Figma
+ *  refuses to search for text on a path, the plain text layers alone. */
+function findTexts(node) {
+  try {
+    return node.findAllWithCriteria({ types: TEXT_TYPES });
+  } catch (e) {
+    return node.findAllWithCriteria({ types: ["TEXT"] });
+  }
+}
+
 /** The fonts one text layer uses, each once. An empty layer has no characters but still has a
  *  font (the one typed text would get), so it counts too. */
 function fontsInText(node) {
@@ -60,6 +79,9 @@ function styleRank(style) {
 function compareFonts(a, b) {
   var byFamily = a.family.localeCompare(b.family, undefined, { sensitivity: "base", numeric: true });
   if (byFamily !== 0) return byFamily;
+  // Names that differ only in capitals or accents ("Avenir Next", "Avenir next") sort together
+  // but are listed as two families: keep each one's styles together.
+  if (a.family !== b.family) return a.family < b.family ? -1 : 1;
   var ra = styleRank(a.style);
   var rb = styleRank(b.style);
   if (ra.weight !== rb.weight) return ra.weight - rb.weight;
@@ -130,7 +152,7 @@ function asJson(fonts) {
   return JSON.stringify({ fonts: list }, null, 2);
 }
 
-/** The text layers among `nodes` and inside them, each once. */
+/** The text layers among `nodes` and inside them (text on a path included), each once. */
 function textsUnder(nodes) {
   var seen = {};
   var texts = [];
@@ -141,8 +163,8 @@ function textsUnder(nodes) {
   }
   for (var i = 0; i < nodes.length; i++) {
     var node = nodes[i];
-    if (node.type === "TEXT") add(node);
-    if ("findAllWithCriteria" in node) node.findAllWithCriteria({ types: ["TEXT"] }).forEach(add);
+    if (isText(node)) add(node);
+    if ("findAllWithCriteria" in node) findTexts(node).forEach(add);
   }
   return texts;
 }
@@ -153,21 +175,22 @@ async function textLayers(which, progress) {
   if (which === "selection") return textsUnder(figma.currentPage.selection);
   if (which === "page") {
     await figma.currentPage.loadAsync();
-    return figma.currentPage.findAllWithCriteria({ types: ["TEXT"] });
+    return findTexts(figma.currentPage);
   }
   var pages = figma.root.children;
   var texts = [];
   for (var i = 0; i < pages.length; i++) {
     if (pages.length > 1) progress("Reading page " + (i + 1) + " of " + pages.length + "…");
     await pages[i].loadAsync();
-    var found = pages[i].findAllWithCriteria({ types: ["TEXT"] });
+    var found = findTexts(pages[i]);
     for (var j = 0; j < found.length; j++) texts.push(found[j]);
   }
   return texts;
 }
 
 /** Keys (fontKey) for every font Figma can use now: the list its font menu shows. Asked on every
- *  read, so fonts turned on in Fontface since show up after Refresh. */
+ *  read. Figma reads that list when a file opens, so a font turned on in Fontface since shows as
+ *  available only after the file's tab is reloaded (README.md). */
 async function availableFonts() {
   var list = await figma.listAvailableFontsAsync();
   var keys = new Set();

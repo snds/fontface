@@ -45,7 +45,10 @@ use std::{
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    error::{AppError, AppResult},
+    model::Axis,
+};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS tags (
@@ -641,6 +644,9 @@ pub struct LibraryFace {
     pub style: String,
     pub variable: bool,
     pub italic: bool,
+    /// A variable font's axes (weight, width…), as its first copy stores them. Empty for a
+    /// static font.
+    pub axes: Vec<Axis>,
     /// Every copy.
     pub files: Vec<FontFile>,
     /// A copy lives in a macOS font folder.
@@ -683,6 +689,8 @@ pub struct LibraryRow {
     pub variable: bool,
     pub italic: bool,
     pub installed: bool,
+    /// A variable font's axes; empty for a static font.
+    pub axes: Vec<Axis>,
 }
 
 /// The library grouped by face key, with lookups by PostScript name, family and file. Each copy
@@ -708,14 +716,21 @@ impl LibraryIndex {
         let mut stmt = conn.prepare(
             "SELECT fonts.postscript_name, fonts.variable, fonts.italic, fonts.path, fonts.face_index, fonts.family,
                     fonts.subfamily, folders.kind = 'system', fonts.id, fonts.full_name, fonts.legacy_family,
-                    fonts.legacy_style
+                    fonts.legacy_style, fonts.axes
              FROM fonts JOIN folders ON folders.id = fonts.folder_id
              ORDER BY fonts.path, fonts.face_index",
         )?;
         let rows = stmt.query_map([], |r| {
+            let variable: bool = r.get(1)?;
+            // Only a variable font's axes are read: a static font's are empty anyway.
+            let axes = if variable {
+                r.get::<_, Option<String>>(12)?.and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             Ok(LibraryRow {
                 postscript_name: r.get(0)?,
-                variable: r.get(1)?,
+                variable,
                 italic: r.get(2)?,
                 path: r.get(3)?,
                 face_index: r.get(4)?,
@@ -726,6 +741,7 @@ impl LibraryIndex {
                 full_name: r.get(9)?,
                 legacy_family: r.get(10)?,
                 legacy_style: r.get(11)?,
+                axes,
             })
         })?;
         let mut index = LibraryIndex::default();
@@ -749,6 +765,7 @@ impl LibraryIndex {
                     style: row.style.clone(),
                     variable: row.variable,
                     italic: row.italic,
+                    axes: row.axes.clone(),
                     files: Vec::new(),
                     installed: false,
                 });
