@@ -714,6 +714,41 @@ export interface TagBackup {
   bytes: number;
 }
 
+/**
+ * One font to find by name (Turn On Fonts from a List…): a line of text ("Inter-Bold", "Inter
+ * Bold", "Inter"), or a font named in parts, as the Figma plugin's JSON does. Must match
+ * NameLine in src-tauri/src/font_names/mod.rs.
+ */
+export type NameLine = string | { family?: string; style?: string; postscriptName?: string };
+
+/** Which rule found a line's fonts: a whole family, a PostScript name, a full name, a family and
+ *  style, or a style inside a variable font of that family. */
+export type NameMatchHow = "family" | "postScript" | "fullName" | "familyStyle" | "namedStyle";
+
+/** A style a line found. Must match FoundFace in src-tauri/src/font_names/mod.rs. */
+export interface FoundFace {
+  /** Its face key, as the library's styles are keyed (library.ts). */
+  key: string;
+  family: string;
+  style: string;
+  postscriptName: string | null;
+  /** Its copies' font ids. Creative Cloud's are never listed. */
+  ids: number[];
+  variable: boolean;
+  italic: boolean;
+  /** In a macOS font folder: always on. */
+  installed: boolean;
+  /** Every copy is online-only in cloud storage: turning it on downloads it first. */
+  onlineOnly: boolean;
+}
+
+/** What one line found: none when `how` is null, with the library's closest names if any. */
+export interface LineMatch {
+  how: NameMatchHow | null;
+  faces: FoundFace[];
+  near: string[];
+}
+
 export const api = {
   listFolders: () => invoke<Folder[]>("list_folders"),
   addFolder: (path: string) => invoke<Folder>("add_folder", { path }),
@@ -798,4 +833,6 @@ export const api = {
   fontsRemoved: () => invoke<RemovedFile[]>("fonts_removed"),
   /** Lists these removed files again at their folders' next scan; returns the folders to scan. */
   fontsPutBack: (paths: string[]) => invoke<number[]>("fonts_put_back", { paths }),
+  /** The library's styles for each name, in the order given (at most 5,000 at once). Reads only. */
+  matchFontNames: (lines: NameLine[]) => invoke<LineMatch[]>("match_font_names", { lines }),
 };

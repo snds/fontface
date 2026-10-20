@@ -647,16 +647,46 @@ pub struct LibraryFace {
     pub installed: bool,
 }
 
+/// One copy of a style: a file (and the face in it), with the names that copy carries. Copies of
+/// a font can name it differently (an old .ttf and a newer .otf), so every copy keeps its own.
 #[derive(Debug, Clone)]
 pub struct FontFile {
+    /// The font's row in the library (what turning it on asks for).
+    pub id: i64,
     pub path: String,
     /// Which face in the file (collections hold several).
     pub face_index: u32,
     /// In a macOS font folder.
     pub installed: bool,
+    /// The family and style the library lists it under (name IDs 16 and 17, else 1 and 2).
+    pub family: String,
+    pub style: String,
+    /// Its full name (name ID 4), if it has one.
+    pub full_name: Option<String>,
+    /// Its name IDs 1 and 2, when they've been read (the older, four-styles-per-family names).
+    pub legacy_family: Option<String>,
+    pub legacy_style: Option<String>,
 }
 
-/// The library grouped by face key, with lookups by PostScript name, family and file.
+/// One row of the library, as [`LibraryIndex::add`] takes it.
+#[derive(Debug, Clone, Default)]
+pub struct LibraryRow {
+    pub id: i64,
+    pub path: String,
+    pub face_index: u32,
+    pub postscript_name: Option<String>,
+    pub family: String,
+    pub style: String,
+    pub full_name: Option<String>,
+    pub legacy_family: Option<String>,
+    pub legacy_style: Option<String>,
+    pub variable: bool,
+    pub italic: bool,
+    pub installed: bool,
+}
+
+/// The library grouped by face key, with lookups by PostScript name, family and file. Each copy
+/// keeps its own names (full name, older family and style) for the name matcher (font_names).
 #[derive(Debug, Default)]
 pub struct LibraryIndex {
     pub faces: Vec<LibraryFace>,
@@ -666,62 +696,85 @@ pub struct LibraryIndex {
     by_path: HashMap<String, Vec<usize>>,
 }
 
+/// Adds `i` to a lookup's list, once.
+fn push_once(list: &mut Vec<usize>, i: usize) {
+    if !list.contains(&i) {
+        list.push(i);
+    }
+}
+
 impl LibraryIndex {
     pub fn load(conn: &Connection) -> AppResult<Self> {
         let mut stmt = conn.prepare(
             "SELECT fonts.postscript_name, fonts.variable, fonts.italic, fonts.path, fonts.face_index, fonts.family,
-                    fonts.subfamily, folders.kind = 'system'
+                    fonts.subfamily, folders.kind = 'system', fonts.id, fonts.full_name, fonts.legacy_family,
+                    fonts.legacy_style
              FROM fonts JOIN folders ON folders.id = fonts.folder_id
              ORDER BY fonts.path, fonts.face_index",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, Option<String>>(0)?,
-                r.get::<_, bool>(1)?,
-                r.get::<_, bool>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, u32>(4)?,
-                r.get::<_, String>(5)?,
-                r.get::<_, String>(6)?,
-                r.get::<_, bool>(7)?,
-            ))
+            Ok(LibraryRow {
+                postscript_name: r.get(0)?,
+                variable: r.get(1)?,
+                italic: r.get(2)?,
+                path: r.get(3)?,
+                face_index: r.get(4)?,
+                family: r.get(5)?,
+                style: r.get(6)?,
+                installed: r.get(7)?,
+                id: r.get(8)?,
+                full_name: r.get(9)?,
+                legacy_family: r.get(10)?,
+                legacy_style: r.get(11)?,
+            })
         })?;
         let mut index = LibraryIndex::default();
         for row in rows {
-            let (ps, variable, italic, path, face_index, family, style, installed) = row?;
-            let ps = ps.filter(|p| !p.is_empty());
-            let key = face_key(ps.as_deref(), variable, italic, &path, face_index);
-            let i = match index.by_key.get(&key) {
-                Some(&i) => i,
-                None => {
-                    index.faces.push(LibraryFace {
-                        key: key.clone(),
-                        postscript_name: ps.clone(),
-                        family: family.clone(),
-                        style,
-                        variable,
-                        italic,
-                        files: Vec::new(),
-                        installed: false,
-                    });
-                    let i = index.faces.len() - 1;
-                    index.by_key.insert(key, i);
-                    if let Some(ps) = &ps {
-                        index.by_ps.entry(ps.clone()).or_default().push(i);
-                    }
-                    index.by_family.entry(family.to_lowercase()).or_default().push(i);
-                    i
-                }
-            };
-            let face = &mut index.faces[i];
-            face.installed |= installed;
-            face.files.push(FontFile { path: path.clone(), face_index, installed });
-            let in_file = index.by_path.entry(path).or_default();
-            if !in_file.contains(&i) {
-                in_file.push(i);
-            }
+            index.add(row?);
         }
         Ok(index)
+    }
+
+    /// Adds one row: a new style, or another copy of one already here (same face key).
+    pub fn add(&mut self, row: LibraryRow) {
+        let ps = row.postscript_name.filter(|p| !p.is_empty());
+        let key = face_key(ps.as_deref(), row.variable, row.italic, &row.path, row.face_index);
+        let i = match self.by_key.get(&key) {
+            Some(&i) => i,
+            None => {
+                self.faces.push(LibraryFace {
+                    key: key.clone(),
+                    postscript_name: ps.clone(),
+                    family: row.family.clone(),
+                    style: row.style.clone(),
+                    variable: row.variable,
+                    italic: row.italic,
+                    files: Vec::new(),
+                    installed: false,
+                });
+                let i = self.faces.len() - 1;
+                self.by_key.insert(key, i);
+                if let Some(ps) = &ps {
+                    self.by_ps.entry(ps.clone()).or_default().push(i);
+                }
+                self.by_family.entry(row.family.to_lowercase()).or_default().push(i);
+                i
+            }
+        };
+        push_once(self.by_path.entry(row.path.clone()).or_default(), i);
+        let face = &mut self.faces[i];
+        face.installed |= row.installed;
+        face.files.push(FontFile {
+            id: row.id,
+            path: row.path,
+            face_index: row.face_index,
+            installed: row.installed,
+            family: row.family,
+            style: row.style,
+            full_name: row.full_name,
+            legacy_family: row.legacy_family,
+            legacy_style: row.legacy_style,
+        });
     }
 
     pub fn by_key(&self, key: &str) -> Option<&LibraryFace> {
