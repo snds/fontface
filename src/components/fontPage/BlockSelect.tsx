@@ -65,7 +65,7 @@ export function BlockSelect({
           ref={trigger}
           data-blocks-trigger
           aria-label={pickerName(picked, blocks.length)}
-          className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pr-1.5 pl-2.5 text-left text-sm whitespace-nowrap outline-none select-none hover:bg-muted/60 disabled:cursor-not-allowed disabled:hover:bg-transparent data-popup-open:bg-muted/60 dark:hover:bg-input/50"
+          className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pr-1.5 pl-2.5 text-left text-sm whitespace-nowrap outline-none select-none enabled:hover:bg-muted/60 disabled:cursor-not-allowed data-popup-open:bg-muted/60 dark:enabled:hover:bg-input/50"
         >
           {label ? (
             <>
@@ -127,7 +127,7 @@ function BlockItem({ value, name, count }: { value: string; name: string; count:
     >
       <span
         aria-hidden
-        className="flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input group-data-selected/item:border-primary group-data-selected/item:bg-primary group-data-selected/item:text-primary-foreground dark:bg-input/30 dark:group-data-selected/item:bg-primary"
+        className="flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input group-data-[selected]/item:border-primary group-data-[selected]/item:bg-primary group-data-[selected]/item:text-primary-foreground dark:bg-input/30 dark:group-data-[selected]/item:bg-primary"
       >
         <SelectPrimitive.ItemIndicator render={<span className="flex" />}>
           <Icon name="check" size={13} weight={600} />

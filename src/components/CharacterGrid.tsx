@@ -522,12 +522,17 @@ interface CellTipControl {
 /**
  * The cells' one tooltip ("Copy U+00DF · germandbls"), on the cell the pointer rests on
  * or keyboard focus is on, with the app's timing (components/Tip.tsx): it opens once the pointer
- * rests for TIP_DELAY, and at once while one is open or has just closed. It's one for the whole
- * grid, not a Tip per cell, because a block can hold tens of thousands of cells (Show all), and
+ * rests for TIP_DELAY, and at once while one is open or has just closed, in this block group or
+ * another (cellTipClosedAt). It's one per block group, not a Tip per cell, because a block can
+ * hold tens of thousands of cells (Show all), and
  * every tooltip trigger costs its cell hooks and window listeners: here the grid's own pointer and
  * focus events drive it, and it sits on an empty box moved over the cell (that box only places
  * it). Its words are for sight only: each cell's name already says them.
  */
+/** When any block group's cell tooltip last closed, so moving from one group's cells to the next
+ *  opens the next tooltip at once, as moving within a group does. */
+let cellTipClosedAt = -Infinity;
+
 function CellTip({ control }: { control: React.Ref<CellTipControl> }) {
   const [tip, setTip] = useState<{ open: boolean; text: string; box?: React.CSSProperties }>({ open: false, text: "" });
   const timer = useRef<number | undefined>(undefined);
@@ -537,7 +542,6 @@ function CellTip({ control }: { control: React.Ref<CellTipControl> }) {
     by: null as "hover" | "focus" | null,
     /** The cell pressed: no tooltip on it until the pointer leaves it. */
     pressed: null as HTMLElement | null,
-    closedAt: -Infinity,
   });
   const openOn = (cell: HTMLElement, by: "hover" | "focus") => {
     window.clearTimeout(timer.current);
@@ -550,7 +554,7 @@ function CellTip({ control }: { control: React.Ref<CellTipControl> }) {
   };
   const close = () => {
     window.clearTimeout(timer.current);
-    if (now.current.by) now.current.closedAt = performance.now();
+    if (now.current.by) cellTipClosedAt = performance.now();
     Object.assign(now.current, { cell: null, by: null });
     setTip((t) => (t.open ? { ...t, open: false } : t));
   };
@@ -567,7 +571,7 @@ function CellTip({ control }: { control: React.Ref<CellTipControl> }) {
           return;
         }
         // While one is open, or just after, the next opens at once (as the app's other tooltips do).
-        if (n.by || performance.now() - n.closedAt < TIP_INSTANT_WINDOW) return openOn(cell, "hover");
+        if (n.by || performance.now() - cellTipClosedAt < TIP_INSTANT_WINDOW) return openOn(cell, "hover");
         window.clearTimeout(timer.current);
         n.cell = cell;
         timer.current = window.setTimeout(() => openOn(cell, "hover"), TIP_DELAY);
