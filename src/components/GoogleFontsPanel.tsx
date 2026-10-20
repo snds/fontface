@@ -13,12 +13,12 @@ import {
   hasUpdate,
   noMatchText,
   openFace,
-  removalWords,
   rowLabel,
   rowPlan,
   switchFaces,
   turnOnFaces,
   switchIds,
+  uninstallWords,
   yoursFirstTip,
   type Holding,
   type RowPlan,
@@ -90,11 +90,12 @@ import { IS_MAC } from "./TitleBar";
  * the categories, "Installed" (yours first), Update all and Refresh; at the bottom, one quiet line says
  * where previews come from.
  *
- * Each family's row: its preview and facts, then what fits it (googleCatalog.rowPlan): Get;
- * for a family you have (downloaded here, or your own copy) the on/off switch, as in the
- * library (Option-click, busy marks, every state's mark); Update when there's a newer version;
- * Remove for a download (asks first, then offers Undo). Double-click or Return opens the font
- * page of a family you have, and right-click (or Shift-F10) its font menu.
+ * Each family's row: its preview and facts, then what fits it (googleCatalog.rowPlan): Get; for
+ * a family downloaded here, the on/off switch, as in the library (Option-click, busy marks,
+ * every state's mark), and Uninstall on hover (asks first, then offers Undo); Update when
+ * there's a newer version. A family that's only your own copy has no switch here: on hover it
+ * offers Google's version. Double-click or Return opens the font page of a family you have
+ * (downloaded or your copy), and right-click (or Shift-F10) its font menu.
  *
  * Like the library list, it's a listbox: the list keeps focus and points at the active row with
  * aria-activedescendant, arrow keys, Home/End and Page Up/Down move, and only the active row's
@@ -352,12 +353,20 @@ function FamilyInfo({
 interface RowCommands {
   get: (fam: GoogleFamily, copy: boolean) => void;
   update: (fam: GoogleFamily) => void;
-  remove: (fam: GoogleFamily) => void;
+  uninstall: (fam: GoogleFamily) => void;
   activate: (fam: GoogleFamily, on: boolean, scope: ActivationMode | null) => void;
 }
 
-/** A row's buttons and switch, after its preview: what `rowPlan` says fits. Only the active
- *  row's are in the Tab order (`tab`). */
+/** A row's quiet button (Uninstall, or Get beside your own copy): it shows while the row is
+ *  hovered, selected or current in the focused list, or has keyboard focus inside it. Hidden,
+ *  it keeps its place, so nothing moves when it shows. */
+const HOVER_ONLY =
+  "opacity-0 group-hover/row:opacity-100 group-aria-selected/row:opacity-100 group-data-[current]/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100";
+
+/** A row's buttons and switch, after its preview: what `rowPlan` says fits, in this order:
+ *  Update (or Working…), the hover button, then the switch or Get. Your own copy has no switch
+ *  here, so its place stays empty and the hover button sits where Uninstall will. Only the
+ *  active row's controls are in the Tab order (`tab`). */
 function RowControls({
   fam,
   plan,
@@ -400,31 +409,24 @@ function RowControls({
                 </Button>
               </Tip>
             );
-          case "remove":
-            return (
-              <Tip key={extra} tip={`Turns off ${name} and deletes the files Fontface downloaded, after asking`}>
-                <Button size="icon-sm" variant="ghost" tabIndex={tab} aria-label={`Remove ${name}`} onClick={() => commands.remove(fam)}>
-                  <Icon name="delete" size={16} />
-                </Button>
-              </Tip>
-            );
-          case "getCopy":
-            return (
-              <Tip key={extra} tip={`Downloads Google's version of ${name} and turns it on. Your own copy stays as it is.`}>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  tabIndex={tab}
-                  aria-label={`Get Google's ${name}`}
-                  className="opacity-0 group-hover/row:opacity-100 group-aria-selected/row:opacity-100 focus-visible:opacity-100"
-                  onClick={() => commands.get(fam, true)}
-                >
-                  <Icon name="download" size={16} />
-                </Button>
-              </Tip>
-            );
         }
       })}
+      {plan.hover === "uninstall" && (
+        <Tip tip={`Uninstalls ${name}: turns it off and removes the files Fontface downloaded. Asks first, and you can undo it.`}>
+          <Button size="icon-sm" variant="ghost" tabIndex={tab} aria-label={`Uninstall ${name}`} className={HOVER_ONLY} onClick={() => commands.uninstall(fam)}>
+            <Icon name="delete" size={16} />
+          </Button>
+        </Tip>
+      )}
+      {plan.hover === "getCopy" && (
+        <Tip tip={`Downloads Google's version of ${name} and turns it on. Your own copy stays as it is.`}>
+          <Button size="icon-sm" variant="ghost" tabIndex={tab} aria-label={`Get Google's ${name}`} className={HOVER_ONLY} onClick={() => commands.get(fam, true)}>
+            <Icon name="download" size={16} />
+          </Button>
+        </Tip>
+      )}
+      {/* No switch until it's downloaded: its place stays, as wide as the switch. */}
+      {plan.hover && !plan.main && <span aria-hidden className="w-8 shrink-0" />}
       {plan.main === "switch" && (
         <StateControl
           state={summarize(faces)}
@@ -479,7 +481,7 @@ interface Props {
   /** "Installed" (yours first): families you have (downloaded, or already in your library) come first. */
   yoursFirst: boolean;
   onYoursFirst: (on: boolean) => void;
-  /** Families with a download or removal in progress (owned by the app, so it survives leaving this view). */
+  /** Families with a download or uninstall in progress (owned by the app, so it survives leaving this view). */
   busy: Set<string>;
   /** Files with an on/off request in progress (the library's). */
   switching: Set<string>;
@@ -487,7 +489,7 @@ interface Props {
   updatingAll: boolean;
   /** Downloads or updates a family. `unchanged` in the result: an update found nothing new. */
   onInstall: (id: string) => Promise<GoogleInstallResult>;
-  /** Removes a downloaded family (already confirmed here); the app offers Undo. */
+  /** Uninstalls a downloaded family (already confirmed here); the app offers Undo. */
   onRemove: (family: GoogleFamily) => Promise<void>;
   onUpdateAll: (families: GoogleFamily[]) => Promise<void>;
   onActivate: (ids: number[], on: boolean, scope: ActivationMode | null) => void;
@@ -720,7 +722,7 @@ export function GoogleFontsPanel({
       void run(fam, () => onInstall(fam.id).then(() => (copy ? `Downloaded Google's ${fam.family} and turned it on` : `${fam.family} downloaded and turned on`))),
     update: (fam) =>
       void run(fam, async () => ((await onInstall(fam.id)).unchanged ? `${fam.family} is already up to date` : `${fam.family} updated`)),
-    remove: (fam) => {
+    uninstall: (fam) => {
       removeConfirmed.current = false;
       setRemoving(fam);
     },
@@ -893,6 +895,8 @@ export function GoogleFontsPanel({
                     aria-posinset={position.get(key)}
                     aria-label={rowLabel(fam, plan, holding)}
                     aria-describedby={`${id}-facts ${id}-state`}
+                    // The current row of the focused list shows its hover button, as hover does.
+                    data-current={active && focused ? "" : undefined}
                     className={cn(
                       "group/row absolute top-0 left-0 flex w-full cursor-default items-center gap-3 border-b px-4 py-2.5",
                       isSelected ? "bg-accent" : "hover:bg-muted/50",
@@ -967,17 +971,17 @@ export function GoogleFontsPanel({
       </footer>
 
       <AlertDialog open={!!removing} onOpenChange={(open) => !open && setRemoving(null)}>
-        {/* Removed: the button that opened it is gone, so focus goes to the list. */}
+        {/* Uninstalled: the button that opened it is gone, so focus goes to the list. */}
         <AlertDialogContent finalFocus={() => (removeConfirmed.current ? scrollRef.current : null) ?? true}>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove {removingShown?.family}?</AlertDialogTitle>
+            <AlertDialogTitle>Uninstall {removingShown?.family}?</AlertDialogTitle>
             <AlertDialogDescription render={<div className="flex flex-col gap-2" />}>
-              {removingShown && removalWords(removingShown.family, holdings.get(removingShown.id)).map((w) => <p key={w}>{w}</p>)}
+              {removingShown && uninstallWords(removingShown.family, holdings.get(removingShown.id)).map((w) => <p key={w}>{w}</p>)}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <Tip tip={`Turns off ${removingShown?.family ?? "the family"} and deletes the files Fontface downloaded. You can undo it for 10 seconds.`}>
+            <Tip tip={`Turns off ${removingShown?.family ?? "the family"} and removes the files Fontface downloaded. You can undo it for 10 seconds.`}>
               <AlertDialogAction
                 variant="destructive"
                 onClick={() => {
@@ -987,7 +991,7 @@ export function GoogleFontsPanel({
                   if (fam) void run(fam, () => onRemove(fam));
                 }}
               >
-                Remove
+                Uninstall
               </AlertDialogAction>
             </Tip>
           </AlertDialogFooter>

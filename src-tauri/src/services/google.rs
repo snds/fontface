@@ -766,11 +766,12 @@ pub fn installed_dir(data_dir: &Path, id: &str) -> Option<PathBuf> {
     by_id.remove(id).or_else(|| by_repo.remove(&slug(id))).map(|i| PathBuf::from(i.dir))
 }
 
-/// What a removed family's folder is renamed to while Remove can still be undone: hidden, so
-/// scans and the installed list skip it. Deleted when Fontface quits (`purge_removed`).
+/// What an uninstalled family's folder is renamed to while Uninstall can still be undone:
+/// hidden, so scans and the installed list skip it. Deleted when Fontface quits
+/// (`purge_removed`).
 const REMOVED_PREFIX: &str = ".removed-";
 
-/// Sets a removed family's folder aside so Remove can be undone: it's renamed to
+/// Sets an uninstalled family's folder aside so Uninstall can be undone: it's renamed to
 /// `.removed-<its name>` beside where it was. An earlier held copy of that folder goes first.
 /// Returns the held folder.
 pub fn hold_removed(dir: &Path) -> AppResult<PathBuf> {
@@ -789,7 +790,7 @@ pub struct Restored {
     pub files: Vec<String>,
 }
 
-/// Undo for Remove: the family's held folder (found as `installed_dir` finds an installed one:
+/// Undo for Uninstall: the family's held folder (found as `installed_dir` finds an installed one:
 /// by the catalog id in its install details, else by its repository folder, for a twin id) gets
 /// its name back, so it's installed again exactly as it was. Refused when a folder of that name
 /// is back already (it was downloaded again meanwhile), or when nothing is held (Fontface quit
@@ -991,7 +992,7 @@ mod tests {
         let dir = installed_family(&data, "inter", "Inter");
         let other = installed_family(&data, "lora", "Lora");
 
-        // Remove: out of the installed list and hidden from scans, but not deleted yet.
+        // Uninstall: out of the installed list and hidden from scans, but not deleted yet.
         let held = hold_removed(&dir).unwrap();
         assert!(!dir.exists() && held.exists());
         assert_eq!(leftovers(&data), vec![".removed-Inter".to_string()]);
@@ -1024,7 +1025,7 @@ mod tests {
     fn undo_finds_a_family_downloaded_under_its_twin_id() {
         let data = data_dir("remove-twin");
         // Downloaded as "bj-cree"; the catalog now lists its twin "bjcree" (the same google/fonts
-        // folder), and Remove found it by that folder.
+        // folder), and Uninstall found it by that folder.
         let dir = installed_from(&data, "bj-cree", "BJ Cree", "google/fonts:ofl/bjcree");
         assert_eq!(installed_dir(&data, "bjcree").as_deref(), Some(dir.as_path()));
         hold_removed(&dir).unwrap();
