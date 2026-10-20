@@ -444,13 +444,22 @@ fn the_library_query_reads_every_name_a_copy_carries() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// What the Figma plugin copies (figma-plugin/fixtures/, checked against the plugin itself in
-/// src/figmaPlugin.test.ts): "Family Style" lines, and the same fonts as JSON.
-const FIGMA_LINES: &str = include_str!("../../../figma-plugin/fixtures/copy-all.txt");
-const FIGMA_JSON: &str = include_str!("../../../figma-plugin/fixtures/copy-as-json.json");
+/// Fonts named by family and style, as a design app names them: "Family Style" lines, and the
+/// same fonts in parts.
+const FAMILY_STYLES: [(&str, &str); 9] = [
+    ("Fraunces", "Black Italic"),
+    ("Helvetica", "Bold Oblique"),
+    ("IBM Plex Sans", "SemiBold Italic"),
+    ("Inter", "Regular"),
+    ("Inter Display", "Bold"),
+    ("Lora", "Italic"),
+    ("Noto Sans JP", "Medium"),
+    ("Söhne", "Buch"),
+    ("Univers LT Std", "45 Light"),
+];
 
 #[test]
-fn the_figma_plugins_list_finds_each_font_as_its_files_name_it() {
+fn family_and_style_names_find_each_font_as_its_files_name_it() {
     // The fonts as their files name them: PostScript names, typographic names, variable fonts.
     let lib = index(&[
         font("/f/Fraunces[wght].ttf", "Fraunces-Regular", "Fraunces", "Regular").variable(),
@@ -475,8 +484,8 @@ fn the_figma_plugins_list_finds_each_font_as_its_files_name_it() {
         None, // Söhne Buch isn't in this library
         Some("Univers LT Std 45 Light"),
     ];
-    let text: Vec<NameLine> = FIGMA_LINES.lines().map(|l| NameLine::Text(l.into())).collect();
-    let json: serde_json::Value = serde_json::from_str(FIGMA_JSON).unwrap();
+    let text: Vec<NameLine> = FAMILY_STYLES.iter().map(|(family, style)| NameLine::Text(format!("{family} {style}"))).collect();
+    let json = serde_json::json!({ "fonts": FAMILY_STYLES.iter().map(|(family, style)| serde_json::json!({ "family": family, "style": style })).collect::<Vec<_>>() });
     let parts: Vec<NameLine> = serde_json::from_value(json["fonts"].clone()).unwrap();
     assert_eq!(text.len(), expected.len());
     assert_eq!(parts.len(), expected.len());

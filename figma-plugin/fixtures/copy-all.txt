@@ -1,9 +1,0 @@
-Fraunces Black Italic
-Helvetica Bold Oblique
-IBM Plex Sans SemiBold Italic
-Inter Regular
-Inter Display Bold
-Lora Italic
-Noto Sans JP Medium
-Söhne Buch
-Univers LT Std 45 Light

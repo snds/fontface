@@ -1,14 +1,19 @@
+import { useCallback, useId } from "react";
 import type { Folder, ScanProgress, ServiceInfo, SidebarSections, SkippedFiles } from "@/api";
 import { INSTALLED_LABEL, type Family, type LibraryView, type PlaceCounts } from "@/library";
 import { smartRows, sourceFolders, sourceOf, sourceRows, sourceView, type SourceKey } from "@/places";
+import { ADD_FOLDER_TIP, addMenu, countClass, countShown, dividerMenu, SECTION_STARTS_OPEN, SECTIONS, stylesSaid, type SidebarCommand } from "@/sidebar";
 import { skippedMenuTip, skippedTotal, sumSkipped } from "@/skippedFiles";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ROW_TIP_DELAY, Tip } from "@/components/Tip";
-import { FONT_LIST_TIP } from "@/components/FontListDialog";
+import { BrandIcon } from "@/components/BrandIcon";
+import { MenuLines, SectionDivider } from "@/components/SectionDivider";
+import { DROPDOWN, ROW_TIP_DELAY, Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
-import { colorVar } from "@/tags/api";
+import { openTagDialog } from "@/tags/dialogs";
+import { isOpen, setOpen, useOpenRows } from "@/tags/expanded";
 import { ADOBE_LOCATION, FONT_BOOK_LOCATION, useLocations } from "@/tags/locations";
 import { LocationMenu, type MenuAction } from "@/tags/menus";
 import { TagsSection } from "@/tags/TagsSection";
@@ -38,18 +43,18 @@ interface Props {
    *  closing an open page. */
   onFallback: (v: LibraryView) => void;
   onAddFolder: () => void;
+  /** "+" › Import Purchased Fonts…: opens Purchases, where a zip, font files or a folder is
+   *  picked. */
+  onImportPurchases: () => void;
   onRemoveFolder: (f: Folder) => void;
   onRescan: (f: Folder) => void;
   onCancelScan: (f: Folder) => void;
-  onOpenSettings: () => void;
   /** Point a folder that can't be found at where it moved ("Locate…"). */
   onLocateFolder?: (f: Folder) => void;
   /** Show a folder in Finder. */
   onRevealFolder: (f: Folder) => void;
   /** List the files a source's latest scan found but didn't add (Show Skipped Files…). */
   onShowSkipped: (name: string, skipped: SkippedFiles) => void;
-  /** Turn On Fonts from a List…: paste font names, then turn them on or tag them. */
-  onFontList: () => void;
 }
 
 const itemClass = (selected: boolean) =>
@@ -59,12 +64,7 @@ const itemClass = (selected: boolean) =>
   );
 
 const n = (v: number) => v.toLocaleString();
-const styles = (v: number) => `${n(v)} ${v === 1 ? "style" : "styles"}`;
 const FILE_BROWSER = IS_MAC ? "Finder" : "Explorer";
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <div className="px-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{children}</div>;
-}
 
 /** A small icon button: `label` is its name, `tip` its tooltip (what a click does). */
 function IconAction({ icon, label, tip, onClick }: { icon: string; label: string; tip: string; onClick: () => void }) {
@@ -88,7 +88,6 @@ const RESCAN_TIP = "Looks again for added, changed or removed fonts";
 const STOP_TIP = "Stops the scan. Fonts read so far are kept.";
 const LOCATE_TIP = "Points Fontface at where the folder moved, then rescans it";
 const REMOVE_TIP = "Turns off its fonts and takes them out of your library. Files stay on disk.";
-const ADD_FOLDER_TIP = "Picks a folder of fonts to add to your library";
 const OS = IS_MAC ? "macOS" : "Windows";
 
 /** A smart entry's tooltip. places.ts words each hint as what the entry lists ("Fonts added in the
@@ -111,11 +110,18 @@ function combined(list: ScanProgress[]): ScanProgress | undefined {
   return { ...list[0], phase: reading ? "reading" : "discovering", found: sum((p) => p.found), done: sum((p) => p.done), cloud: sum((p) => p.cloud) };
 }
 
+/**
+ * The sidebar row of the place being viewed, else its first row: where focus goes back to when
+ * settings close and focus had nowhere else to go.
+ */
+export function currentSidebarRow(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-sidebar] [aria-current='page']") ?? document.querySelector<HTMLElement>("[data-sidebar] nav button");
+}
+
 interface RowProps {
   label: string;
-  icon: string;
-  /** The location color (CSS), filling the icon. */
-  color?: string;
+  /** Its outlined icon, in the row's text color: a Material Symbols name, or a service's mark. */
+  icon: string | { brand: "google" | "adobe" };
   /** Can't be found: a red icon. */
   missing?: boolean;
   scan?: ScanProgress;
@@ -131,11 +137,14 @@ interface RowProps {
 }
 
 /**
- * A row in SOURCES. No chevrons: a source's folders are picked in the toolbar instead. The
- * button covers the whole row (its ::after), so a click on the count, the "n new" badge or the
- * padding opens the source too, like the rest of the row; the hover actions sit above it.
+ * A row in Sources. No chevrons: a source's folders are picked in the toolbar instead. The button
+ * covers the whole row (its ::after), so a click on the count, the "n new" badge or the padding
+ * opens the source too, like the rest of the row; the hover actions sit above it. Its icon is an
+ * outline in the row's text color: location colors show as the dots on fonts, not here. Its count
+ * shows only while the row is the place being viewed, or is hovered or has focus with no buttons
+ * of its own to show (sidebar.ts, countShown); screen readers always hear it.
  */
-function SourceRow({ label, icon, color, missing, scan, count, badge, selected, hint, onOpen, actions }: RowProps) {
+function SourceRow({ label, icon, missing, scan, count, badge, selected, hint, onOpen, actions }: RowProps) {
   const progress = scan && scan.phase === "reading" ? `${Math.floor((scan.done / Math.max(1, scan.found)) * 100)}%` : null;
   return (
     <div className={cn(itemClass(selected), "relative")}>
@@ -143,22 +152,19 @@ function SourceRow({ label, icon, color, missing, scan, count, badge, selected, 
         <button
           className="flex min-w-0 flex-1 items-center gap-2 after:absolute after:inset-0 after:rounded-md"
           aria-current={selected ? "page" : undefined}
+          data-source-link=""
           onClick={onOpen}
         >
           {scan ? (
             <Icon name="progress_activity" size={18} className="animate-spin text-muted-foreground" />
+          ) : typeof icon === "string" ? (
+            <Icon name={icon} size={18} className={missing ? "text-destructive" : "text-muted-foreground"} />
           ) : (
-            <Icon
-              name={icon}
-              size={18}
-              filled={!!color && !missing}
-              className={missing ? "text-destructive" : "text-muted-foreground"}
-              style={color && !missing ? { color } : undefined}
-            />
+            <BrandIcon brand={icon.brand} size={18} className="text-muted-foreground" />
           )}
           <span className="truncate">{label}</span>
           <span className="sr-only">
-            {count !== null ? `, ${styles(count)}` : ""}
+            {count !== null ? `, ${stylesSaid(count)}` : ""}
             {badge ? `, ${badge.said}` : ""}
             {scan ? `, scanning${progress ? ` (${progress})` : ""}` : ""}
             {missing ? ", can't be found" : ""}
@@ -170,11 +176,8 @@ function SourceRow({ label, icon, color, missing, scan, count, badge, selected, 
           {badge.text}
         </span>
       )}
-      {/* Count, or scan progress; swapped for actions on hover. */}
-      <span
-        aria-hidden
-        className={cn("font-mono text-xs text-muted-foreground tabular-nums", actions && "group-focus-within/item:hidden group-hover/item:hidden")}
-      >
+      {/* Count, or scan progress (always shown while it runs); swapped for actions on hover. */}
+      <span aria-hidden className={cn("font-mono text-xs text-muted-foreground tabular-nums", countClass(countShown("source", selected || !!progress), !!actions))}>
         {progress ?? (count !== null ? n(count) : "")}
       </span>
       {actions && <span className="relative z-10 hidden items-center group-focus-within/item:flex group-hover/item:flex">{actions}</span>}
@@ -182,12 +185,14 @@ function SourceRow({ label, icon, color, missing, scan, count, badge, selected, 
   );
 }
 
-/** The id of the Settings button, so focus can come back to it when settings close. */
-export const SETTINGS_BUTTON_ID = "open-settings";
-
 /**
- * The sidebar: LIBRARY (All Fonts and the smart entries, each with a count), SOURCES (Font Book,
- * Google Fonts, Adobe Fonts, Purchases, then your folders A to Z, one row each), then TAGS.
+ * The sidebar, in three sections with no headings: Library (All Fonts and the smart entries, each
+ * with its count), then a divider and Sources (macOS Fonts, Google Fonts, Adobe Fonts, Purchases,
+ * then your folders A to Z, one row each), then a divider and Tags. A divider collapses its
+ * section, and its right-click menu has the section's commands (SectionDivider, sidebar.ts). The
+ * "+" at the bottom makes a new tag, adds a folder, or imports fonts or tags. Settings are in the
+ * app menu on macOS and the window's File menu elsewhere (src-tauri/src/window.rs), and Cmd+,.
+ *
  * Every source row's commands are on its right-click menu, which Shift-F10 opens too: Rescan or
  * Stop, Show in Finder, Show Skipped Files… (when its last scan found files it can't use),
  * Locate… (a folder that moved), its color, and for your folders Remove from Library…. Rows with
@@ -202,6 +207,18 @@ export function Sidebar(props: Props) {
   const selectedSource = sourceOf(view, folders, services);
   const running = folders.filter((f) => scans.has(f.id));
   const user = folders.filter((f) => f.kind === "user");
+  const sourcesId = useId();
+  const sourcesOpen = isOpen(useOpenRows(), SECTIONS.sources.openId, SECTION_STARTS_OPEN);
+  const setSourcesOpen = useCallback((to: boolean) => setOpen(SECTIONS.sources.openId, to, SECTION_STARTS_OPEN), []);
+
+  /** The sidebar's own commands: the "+" menu's and the Sources divider's. */
+  const run = (id: SidebarCommand) => {
+    if (id === "newTag") openTagDialog({ kind: "create" });
+    else if (id === "addFolder") onAddFolder();
+    else if (id === "importPurchases") props.onImportPurchases();
+    else if (id === "importTags") openTagDialog({ kind: "import" });
+    else if (id === "toggleSection") setSourcesOpen(!sourcesOpen);
+  };
 
   /**
    * The commands for a source with library folders: Rescan (or Stop), Show in Finder for one
@@ -252,7 +269,6 @@ export function Sidebar(props: Props) {
           <SourceRow
             label={INSTALLED_LABEL}
             icon="auto_stories"
-            color={colorVar(locations.colorOf(FONT_BOOK_LOCATION))}
             scan={scan}
             count={counts.installed}
             selected={selected}
@@ -268,8 +284,7 @@ export function Sidebar(props: Props) {
         <LocationMenu key={source} location={ADOBE_LOCATION} color={locations.colorOf(ADOBE_LOCATION)} defaultColor={locations.defaultOf(ADOBE_LOCATION)}>
           <SourceRow
             label="Adobe Fonts"
-            icon="cloud"
-            color={colorVar(locations.colorOf(ADOBE_LOCATION))}
+            icon={{ brand: "adobe" }}
             count={adobeCount || null}
             selected={selected}
             hint="Shows the fonts Adobe Creative Cloud has turned on (read-only)"
@@ -294,8 +309,7 @@ export function Sidebar(props: Props) {
         >
           <SourceRow
             label={name}
-            icon={google ? "cloud" : "shopping_bag"}
-            color={color ? colorVar(color) : undefined}
+            icon={google ? { brand: "google" } : "shopping_bag"}
             scan={scan}
             count={folder ? (folderCounts.get(folder.id) ?? 0) : 0}
             badge={!google && newPurchases > 0 ? { text: `${n(newPurchases)} new`, said: `${n(newPurchases)} new ${newPurchases === 1 ? "download" : "downloads"} to review` } : undefined}
@@ -327,7 +341,6 @@ export function Sidebar(props: Props) {
         <SourceRow
           label={folder.label}
           icon={folder.missing ? "folder_off" : "folder"}
-          color={colorVar(locations.colorOf(folder.path))}
           missing={folder.missing}
           scan={scan}
           count={folderCounts.get(folder.id) ?? folder.fontCount}
@@ -351,19 +364,16 @@ export function Sidebar(props: Props) {
     );
   };
 
+  const addLines = addMenu({ purchases: show.purchases, tags: show.tags });
+
   return (
-    <aside className="flex min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+    <aside className="flex min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground" data-sidebar="">
       {/* macOS: the window buttons sit here, in the sidebar's color, and the strip moves the window
           like the rest of the top row. Full screen hides the buttons, so the strip goes too. */}
       {titleBar && <div className="h-13 shrink-0 select-none" {...dragRegion(true)} />}
       <ScrollArea className="min-h-0 flex-1">
-        <nav className={cn("flex flex-col gap-4 p-2", !titleBar && "pt-3")}>
-          <div>
-            {/* Library-wide, not about a selection, so it sits by the heading, as Add folder does by SOURCES. */}
-            <div className="flex items-center justify-between pr-1">
-              <SectionLabel>Library</SectionLabel>
-              <IconAction icon="playlist_add_check" label="Turn on fonts from a list" tip={FONT_LIST_TIP} onClick={props.onFontList} />
-            </div>
+        <nav className={cn("flex flex-col gap-1 p-2", !titleBar && "pt-3")}>
+          <div role="group" aria-label="Library">
             {smart.map((entry) => {
               const selected = view.kind === entry.kind;
               return (
@@ -378,20 +388,27 @@ export function Sidebar(props: Props) {
             })}
           </div>
 
-          <div>
-            <div className="flex items-center justify-between pr-1">
-              <SectionLabel>Sources</SectionLabel>
-              <IconAction icon="create_new_folder" label="Add folder" tip={ADD_FOLDER_TIP} onClick={onAddFolder} />
+          <SectionDivider
+            section="sources"
+            open={sourcesOpen}
+            onOpenChange={setSourcesOpen}
+            contentId={sourcesId}
+            enter="[data-source-link]"
+            menu={dividerMenu("sources", { open: sourcesOpen })}
+            run={run}
+          />
+          {sourcesOpen && (
+            <div id={sourcesId} role="group" aria-label={SECTIONS.sources.label}>
+              {sources.map(row)}
+              {user.length === 0 && (
+                <Tip tip={ADD_FOLDER_TIP}>
+                  <button className="w-full px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground" onClick={onAddFolder}>
+                    Add a folder of fonts…
+                  </button>
+                </Tip>
+              )}
             </div>
-            {sources.map(row)}
-            {user.length === 0 && (
-              <Tip tip={ADD_FOLDER_TIP}>
-                <button className="w-full px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground" onClick={onAddFolder}>
-                  Add a folder of fonts…
-                </button>
-              </Tip>
-            )}
-          </div>
+          )}
 
           {show.tags && <TagsSection families={families} view={view} onView={onView} onFallback={onFallback} showBuiltin={show.builtinTags} />}
         </nav>
@@ -435,13 +452,19 @@ export function Sidebar(props: Props) {
         </div>
       )}
 
+      {/* "+": a new tag, a folder, or an import. Settings live in the app menu (macOS) or the
+          window's File menu, with Cmd+, (Ctrl+,), not here. */}
       <div className="flex shrink-0 items-center border-t px-2 py-1.5">
-        {/* Its name says what it opens; the tooltip adds the shortcut (also on aria-keyshortcuts). */}
-        <Tip tip="Opens Settings" shortcut="Mod+," describe={false}>
-          <Button id={SETTINGS_BUTTON_ID} variant="ghost" size="icon-sm" aria-label="Settings" onClick={props.onOpenSettings}>
-            <Icon name="settings" size={18} />
-          </Button>
-        </Tip>
+        <DropdownMenu>
+          <Tip tip="Makes a new tag, adds a folder of fonts, or imports fonts or tags">
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Add" />}>
+              <Icon name="add" size={18} />
+            </DropdownMenuTrigger>
+          </Tip>
+          <DropdownMenuContent side="top" align="start" className="w-auto min-w-52">
+            <MenuLines kit={DROPDOWN} lines={addLines} run={run} />
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </aside>
   );

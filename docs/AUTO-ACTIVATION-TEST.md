@@ -110,5 +110,4 @@ tail -f ~/Library/Logs/design.snds.fontface/font-requests.jsonl
 ## What it decides
 
 The results decide whether system auto-activation is worth building next, and for which apps:
-an app that never asks needs another route (a plugin, a "fonts in this file" check, or the
-Figma plugin's list pasted into Turn On Fonts from a List…).
+an app that never asks needs another route (a plugin, or a "fonts in this file" check).

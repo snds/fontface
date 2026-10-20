@@ -153,14 +153,12 @@ impl AppState {
 pub fn run() {
     let builder = tauri::Builder::default();
     // macOS: the menu bar adds Settings… to the app menu, and the View and Font menus the page
-    // drives (window.rs). Other systems keep Tauri's default.
-    #[cfg(target_os = "macos")]
+    // drives. Windows and Linux: the window gets a File menu with Settings… and Exit (window.rs).
     let builder = builder.menu(window::app_menu);
     // One handler for every menu: the app menu's items and the menu bar icon's (tray.rs). Set
     // here once: a handler given to the icon itself could never be taken back.
     let builder = builder.on_menu_event(|app, event| {
         tray::on_menu_event(app, event.id().as_ref());
-        #[cfg(target_os = "macos")]
         window::on_menu_event(app, event);
     });
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
@@ -364,7 +362,6 @@ pub fn run() {
             families::families_reset,
             families::families_undo,
             families::families_apply,
-            font_names::match_font_names,
             tags::commands::tags_list,
             tags::commands::tags_create,
             tags::commands::tags_rename,

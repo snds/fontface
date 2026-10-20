@@ -1,3 +1,4 @@
+import { SECTION_STARTS_OPEN, SECTIONS } from "@/sidebar";
 import { setOpen, toggleOpen } from "./expanded";
 import { buildIndex, type TagGroup } from "./model";
 import { organizeNow } from "./store";
@@ -12,9 +13,9 @@ export const GROUP_ROWS: Record<TagGroup, { openId: string; startsOpen: boolean 
 };
 
 /**
- * Brings a tag's row into sight in the sidebar: opens its group's heading (when the groups have
- * headings) and the tags above it. Does nothing for a tag in Built-in while Settings › Sidebar
- * hides that group (`builtinHidden`).
+ * Brings a tag's row into sight in the sidebar: expands the Tags section if it's collapsed, and
+ * opens its group's heading (when the groups have headings) and the tags above it. Does nothing
+ * for a tag in Built-in while Settings › Sidebar hides that group (`builtinHidden`).
  */
 export function revealTag(id: number, builtinHidden: boolean) {
   const { tags, byKey } = organizeNow();
@@ -22,6 +23,7 @@ export function revealTag(id: number, builtinHidden: boolean) {
   if (!index.byId.has(id)) return;
   const group = index.groupOf(id);
   if (group === "builtin" && builtinHidden) return;
+  setOpen(SECTIONS.tags.openId, true, SECTION_STARTS_OPEN);
   // Built-in always has its heading in the sidebar; My tags only when Built-in shows there too
   // (see TagsSection).
   const headed = group === "builtin" || (index.roots.builtin.length > 0 && !builtinHidden);

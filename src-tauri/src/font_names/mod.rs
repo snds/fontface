@@ -1,10 +1,10 @@
 //! Font names to library fonts: one matcher for every place that names fonts in text.
 //!
 //! It takes lines ("Inter-Bold", "Inter Bold", "Helvetica Neue") and finds the library's styles
-//! for each. "Turn on fonts from a list…" uses it today. It's written for anything else that
-//! names fonts as well: a command-line tool, design tokens files, apps asking for a font they're
-//! missing, and imports. Everything here is pure (no database, no files), apart from
-//! [`NameIndex::load`] and the command at the end.
+//! for each. The auto-activation listener (font_requests) uses it today, to log whether the
+//! library has each font an app asks for. It's written for anything else that names fonts as
+//! well: a command-line tool, design tokens files, and imports. Everything here is pure (no
+//! database, no files), apart from [`NameIndex::load`].
 //!
 //! **How a line matches.** The first rule that finds anything wins:
 //!
@@ -47,18 +47,9 @@ use std::{
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
-use crate::{
-    error::{AppError, AppResult},
-    model::Axis,
-    services::adobe::is_adobe_path,
-    tags::LibraryIndex,
-    AppState,
-};
+use crate::{error::AppResult, model::Axis, services::adobe::is_adobe_path, tags::LibraryIndex};
 
-/// At most this many lines in one call.
-pub const MAX_LINES: usize = 5_000;
 /// Longer lines aren't font names; they're answered "not found" without being looked at.
 pub const MAX_LINE: usize = 512;
 /// At most this many closest names for a line that matches nothing.
@@ -68,8 +59,8 @@ const NEAR_MISS_LINES: usize = 300;
 
 // ------------------------------------------------------------------------------------ input
 
-/// One font to find: a line of text, or a font named in parts (the Figma plugin's list, a
-/// tokens file). Text is "PostScript name", "Full Name", "Family Style" or "Family".
+/// One font to find: a line of text, or a font named in parts (an app's request, a tokens
+/// file). Text is "PostScript name", "Full Name", "Family Style" or "Family".
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub enum NameLine {
@@ -687,27 +678,4 @@ impl NameIndex {
 fn dedup(faces: Vec<usize>) -> Vec<usize> {
     let mut seen = HashSet::new();
     faces.into_iter().filter(|f| seen.insert(*f)).collect()
-}
-
-// --------------------------------------------------------------------------------- command
-
-/// True for an online-only cloud placeholder. Looks at the file's details only, which never
-/// downloads it.
-fn is_online_only(path: &str) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|m| crate::cloud::is_dataless(&m))
-}
-
-/// "Turn on fonts from a list…" and anything else with names to find: each line's styles, in the
-/// order given. Holds the database only while it reads the library.
-#[tauri::command(async)]
-pub fn match_font_names(state: State<'_, AppState>, lines: Vec<NameLine>) -> AppResult<Vec<LineMatch>> {
-    if lines.len() > MAX_LINES {
-        return Err(AppError::Invalid(format!(
-            "That's {} names. Fontface looks up at most {} at a time.",
-            lines.len(),
-            MAX_LINES
-        )));
-    }
-    let index = NameIndex::load(&*state.conn()?)?;
-    Ok(index.match_lines(&lines, is_online_only))
 }
