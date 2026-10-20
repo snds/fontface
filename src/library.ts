@@ -188,9 +188,14 @@ export const isRecent = (face: Face, since: number) => {
 /** Active: on right now, leaving out the fonts the OS always keeps on. */
 export const isOnNow = (face: Face) => face.active && !face.installed;
 
-/** What the OS calls its own installed-fonts library. */
-export const INSTALLED_LABEL =
-  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent) ? "Windows Fonts" : "macOS Fonts";
+/** The source for the fonts the system installs: the same name on every system. */
+export const INSTALLED_LABEL = "System Fonts";
+
+/** Its icon, a computer outline for the system Fontface runs on: an iMac shape on a Mac, a monitor
+ *  on Windows, a plain computer elsewhere. No company's logo. */
+export const SYSTEM_FONTS_ICON = ((agent: string) => (/Macintosh|Mac OS X/.test(agent) ? "desktop_mac" : /Windows/i.test(agent) ? "desktop_windows" : "computer"))(
+  typeof navigator !== "undefined" ? navigator.userAgent : "",
+);
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef } from "react";
 import type { Folder, ScanProgress, ServiceInfo, SidebarSections, SkippedFiles } from "@/api";
-import { INSTALLED_LABEL, type Family, type LibraryView, type PlaceCounts } from "@/library";
+import { INSTALLED_LABEL, SYSTEM_FONTS_ICON, type Family, type LibraryView, type PlaceCounts } from "@/library";
 import { smartRows, sourceFolders, sourceOf, sourceRows, sourceView, type SourceKey } from "@/places";
 import { addMenu, countClass, countShown, dividerMenu, ROW_ACTIONS_CLASS, SECTION_STARTS_OPEN, SECTIONS, sourceRevealed, stylesSaid, type SidebarCommand } from "@/sidebar";
 import { skippedTotal, sumSkipped } from "@/skippedFiles";
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { BrandIcon } from "@/components/BrandIcon";
+import { Monogram } from "@/components/Monogram";
 import { MenuLines, SectionDivider } from "@/components/SectionDivider";
 import { DROPDOWN, Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
@@ -113,7 +113,8 @@ export function currentSidebarRow(): HTMLElement | null {
 interface RowProps {
   label: string;
   /** Its icon, in the row's text color: a Material Symbols name (outlined), or a service's mark. */
-  icon: string | { brand: "google" | "adobe" };
+  /** A Material Symbols name, or a letter for a monogram (an online service, Monogram). */
+  icon: string | { letter: string };
   /** Can't be found: a red icon. */
   missing?: boolean;
   scan?: ScanProgress;
@@ -130,7 +131,7 @@ interface RowProps {
  * A row in Sources. No chevrons: a source's folders are picked in the toolbar instead. The button
  * covers the whole row (its ::after), so a click on the count, the "n new" badge or the padding
  * opens the source too, like the rest of the row; the hover actions sit above it. Its icon is in
- * the row's text color (an outline, but for Google Fonts' solid mark: BrandIcon): location colors
+ * the row's text color (an outline, or a letter in a square for an online service: Monogram): location colors
  * show as the dots on fonts, not here. Its count shows only while the row is the place being
  * viewed, or is hovered or has keyboard focus with no buttons of its own to show (sidebar.ts,
  * countShown); screen readers always hear it. Its name shows, so it has no tooltip.
@@ -150,7 +151,7 @@ function SourceRow({ label, icon, missing, scan, count, badge, selected, onOpen,
         ) : typeof icon === "string" ? (
           <Icon name={icon} size={18} className={missing ? "text-destructive" : "text-muted-foreground"} />
         ) : (
-          <BrandIcon brand={icon.brand} size={18} className="text-muted-foreground" />
+          <Monogram letter={icon.letter} size={18} className="text-muted-foreground" />
         )}
         <span className="truncate">{label}</span>
         <span className="sr-only">
@@ -176,7 +177,7 @@ function SourceRow({ label, icon, missing, scan, count, badge, selected, onOpen,
 
 /**
  * The sidebar, in three sections with no headings: Library (All Fonts and the smart entries, each
- * with its count), then a divider and Sources (macOS Fonts, Google Fonts, Adobe Fonts, Purchases,
+ * with its count), then a divider and Sources (System Fonts, Google Fonts, Adobe Fonts, Purchases,
  * then your folders A to Z, one row each), then a divider and Tags. A divider collapses its
  * section, and its right-click menu has the section's commands (SectionDivider, sidebar.ts). The
  * "+" at the bottom makes a new tag, adds a folder, or imports fonts or tags. Settings are in the
@@ -270,7 +271,7 @@ export function Sidebar(props: Props) {
         >
           <SourceRow
             label={INSTALLED_LABEL}
-            icon="auto_stories"
+            icon={SYSTEM_FONTS_ICON}
             scan={scan}
             count={counts.installed}
             selected={selected}
@@ -285,7 +286,7 @@ export function Sidebar(props: Props) {
         <LocationMenu key={source} location={ADOBE_LOCATION} color={locations.colorOf(ADOBE_LOCATION)} defaultColor={locations.defaultOf(ADOBE_LOCATION)}>
           <SourceRow
             label="Adobe Fonts"
-            icon={{ brand: "adobe" }}
+            icon={{ letter: "A" }}
             count={adobeCount || null}
             selected={selected}
             onOpen={open}
@@ -309,7 +310,7 @@ export function Sidebar(props: Props) {
         >
           <SourceRow
             label={name}
-            icon={google ? { brand: "google" } : "shopping_bag"}
+            icon={google ? { letter: "G" } : "shopping_bag"}
             scan={scan}
             count={folder ? (folderCounts.get(folder.id) ?? 0) : 0}
             badge={!google && newPurchases > 0 ? { text: `${n(newPurchases)} new`, said: `${n(newPurchases)} new ${newPurchases === 1 ? "download" : "downloads"} to review` } : undefined}

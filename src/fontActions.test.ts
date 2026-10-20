@@ -369,7 +369,7 @@ test("view commands: the size wherever the preview bar's size applies, the layou
 test("a switch and the marks beside it have short names for their tooltips, not sentences", () => {
   const off = { lock: null, total: 12, on: 0, wanted: 0, temporary: 0, waiting: 0, elsewhere: 0, locked: 0, macos: 0 };
   assert.equal(SWITCH_TIP, "Activate", "as the switch's name starts: Activate Inter");
-  assert.equal(markName("macos", { ...off, lock: "macos" }), "Part of macOS");
+  assert.equal(markName("macos", { ...off, lock: "macos" }), "System font");
   assert.equal(markName("installed", { ...off, lock: "installed" }), "Installed");
   assert.equal(markName("temporary", { ...off, on: 12, wanted: 12, temporary: 12 }), "On until logout");
   assert.equal(markName("waiting", { ...off, wanted: 12, waiting: 12 }), "Not on yet");

@@ -83,7 +83,7 @@ test("a family sums its styles, and the switch follows what's on or set to turn 
     "1 style is on until you log out or restart.",
     `1 style is set to turn on, but it isn't on right now. ${WHY_ONE}`,
     "1 style was turned on by another app.",
-    "1 style is always on (in macOS Fonts).",
+    "1 style is always on (in System Fonts).",
   ]);  // The item's own description leaves out the count its name ("3 of 5 on") already says.
   assert.equal(stateDetails(s, false, {}, { count: false })[0], "1 style is on until you log out or restart.");
 });
@@ -104,8 +104,8 @@ test("set to turn on but not on: the switch is on and dimmed", () => {
 test("locks say why", () => {
   const macos = summarize([one(font("A", MACOS))]);
   assert.equal(macos.lock, "macos");
-  assert.equal(stateWords(macos), "always on, part of macOS");
-  assert.deepEqual(stateDetails(macos, true), ["Part of macOS. Always on."]);
+  assert.equal(stateWords(macos), "always on, a system font");
+  assert.deepEqual(stateDetails(macos, true), ["System font. Always on."]);
   assert.equal(markOf(macos), "macos");
   const installed = summarize([one(font("A", INSTALLED))]);
   assert.equal(installed.lock, "installed");
@@ -114,7 +114,7 @@ test("locks say why", () => {
   // A family with some of each: installed (not all of it is part of macOS).
   const mixed = summarize(faces(font("A", MACOS), font("B", INSTALLED)));
   assert.equal(mixed.lock, "installed");
-  assert.match(stateDetails(mixed, false)[0], /some as part of macOS/);
+  assert.match(stateDetails(mixed, false)[0], /some of them system fonts/);
   assert.deepEqual(switchLook(mixed), { checked: false, partial: false, dim: false }, "no switch to show");
 });
 
@@ -146,7 +146,7 @@ test("plain on and off have no mark and nothing more to say", () => {
 });
 
 test("each copy in words, for the font page", () => {
-  assert.equal(copyWords(font("A", MACOS)), "Always on (part of macOS)");
+  assert.equal(copyWords(font("A", MACOS)), "Always on (system font)");
   assert.equal(copyWords(font("A", INSTALLED)), "Always on (installed)");
   assert.equal(copyWords(font("A", TEMPORARY)), "On until logout");
   assert.equal(copyWords(font("A", ON)), "On");

@@ -296,7 +296,7 @@ pub struct LibraryAnswer {
     /// The matcher's rule that found it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub how: Option<How>,
-    /// How many styles match, how many of them are on now (in macOS Fonts, or turned on by
+    /// How many styles match, how many of them are on now (in System Fonts, or turned on by
     /// Fontface), and how many are online-only.
     pub styles: usize,
     pub on: usize,

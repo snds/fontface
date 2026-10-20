@@ -126,7 +126,7 @@ function MarkTip({ text, handle, children }: { text: string; handle?: TipHandle;
 
 /**
  * Shown instead of a switch for fonts in one of the OS's font folders: they're always on. It
- * says why: "Part of macOS" or "Installed". `compact` (Tiles, Table): the lock alone, named for
+ * says why: "System font" or "Installed". `compact` (Tiles, Table): the lock alone, named for
  * screen readers, with its name as a tooltip.
  */
 export function LockBadge({ kind, compact = false, handle }: { kind: LockKind; compact?: boolean; handle?: TipHandle }) {

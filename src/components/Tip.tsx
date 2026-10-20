@@ -46,8 +46,8 @@ import { IS_MAC } from "./TitleBar";
  *   shows all of itself while it's cut (`CutShort`), and a mark with no words (an icon, a row
  *   of dots) shows what it stands for ("Not in this font: ä ö", "3 copies").
  * - Never the browser's `title`: always these parts, on the design system's tooltip
- *   (ui/tooltip.tsx). Don't name other font managers; macOS's own font folders are
- *   "macOS Fonts".
+ *   (ui/tooltip.tsx). Don't name other font managers; the system's own font folders are
+ *   "System Fonts".
  *
  * `Tip` goes around one control: a Button, a plain <button>, a Switch, a menu's or popover's
  * trigger (Tip goes outside: <Tip><PopoverTrigger render={<Button/>} /></Tip>, never inside its

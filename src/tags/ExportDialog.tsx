@@ -34,7 +34,7 @@ const FORMATS: { value: Format; title: string; hint: string; ext?: string }[] = 
   {
     value: "finder",
     title: "Finder tags on the font files",
-    hint: "Adds each tag to the font files, so Finder and Spotlight can find them. Tags already on a file stay. Fonts in macOS Fonts are left alone. Files in cloud folders sync their tags too.",
+    hint: "Adds each tag to the font files, so Finder and Spotlight can find them. Tags already on a file stay. Fonts in System Fonts are left alone. Files in cloud folders sync their tags too.",
   },
   {
     value: "fontBook",
@@ -57,7 +57,7 @@ export function ExportDialog({ open, tag, onClose }: { open: boolean; tag?: Tag;
     try {
       if (format === "finder") {
         const r = await tagsApi.exportFinder(ids);
-        const parts = [`${n(r.changed)} files tagged`, r.unchanged && `${n(r.unchanged)} already had them`, r.skippedInstalled && `${n(r.skippedInstalled)} in macOS Fonts left alone`].filter(Boolean);
+        const parts = [`${n(r.changed)} files tagged`, r.unchanged && `${n(r.unchanged)} already had them`, r.skippedInstalled && `${n(r.skippedInstalled)} in System Fonts left alone`].filter(Boolean);
         if (r.failed.length) {
           toast.warning(`${n(r.failed.length)} files couldn't be tagged`, { description: parts.join(" · ") });
           for (const f of r.failed) console.warn("finder tags", f.path, f.reason);

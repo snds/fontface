@@ -117,7 +117,7 @@ fn has_a_match_comes_from_the_shared_matcher_with_whats_on_now() {
     assert_eq!((answers[0].styles, answers[0].on), (1, 0), "found, but off");
     assert_eq!(answers[0].names, vec!["Inter Bold (Inter-Bold)"]);
     assert_eq!((answers[1].how, answers[1].styles, answers[1].on), (Some(How::Family), 2, 1));
-    assert_eq!(answers[2].on, 1, "a macOS Fonts style is always on");
+    assert_eq!(answers[2].on, 1, "a System Fonts style is always on");
     assert!(!answers[3].has_match);
     assert_eq!(answers[3].near, vec!["Inter"]);
 }

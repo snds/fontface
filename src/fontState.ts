@@ -6,7 +6,7 @@ import type { Face } from "./library";
  * run test:ui` covers it; components/ActivationSwitch.tsx draws it (`StateControl`). In display
  * order:
  *
- * - Part of macOS (a copy in /System/Library/Fonts): locked, always on.
+ * - System font (a copy in /System/Library/Fonts): locked, always on.
  * - Installed (a copy in /Library/Fonts or ~/Library/Fonts): locked, always on while it's there.
  * - On until logout: Fontface turned it on for this login only (`temporary`).
  * - On.
@@ -132,14 +132,14 @@ export const MARK_ICONS: Record<StateMark, string> = {
 };
 
 /** The lock's short name, on its badge. */
-export const LOCK_LABELS: Record<LockKind, string> = { macos: "Part of macOS", installed: "Installed" };
+export const LOCK_LABELS: Record<LockKind, string> = { macos: "System font", installed: "Installed" };
 
 /**
  * Short words for an item's accessible name, after its name: "on", "off", "3 of 12 on", "on
- * until logout", "always on, part of macOS". `stateDetails` says the rest.
+ * until logout", "always on, a system font". `stateDetails` says the rest.
  */
 export function stateWords(s: StateSummary, wording: StateWording = {}): string {
-  if (s.lock === "macos") return "always on, part of macOS";
+  if (s.lock === "macos") return "always on, a system font";
   if (s.lock === "installed") return "always on, installed";
   if (s.total === 0) return "off";
   const { checked } = switchLook(s);
@@ -179,11 +179,11 @@ export function stateDetails(
   wording: StateWording = {},
   { count = true }: { count?: boolean } = {},
 ): string[] {
-  if (s.lock === "macos") return ["Part of macOS. Always on."];
+  if (s.lock === "macos") return ["System font. Always on."];
   if (s.lock === "installed") {
     return [
       s.macos > 0
-        ? "In macOS Fonts, some as part of macOS. Always on while they're there."
+        ? "In System Fonts, some of them system fonts. Always on while they're there."
         : "Installed in a Library Fonts folder. Always on while it's there.",
     ];
   }
@@ -207,7 +207,7 @@ export function stateDetails(
     out.push(single ? "Turned on by another app." : `${styles(s.elsewhere)} ${s.elsewhere === 1 ? "was" : "were"} turned on by another app.`);
   }
   if (s.locked) {
-    const why = s.macos === s.locked ? "part of macOS" : "in macOS Fonts";
+    const why = s.macos === s.locked ? (s.locked === 1 ? "a system font" : "system fonts") : "in System Fonts";
     out.push(`${styles(s.locked)} ${are(s.locked)} always on (${why}).`);
   }
   return out;
@@ -218,7 +218,7 @@ export function copyWords(
   copy: { installed: boolean; osActive: boolean; activated: boolean; temporary?: boolean; path: string },
   wording: StateWording = {},
 ): string {
-  if (copy.installed) return copy.path.startsWith(MACOS_FONTS) ? "Always on (part of macOS)" : "Always on (installed)";
+  if (copy.installed) return copy.path.startsWith(MACOS_FONTS) ? "Always on (system font)" : "Always on (installed)";
   if (copy.osActive) {
     if (!copy.activated) return "On (another app)";
     if (!copy.temporary) return "On";
