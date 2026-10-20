@@ -12,7 +12,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# macos-private-api: a see-through window (translucency.rs). A no-op since Tauri 2.12.1, which
+# always allows it; kept so tauri.conf.json's macOSPrivateApi and the features agree.
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -41,9 +43,10 @@ plist = "1"
 xattr = "1"
 # Finder tags (NSURL) and Font Book collections (NSFontCollection), for tag import and export.
 # NSNotification: knowing when the window has left full screen (window.rs).
+# NSAccessibility and NSWorkspace: following Reduce transparency (translucency.rs).
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSNotification", "NSObjCRuntime", "NSObject", "NSString", "NSURL"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSFontCollection", "NSFontDescriptor"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAccessibility", "NSFontCollection", "NSFontDescriptor", "NSWorkspace"] }
 # The auto-activation test's callback is an Objective-C block (font_requests/listen.rs). block2
 # was already in Cargo.lock (the objc2 crates use it); listed so Fontface can use it directly.
 block2 = "0.6"

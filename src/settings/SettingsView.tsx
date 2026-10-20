@@ -93,7 +93,7 @@ export function SettingsScreen({ section, onSection, onClose, ...props }: Props)
   return (
     <div className="absolute inset-0 grid grid-cols-[240px_1fr]">
       <SettingsNav current={section} searching={searching} onSection={go} onBack={onClose} />
-      <main aria-label="Settings" className="flex min-h-0 min-w-0 flex-col bg-background">
+      <main aria-label="Settings" className="flex min-h-0 min-w-0 flex-col bg-pane">
         <PageHeader icon={searching ? "search" : meta.icon} title={searching ? "Search results" : meta.label}>
           <div className="relative w-56">
             <Icon name="search" size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted-foreground" />

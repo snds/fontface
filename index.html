@@ -6,7 +6,8 @@
     <title>Fontface</title>
     <!--
       Light or dark before the first paint, from the last Appearance used (kept in localStorage
-      by src/settings/theme.ts, which takes over once the app loads). A plain inline script runs
+      by src/settings/theme.ts, which takes over once the app loads), and the see-through
+      window's likewise (src/settings/translucent.ts). A plain inline script runs
       before the body is drawn; the app's module script only runs after. Tauri adds this
       script's hash to the Content Security Policy when it builds the app.
     -->
@@ -16,6 +17,11 @@
           var theme = localStorage.getItem("fontface.theme");
           if (theme === "dark" || (theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
             document.documentElement.classList.add("dark");
+          }
+          var shown = (localStorage.getItem("fontface.translucent") || "").split("+");
+          if (shown[0] === "blur" || shown[0] === "plain") {
+            document.documentElement.setAttribute("data-translucent", shown[0]);
+            if (shown[1] === "window") document.documentElement.setAttribute("data-translucent-window", "");
           }
         } catch (e) {}
       })();

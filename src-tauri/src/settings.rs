@@ -33,6 +33,19 @@ pub enum Theme {
     Dark,
 }
 
+/// How much of the window the desktop shows through, blurred by the OS (translucency.rs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Translucency {
+    /// Solid.
+    #[default]
+    Off,
+    /// The sidebars only.
+    Sidebar,
+    /// The sidebars, and faintly behind the font lists and pages too.
+    Window,
+}
+
 /// How turning a font on registers it with the OS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -240,6 +253,10 @@ impl Default for SidebarSections {
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     pub theme: Theme,
+    /// "Translucent window": the desktop shows softly through the sidebars, or the whole window,
+    /// blurred by the OS (translucency.rs). The whole window by default on macOS and Windows;
+    /// off on Linux, which has no blur. The OS's own "reduce transparency" choice always wins.
+    pub translucency: Translucency,
     /// Empty: each family previews its own name.
     pub preview_text: String,
     pub preview_size: u32,
@@ -296,6 +313,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
             theme: Theme::System,
+            translucency: TRANSLUCENCY_BY_DEFAULT,
             preview_text: String::new(),
             preview_size: 32,
             restore_last_view: true,
@@ -325,6 +343,9 @@ impl Default for AppSettings {
     }
 }
 
+/// Linux has no standard blur, so what's behind the window would show through sharp.
+pub const TRANSLUCENCY_BY_DEFAULT: Translucency = if cfg!(target_os = "linux") { Translucency::Off } else { Translucency::Window };
+
 pub const PREVIEW_SIZE: RangeInclusive<u32> = 10..=128;
 /// A Table column's width in px.
 pub const COLUMN_WIDTH: RangeInclusive<u32> = 32..=1200;
@@ -353,6 +374,13 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
     match key {
         "theme" => {
             s.theme = choice(value, "Appearance", &[("system", Theme::System), ("light", Theme::Light), ("dark", Theme::Dark)])?
+        }
+        "translucency" => {
+            s.translucency = choice(
+                value,
+                "Translucent window",
+                &[("off", Translucency::Off), ("sidebar", Translucency::Sidebar), ("window", Translucency::Window)],
+            )?
         }
         "previewText" => s.preview_text = text(value)?,
         "previewSize" => s.preview_size = number(value, "Preview size", PREVIEW_SIZE)?,

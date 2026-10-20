@@ -21,6 +21,7 @@ mod settings;
 mod sfnt;
 mod sync;
 mod tags;
+mod translucency;
 mod tray;
 mod window;
 
@@ -192,7 +193,13 @@ pub fn run() {
             settings::refresh_launch_at_login();
             let mut app_settings = settings::load(&conn)?;
             app_settings.launch_at_login = settings::launch_at_login_enabled();
+            // Windows and Linux: the window is made here, see-through only if it will be.
+            #[cfg(not(target_os = "macos"))]
+            translucency::create_main_window(app, app_settings.translucency)?;
             window::paint_background(app.handle(), app_settings.theme);
+            #[cfg(target_os = "macos")]
+            translucency::watch(app.handle());
+            translucency::apply(app.handle(), app_settings.translucency, app_settings.theme);
             #[cfg(target_os = "macos")]
             if let Some(main) = app.get_webview_window("main") {
                 window::full_screen::watch(&main);
@@ -351,6 +358,7 @@ pub fn run() {
             commands::backups_reveal,
             commands::app_data_reveal,
             window::title_bar_double_click,
+            translucency::translucency_get,
             window::set_menu_state,
             removed::fonts_remove,
             removed::fonts_removed,
@@ -422,6 +430,10 @@ pub fn run() {
                     window::paint_background(app, theme);
                 }
             }
+        }
+        // Windows' Transparency effects may have been switched while Fontface was in the back.
+        tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Focused(true), .. } if label == "main" => {
+            translucency::refresh(app);
         }
         // Clicking the Dock icon, or opening Fontface again (Spotlight, Finder), brings the
         // hidden window back, with the Dock icon if it had gone.

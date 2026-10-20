@@ -17,7 +17,9 @@ import { createTipHandle, ROW_TIP_DELAY, Tip, TipHost } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { openTagDialog } from "@/tags/dialogs";
 import { useSyncSection } from "@/sync/SyncSection";
+import { PLATFORM, TRANSLUCENCY_LABEL, translucencyDescription, translucencyDisabledReason, translucencyOptions, translucencyShown } from "@/translucency";
 import { ConfirmButton, describe, NumberField, SECTION_LIST, TextSetting, type RowDef, type RowIds, type SectionDef, type SectionId } from "./parts";
+import { useTranslucency } from "./translucent";
 import { useSettings } from "./useSettings";
 
 const OS = IS_MAC ? "macOS" : "Windows";
@@ -273,6 +275,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
   const outside = useOutsideState(props.onPurchasesChanged);
   const syncSection = useSyncSection();
   const removed = useRemovedFonts(props.onPutBack);
+  const translucency = useTranslucency();
   // Font files Fontface has turned on, outside the OS's own font folders: what Turn Off All
   // covers (`wanted`), and how many of those macOS has on right now (`on`). The rest are set to
   // come back on, e.g. from a drive that isn't connected, or waiting on "Ask me".
@@ -335,6 +338,22 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                   { value: "light", label: "Light", tip: "Always uses the light appearance" },
                   { value: "dark", label: "Dark", tip: "Always uses the dark appearance" },
                 ]}
+              />
+            ),
+          },
+          {
+            id: "translucency",
+            label: TRANSLUCENCY_LABEL,
+            description: translucencyDescription(PLATFORM, translucency),
+            keywords: "transparent transparency translucent see-through blur frosted glass vibrancy mica sidebar window background reduce transparency contrast",
+            control: (ids) => (
+              <ChoiceGroup
+                labelledBy={ids.label}
+                describedBy={ids.description}
+                value={translucencyShown(s.translucency, translucency)}
+                onChange={(translucency) => update({ translucency })}
+                disabledReason={translucencyDisabledReason(PLATFORM, translucency)}
+                options={translucencyOptions(PLATFORM)}
               />
             ),
           },
