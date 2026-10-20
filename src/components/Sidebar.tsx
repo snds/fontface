@@ -1,8 +1,8 @@
-import { useCallback, useId } from "react";
+import { useCallback, useEffect, useId, useRef } from "react";
 import type { Folder, ScanProgress, ServiceInfo, SidebarSections, SkippedFiles } from "@/api";
 import { INSTALLED_LABEL, type Family, type LibraryView, type PlaceCounts } from "@/library";
 import { smartRows, sourceFolders, sourceOf, sourceRows, sourceView, type SourceKey } from "@/places";
-import { ADD_FOLDER_TIP, addMenu, countClass, countShown, dividerMenu, SECTION_STARTS_OPEN, SECTIONS, stylesSaid, type SidebarCommand } from "@/sidebar";
+import { ADD_FOLDER_TIP, addMenu, countClass, countShown, dividerMenu, ROW_ACTIONS_CLASS, SECTION_STARTS_OPEN, SECTIONS, sourceRevealed, stylesSaid, type SidebarCommand } from "@/sidebar";
 import { skippedMenuTip, skippedTotal, sumSkipped } from "@/skippedFiles";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -120,7 +120,7 @@ export function currentSidebarRow(): HTMLElement | null {
 
 interface RowProps {
   label: string;
-  /** Its outlined icon, in the row's text color: a Material Symbols name, or a service's mark. */
+  /** Its icon, in the row's text color: a Material Symbols name (outlined), or a service's mark. */
   icon: string | { brand: "google" | "adobe" };
   /** Can't be found: a red icon. */
   missing?: boolean;
@@ -139,10 +139,11 @@ interface RowProps {
 /**
  * A row in Sources. No chevrons: a source's folders are picked in the toolbar instead. The button
  * covers the whole row (its ::after), so a click on the count, the "n new" badge or the padding
- * opens the source too, like the rest of the row; the hover actions sit above it. Its icon is an
- * outline in the row's text color: location colors show as the dots on fonts, not here. Its count
- * shows only while the row is the place being viewed, or is hovered or has focus with no buttons
- * of its own to show (sidebar.ts, countShown); screen readers always hear it.
+ * opens the source too, like the rest of the row; the hover actions sit above it. Its icon is in
+ * the row's text color (an outline, but for Google Fonts' solid mark: BrandIcon): location colors
+ * show as the dots on fonts, not here. Its count shows only while the row is the place being
+ * viewed, or is hovered or has keyboard focus with no buttons of its own to show (sidebar.ts,
+ * countShown); screen readers always hear it.
  */
 function SourceRow({ label, icon, missing, scan, count, badge, selected, hint, onOpen, actions }: RowProps) {
   const progress = scan && scan.phase === "reading" ? `${Math.floor((scan.done / Math.max(1, scan.found)) * 100)}%` : null;
@@ -180,7 +181,7 @@ function SourceRow({ label, icon, missing, scan, count, badge, selected, hint, o
       <span aria-hidden className={cn("font-mono text-xs text-muted-foreground tabular-nums", countClass(countShown("source", selected || !!progress), !!actions))}>
         {progress ?? (count !== null ? n(count) : "")}
       </span>
-      {actions && <span className="relative z-10 hidden items-center group-focus-within/item:flex group-hover/item:flex">{actions}</span>}
+      {actions && <span className={cn("relative z-10 items-center", ROW_ACTIONS_CLASS)}>{actions}</span>}
     </div>
   );
 }
@@ -210,6 +211,14 @@ export function Sidebar(props: Props) {
   const sourcesId = useId();
   const sourcesOpen = isOpen(useOpenRows(), SECTIONS.sources.openId, SECTION_STARTS_OPEN);
   const setSourcesOpen = useCallback((to: boolean) => setOpen(SECTIONS.sources.openId, to, SECTION_STARTS_OPEN), []);
+  // The view went to a source while Sources is collapsed (Add Folder… or Import Purchased Fonts…
+  // from the "+" or the divider's menu): Sources opens, so that place has its row.
+  const lastSource = useRef(selectedSource);
+  useEffect(() => {
+    const before = lastSource.current;
+    lastSource.current = selectedSource;
+    if (sourceRevealed(before, selectedSource)) setSourcesOpen(true);
+  }, [selectedSource, setSourcesOpen]);
 
   /** The sidebar's own commands: the "+" menu's and the Sources divider's. */
   const run = (id: SidebarCommand) => {
@@ -316,7 +325,7 @@ export function Sidebar(props: Props) {
             selected={selected}
             hint={
               google
-                ? "Google's free fonts: get them, turn them on and off, update or remove them. The number counts the styles you downloaded."
+                ? "Google's free fonts: get them, turn them on and off, update or uninstall them. The number counts the styles you downloaded."
                 : "Fonts you bought, added from your downloads. Browse to review new downloads."
             }
             onOpen={open}

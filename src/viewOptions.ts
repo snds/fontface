@@ -1,9 +1,10 @@
 import type { LibraryLayout, SortKey, SortOrder } from "./api";
 
 /**
- * The View options' vocabulary: the three layouts, the size steps of Cmd+= and Cmd+-, and the
- * sort keys with the words for each direction. Pure (no React, no DOM), so `npm run test:ui`
- * covers it; the popover is components/ViewOptions.tsx and the shortcuts live in App.
+ * The View vocabulary: the three layouts, the size steps of Cmd+= and Cmd+- (the preview bar's
+ * size), and the sort keys with the words for each direction. Pure (no React, no DOM), so
+ * `npm run test:ui` covers it; the popover is components/ViewOptions.tsx and the shortcuts live
+ * in App.
  */
 
 export interface LayoutInfo {

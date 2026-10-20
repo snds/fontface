@@ -436,6 +436,24 @@ export function commandName(c: MenuCommand): string {
   }
 }
 
+/** What the list layer shows now: the library list, or a service's own view (Google Fonts' catalog
+ *  or Adobe Fonts' list). `covered` is true while Settings or a page is over it. */
+export interface ViewShowing {
+  covered: boolean;
+  service: "google" | "adobe" | null;
+  /** Adobe Fonts has fonts to preview (so its preview bar shows). */
+  adobeFonts?: boolean;
+}
+
+/** Which of the View commands work now. The preview size works wherever the preview bar's size
+ *  applies: the library list, Google Fonts and Adobe Fonts (once it has fonts). Layouts, grouping
+ *  and sort only work in the library list: the services keep one layout and their own order. */
+export function viewCommands(v: ViewShowing): { size: boolean; arrange: boolean } {
+  if (v.covered) return { size: false, arrange: false };
+  if (v.service === "adobe") return { size: !!v.adobeFonts, arrange: false };
+  return { size: true, arrange: v.service === null };
+}
+
 /** What the macOS menus show: which items are enabled and checked, and items' changing names.
  *  Must match MenuState in src-tauri/src/window.rs. */
 export interface NativeMenuState {
@@ -445,10 +463,10 @@ export interface NativeMenuState {
 }
 
 export interface MenuInput {
-  /** The library list is showing and takes commands: no page, settings or Adobe Fonts' own page over it. */
+  /** The list layer is showing and takes commands: no page or settings over it (viewCommands). */
   list: boolean;
-  /** The list showing is the Google Fonts view: one layout and the catalog's own order, so only
-   *  the preview size takes commands. */
+  /** The list showing is a service's own view (Google Fonts or Adobe Fonts): one layout and the
+   *  service's own order, so only the preview size takes commands. */
   catalog?: boolean;
   /** Back would close a page. */
   back: boolean;

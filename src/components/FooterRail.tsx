@@ -1,5 +1,8 @@
 import { cn } from "@/lib/utils";
 
+/** The rail's height, px (its `h-7`): what sits over the bottom of a list view keeps above it. */
+export const FOOTER_RAIL_HEIGHT = 28;
+
 /**
  * The slim line at the bottom of every list view (the library's places, the sources, tags, the
  * Google Fonts and Adobe Fonts views): the counts in full words with every digit

@@ -32,7 +32,7 @@ test("the same text the menus show for the font actions", () => {
 });
 
 test("keys with a glyph or a word", () => {
-  assert.equal(shortcutLabel("Mod+-", true), "⌘−", "a real minus sign, like View options");
+  assert.equal(shortcutLabel("Mod+-", true), "⌘−", "a real minus sign, like the preview bar's size tooltip");
   assert.equal(shortcutLabel("Mod+=", false), "Ctrl+=");
   assert.equal(shortcutLabel("Mod+Plus", false), "Ctrl++");
   assert.equal(shortcutLabel("Esc", true), "Esc");

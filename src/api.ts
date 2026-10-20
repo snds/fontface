@@ -334,7 +334,7 @@ export interface GooglePreview {
   path?: string;
   /** What the row draws from the file: the family name, the icons or the script sample. */
   text?: string;
-  /** `text` isn't the family name, so the View options' case doesn't apply to it. */
+  /** `text` isn't the family name, so the preview bar's case doesn't apply to it. */
   sample?: boolean;
   /** The file's preview profile, as the library has for its fonts. */
   profile?: PreviewInfo;
@@ -527,7 +527,7 @@ export type DockIcon = "always" | "whileOpen";
 /** A font page's tabs. "axes" shows only for variable styles (the page falls back to "specimen"). */
 export type FontPageTab = "specimen" | "characters" | "opentype" | "axes" | "info";
 
-/** The View options' preview styling. Must match PreviewOptions in src-tauri/src/settings.rs. */
+/** The preview bar's preview styling. Must match PreviewOptions in src-tauri/src/settings.rs. */
 export type PreviewAlign = "left" | "center" | "right";
 export type PreviewCase = "asTyped" | "upper" | "lower" | "title";
 /** Must match PREVIEW_FEATURES in src-tauri/src/settings.rs (previewStyle.ts has their CSS). */
@@ -633,7 +633,7 @@ export interface AppSettings {
   /** Empty: the default columns. */
   tableColumns: TableColumnSetting[];
   tableDensity: TableDensity;
-  /** The View options' preview styling, for every layout and the font page. */
+  /** The preview bar's preview styling, for every layout, Google Fonts, Adobe Fonts and the font page. */
   preview: PreviewOptions;
   /** Settings › General › "Show previews of Google Fonts you haven't downloaded". On by default.
    *  Off: nothing is sent to Google for previews, and those families show their names in the

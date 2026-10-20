@@ -59,6 +59,7 @@ import {
   removalPlan,
   revealFontOf,
   scopeOf,
+  viewCommands,
   type ActionContext,
   type FontActionId,
   type FontTarget,
@@ -109,8 +110,8 @@ import { useGoogleView } from "@/components/google/useGoogleView";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
 import { CATALOG_SHOWS } from "@/googleCatalog";
 import { catalogCountText, libraryCountText } from "@/footerCounts";
-import { ListFrame } from "@/components/FooterRail";
-import { PreviewBar } from "@/components/PreviewBar";
+import { FOOTER_RAIL_HEIGHT, ListFrame } from "@/components/FooterRail";
+import { PREVIEW_BAR_SPACE, PreviewBar } from "@/components/PreviewBar";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
 import { IS_MAC, type PageBack } from "@/components/TitleBar";
@@ -143,6 +144,9 @@ const ANNOUNCE_MS = 15000;
 const RECENT_SORT: SortOrder = { key: "added", desc: true };
 /** The Browse button on Purchases: focus comes back to it from its page. */
 const BROWSE_ID = "browse-service";
+/** Toasts stack above the footer rail and the preview bar (bottom right, where the bar's Paper
+ *  and Reset and the rail's source line are), so an Undo never covers them. */
+const TOAST_OFFSET = { bottom: FOOTER_RAIL_HEIGHT + PREVIEW_BAR_SPACE };
 /** The layouts the Google Fonts view can't show yet, and why (the toolbar greys them out). */
 const GOOGLE_LAYOUTS = {
   tiles: "Google Fonts shows as rows. Tiles aren't available here yet.",
@@ -1170,7 +1174,8 @@ export default function App() {
     [filtered, groupStyles, sort.key, sort.desc, sort.key === "source" ? sortContext : null],
   );
   const { update: updateSettings } = settingsStore;
-  // The View options' preview styling, for the layouts and the font page (PreviewStyle.tsx).
+  // The preview bar's preview styling, for the layouts, Google Fonts, Adobe Fonts and the font
+  // page (PreviewStyle.tsx).
   const previewOptions = settings?.preview ?? DEFAULT_SETTINGS.preview;
   const previewStyle = usePreviewStyleValue(previewOptions, dark);
   const choosePreview = useCallback((patch: Partial<PreviewOptions>) => updateSettings({ preview: patch }), [updateSettings]);
@@ -1226,16 +1231,22 @@ export default function App() {
     [announce],
   );
   // Cmd+1/2/3 pick the layout and Cmd+= / Cmd+- step the preview size (Ctrl on Windows), while
-  // the library list is showing (not under settings, a page or a service's own page). Like Cmd+F
-  // and Back, they wait while a menu, dialog or popover is open (the list it hands focus back to
-  // would be gone) and during a drag (the rows being dragged would change under it).
+  // the list layer is showing (not under settings or a page). Like Cmd+F and Back, they wait
+  // while a menu, dialog or popover is open (the list it hands focus back to would be gone) and
+  // during a drag (the rows being dragged would change under it).
   const adobePage = view.kind === "service" && view.id === "adobe";
-  // Google Fonts' own view: the catalog, under the same toolbar (GoogleFontsPanel). It has one
-  // layout and the catalog's own order, so only the size shortcuts work there.
+  // Google Fonts' own view: the catalog, under the same toolbar (GoogleFontsPanel). It and Adobe
+  // Fonts' page have one layout and their own order, so only the size shortcuts work there.
   const googleView = view.kind === "service" && view.id === "google";
-  const listShowing = !settingsOpen && !pageOpen && !adobePage;
+  const commands = viewCommands({
+    covered: settingsOpen || pageOpen,
+    service: googleView ? "google" : adobePage ? "adobe" : null,
+    adobeFonts: (adobeCount ?? 0) > 0,
+  });
+  const sizeKeys = commands.size;
+  const arrangeKeys = commands.arrange;
   useEffect(() => {
-    if (!listShowing) return;
+    if (!sizeKeys) return;
     const onKey = (e: KeyboardEvent) => {
       if (popupOpen() || isDragging()) return;
       const next = layoutShortcut(e, IS_MAC);
@@ -1243,7 +1254,7 @@ export default function App() {
         e.preventDefault();
         // Holding the keys down picks it once; the View menu's item for the same press doesn't
         // pick it again.
-        if (!googleView && !e.repeat && shortcutGuard.allow(`layout:${next}`, "key", performance.now())) chooseLayout(next);
+        if (arrangeKeys && !e.repeat && shortcutGuard.allow(`layout:${next}`, "key", performance.now())) chooseLayout(next);
         return;
       }
       const step = sizeShortcut(e, IS_MAC);
@@ -1254,7 +1265,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [listShowing, googleView, chooseLayout, stepPreviewSize, shortcutGuard]);
+  }, [sizeKeys, arrangeKeys, chooseLayout, stepPreviewSize, shortcutGuard]);
   // A font page finds its family by face key, whatever the list shows (filters don't apply there).
   const familyOfFace = useMemo(() => {
     const map = new Map<string, Family>();
@@ -1607,9 +1618,8 @@ export default function App() {
       if (target) runFontAction(c.action, target);
       return;
     }
-    if (!listShowing) return;
-    // The Google Fonts view: only the size (the menus have the rest greyed out).
-    if (googleView && c.kind !== "size") return;
+    // The services' own views take only the size (the menus have the rest greyed out).
+    if (c.kind === "size" ? !sizeKeys : !arrangeKeys) return;
     switch (c.kind) {
       case "layout":
         return chooseLayout(c.layout);
@@ -1630,8 +1640,8 @@ export default function App() {
   const menuSent = useRef("");
   const syncMenus = () => {
     const state = nativeMenuState({
-      list: listShowing,
-      catalog: googleView,
+      list: sizeKeys,
+      catalog: !arrangeKeys,
       back: nav.pages.length > 0 && !settingsOpen,
       layout: googleView ? "rows" : layout,
       groupStyles,
@@ -2031,7 +2041,7 @@ export default function App() {
           </AlertDialogContent>
         </AlertDialog>
 
-        <Toaster position="bottom-right" theme={dark ? "dark" : "light"} />
+        <Toaster position="bottom-right" offset={TOAST_OFFSET} mobileOffset={TOAST_OFFSET} theme={dark ? "dark" : "light"} />
         {/* One calm, always-present live region for screen readers. */}
         <div role="status" aria-live="polite" className="sr-only">
           {announcement}

@@ -245,7 +245,7 @@ export function describeFeature(f: FontFeature, missing?: string): FeatureView {
   return { tag, label, detail, group, defaultOn: isDefaultOn(tag), sample, switchable: group !== "vertical" };
 }
 
-/** The sample a feature's row draws, in the View options' case `mode`. Always as it is: a
+/** The sample a feature's row draws, in the preview bar's case `mode`. Always as it is: a
  *  sample holds the characters its feature changes ("a à á", "fi fl", "Small Caps"), and other
  *  letters would show no change at all. */
 export const featureSampleText = (feature: FeatureView, mode: PreviewCase): string | undefined =>
@@ -270,7 +270,7 @@ export function groupFeatures(features: readonly FontFeature[], missing?: string
  *  options or the font have it. */
 export type Toggles = Readonly<Record<string, boolean>>;
 
-/** Whether a feature is on now: the page's switch, else the View options' features, else the font's default. */
+/** Whether a feature is on now: the page's switch, else the preview bar's features, else the font's default. */
 export function isOn(tag: string, defaultOn: boolean, toggles: Toggles, preview: FeatureValues): boolean {
   if (tag in toggles) return toggles[tag];
   if (tag in preview) return preview[tag] === 1;
@@ -285,7 +285,7 @@ export function setToggle(toggles: Toggles, tag: string, on: boolean, defaultOn:
   return isOn(tag, defaultOn, without, preview) === on ? without : { ...without, [tag]: on };
 }
 
-/** What the page's previews use: the View options' features, with the page's switches on top. */
+/** What the page's previews use: the preview bar's features, with the page's switches on top. */
 export function pageFeatureValues(preview: FeatureValues, toggles: Toggles): FeatureValues {
   const out: Record<string, number> = { ...preview };
   for (const [tag, on] of Object.entries(toggles)) out[tag] = on ? 1 : 0;

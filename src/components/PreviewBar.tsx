@@ -342,7 +342,8 @@ function TextPanel({ panel, text, onText }: { panel: Panel; text: string; onText
             }}
             className="pr-8 pl-8"
           />
-          {/* Always there, so the field never changes shape; greyed out with nothing to clear. */}
+          {/* Always there, so the field never changes shape; greyed out with nothing to clear,
+              like the bar's own items (aria-disabled keeps it reachable, so its tooltip can say why). */}
           <Tip tip="Clears your words, so previews show font names again" disabledReason={!text && "Nothing to clear: previews show font names"}>
             <button
               type="button"
@@ -353,7 +354,7 @@ function TextPanel({ panel, text, onText }: { panel: Panel; text: string; onText
                 onText("");
                 inputRef.current?.focus();
               }}
-              className="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 aria-disabled:opacity-0"
+              className="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground"
             >
               <Icon name="close" size={14} />
             </button>
@@ -370,8 +371,9 @@ function TextPanel({ panel, text, onText }: { panel: Panel; text: string; onText
 /**
  * The size: a select of the common sizes (and the size in use, when it's another), with
  * "Custom…" at the end, which turns the same field into a number field with up and down
- * steppers (previewSize.ts has its keys). Cmd+= and Cmd+- step through the common sizes from
- * anywhere in the list view. The field is as wide in both forms, so nothing beside it moves.
+ * steppers (previewSize.ts has its keys). Cmd+= and Cmd+- step through the common sizes
+ * wherever the bar shows (the library list, Google Fonts and Adobe Fonts: App.tsx). The field is
+ * as wide in both forms, so nothing beside it moves.
  */
 function SizeField({ size, onSize }: { size: number; onSize: (size: number) => void }) {
   const [draft, setDraft] = useState<SizeDraft | null>(null);
@@ -441,7 +443,7 @@ function SizeField({ size, onSize }: { size: number; onSize: (size: number) => v
               if (typed.apply !== undefined) onSize(typed.apply);
             }}
             onKeyDown={(e) => {
-              // Cmd+= and Cmd+- go on to the list view's shortcut (the field then shows the new size).
+              // Cmd+= and Cmd+- go on to the window's shortcut (the field then shows the new size).
               if (sizeShortcut(e, IS_MAC)) return;
               const to = keyStep(now, e);
               if (to !== null) {

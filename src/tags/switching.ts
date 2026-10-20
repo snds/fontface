@@ -6,8 +6,8 @@ import { planTagSwitch, tagSwitchMessage, tagSwitchProgress, tagSwitchResult } f
 import type { Tag } from "./api";
 
 /**
- * Turning a whole tag on or off (the switch on its sidebar row, and its menus). The rules and
- * words are in src/tagActions.ts; this runs them through App's own on/off path, so a tag switch
+ * Turning a whole tag on or off (from its sidebar row's More and right-click menus). The rules
+ * and words are in src/tagActions.ts; this runs them through App's own on/off path, so a tag switch
  * gets everything a font switch does: the request queue (one request at a time, in click order),
  * busy marks on every file, the activation modes (Option-click for the other one), sync, and
  * the list updating as each request finishes.

@@ -63,8 +63,8 @@ const fn check(id: &'static str, text: &'static str, accelerator: Option<&'stati
     Slot::Item(MenuEntry { id, text, accelerator, check: true })
 }
 
-/// The View menu, above Enter Full Screen: the library's layouts, grouping, sort and preview
-/// size (what View options holds), and Back.
+/// The View menu, above Enter Full Screen: the library's layouts, grouping and sort (what View
+/// options holds), the preview size (the preview bar's), and Back.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const VIEW_MENU: &[Slot] = &[
     check("view.tiles", "Tiles", Some("CmdOrCtrl+1")),

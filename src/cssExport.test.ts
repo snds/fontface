@@ -93,7 +93,7 @@ test("values CSS's own properties can't say go in font-variation-settings instea
 test("features: only changes from the default, as font-variant keywords where they say exactly the same", () => {
   const css = (features: Record<string, number>, has: string[] | null = null) => featureDeclarations(features, has && new Set(has));
   assert.deepEqual(css({ liga: 1, calt: 1, kern: 1, dlig: 0, smcp: 0 }), [], "already the defaults");
-  assert.deepEqual(css(previewFeatureValues(["noLigatures"])), [["font-variant-ligatures", "none"]], "the View options' No ligatures");
+  assert.deepEqual(css(previewFeatureValues(["noLigatures"])), [["font-variant-ligatures", "none"]], "the preview bar's No ligatures");
   assert.deepEqual(css({ onum: 1, tnum: 1 }), [["font-variant-numeric", "oldstyle-nums tabular-nums"]]);
   assert.deepEqual(css({ frac: 1, zero: 1, ordn: 1 }), [["font-variant-numeric", "diagonal-fractions ordinal slashed-zero"]]);
   assert.deepEqual(css({ lnum: 1, onum: 1 }), [["font-feature-settings", '"lnum" 1, "onum" 1']], "two figure styles at once: no keyword says that");

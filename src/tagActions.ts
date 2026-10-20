@@ -218,7 +218,7 @@ export function tagSwitchProgress(name: string, on: boolean, done: number, total
   return { title: `Turning ${on ? "on" : "off"} “${name}”…`, detail: `${done.toLocaleString()} of ${fonts(total)}` };
 }
 
-// --------------------------------------------------------------- menu items and the switch
+// ------------------------------------------------------------------------------ menu items
 
 /** An action's state where it's offered: whether it can run now, what it's called, and its
  *  tooltip (what it does, or why it can't run now). */

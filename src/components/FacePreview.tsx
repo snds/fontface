@@ -126,7 +126,7 @@ export function SampleBadge({ profile, row, id, tip = true }: { profile: Preview
 /** Shown when the typed preview text uses characters this font doesn't have. `srId` goes on the
  *  screen-reader text ("Not in this font: …"). */
 export function MissingHint({ text, profile, srId }: { text: string; profile: PreviewInfo | undefined; srId?: string }) {
-  // The text as previews draw it: in the View options' case.
+  // The text as previews draw it: in the preview bar's case.
   const { options } = usePreviewStyle();
   const missing = missingCharacters(applyCase(text, options.case), profile);
   if (!missing.length) return null;

@@ -1,7 +1,7 @@
 // Run with `npm run test:ui`. The sidebar's sections, menus and counts (sidebar.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addMenu, countClass, countShown, dividerMenu, dividerTip, SECTIONS, stylesSaid, TAGS_INFO, type MenuLine } from "./sidebar.ts";
+import { addMenu, countClass, countShown, dividerMenu, dividerTip, ROW_ACTIONS_CLASS, SECTIONS, sourceRevealed, stylesSaid, TAGS_INFO, type MenuLine } from "./sidebar.ts";
 
 const labels = (lines: MenuLine[]) => lines.map((l) => (l === "-" ? "-" : l.label));
 
@@ -16,11 +16,17 @@ test("Library rows and the tag groups always show their counts; sources and tags
 
 test("a hidden count keeps its room, and a row with its own buttons swaps the count for them", () => {
   assert.equal(countClass("always", false), "");
-  assert.equal(countClass("always", true), "group-focus-within/item:hidden group-hover/item:hidden");
+  assert.equal(countClass("always", true), "group-has-[:focus-visible]/item:hidden group-hover/item:hidden");
+  // Keyboard focus only: a click focuses the row's button on Windows and Linux, and the row just
+  // picked must keep showing its count there.
+  for (const shown of ["always", "hover"] as const)
+    for (const swaps of [false, true]) assert.doesNotMatch(countClass(shown, swaps), /focus-within/);
+  assert.doesNotMatch(ROW_ACTIONS_CLASS, /focus-within/);
+  assert.match(ROW_ACTIONS_CLASS, /group-has-\[:focus-visible\]\/item:flex/);
   // Hidden but still taking its room, so names never move when it shows.
   assert.match(countClass("hover", false), /^invisible /);
   assert.match(countClass("hover", false), /group-hover\/item:visible/);
-  assert.match(countClass("hover", false), /group-focus-within\/item:visible/);
+  assert.match(countClass("hover", false), /group-has-\[:focus-visible\]\/item:visible/);
   // With buttons of its own, hover and focus show the buttons, not the count.
   assert.match(countClass("hover", true), /^invisible /);
   assert.doesNotMatch(countClass("hover", true), /:visible/);
@@ -81,4 +87,12 @@ test("the Tags (i) explains tags once, including how to turn one on", () => {
   assert.match(TAGS_INFO, /read-only/);
   assert.match(TAGS_INFO, /turn on every font in a tag/);
   assert.match(TAGS_INFO, /… menu/);
+});
+
+test("the view moving to a source opens a collapsed Sources, so it keeps its row", () => {
+  assert.equal(sourceRevealed(null, "folder:12"), true, "Add Folder… from All Fonts");
+  assert.equal(sourceRevealed("fontbook", "purchases"), true, "Import Purchased Fonts… from another source");
+  assert.equal(sourceRevealed("purchases", "purchases"), false, "collapsing Sources with a source in view keeps it collapsed");
+  assert.equal(sourceRevealed("folder:12", null), false, "leaving for All Fonts or a tag");
+  assert.equal(sourceRevealed(null, null), false);
 });

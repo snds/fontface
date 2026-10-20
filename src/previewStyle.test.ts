@@ -1,4 +1,4 @@
-// Run with `npm run test:ui`. The View options' preview styling (previewStyle.ts), and that it
+// Run with `npm run test:ui`. The preview bar's preview styling (previewStyle.ts), and that it
 // matches what the back end saves (src-tauri/src/settings.rs).
 import { test } from "node:test";
 import assert from "node:assert/strict";

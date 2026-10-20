@@ -87,7 +87,7 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 
 Sources are colored from their row in the sidebar: right-click the row (or focus it and press
 Shift-F10) and pick a color. Picking the color marked "(default)", or "Use default color", goes
-back to the default. The sidebar's source icons are outlines in the text color, so the color
+back to the default. The sidebar's source icons are in the text color (outlines, but for Google Fonts' solid mark), so the color
 shows on fonts: each font row shows a small dot in the color of the sources its copies come from
 (hover for the list of places; screen readers hear the places, after the row's name, with its
 tags). A font always takes its source's color:

@@ -31,6 +31,15 @@ export const SECTIONS: Record<SidebarSection, SectionInfo> = {
 /** Sections start open. */
 export const SECTION_STARTS_OPEN = true;
 
+/**
+ * Whether the view moving from source `before` to source `now` (sourceOf: null for the Library's
+ * rows and tags) expands Sources when it's collapsed. It does when the view moves to a source by
+ * other means than its row (Add Folder…, Import Purchased Fonts…), so the place in view keeps its
+ * row, with its count and scan, and focus can go back to it; revealTag does the same for Tags.
+ * Not while the view stays put, so collapsing Sources with a source in view keeps it collapsed.
+ */
+export const sourceRevealed = (before: string | null, now: string | null): boolean => now !== null && now !== before;
+
 /** The divider's tooltip: what a click does, and where its other commands are. */
 export function dividerTip(section: SidebarSection, open: boolean): string {
   const { what } = SECTIONS[section];
@@ -64,14 +73,26 @@ export function countShown(place: CountPlace, selected: boolean): CountShown {
   return selected ? "always" : "hover";
 }
 
+/*
+ * Keyboard focus in a row is `group-has-[:focus-visible]/item` (the row is a Tailwind
+ * `group/item`), not `group-focus-within/item`: Chromium-based web views (Windows, Linux) focus a
+ * button on click, so a click on a row would count as focus and swap the count of the row just
+ * picked for its buttons. The classes are written out in full so Tailwind finds them.
+ */
+
+/** The classes for a row's own buttons (Rescan, Remove): shown on hover and keyboard focus. */
+export const ROW_ACTIONS_CLASS = "hidden group-has-[:focus-visible]/item:flex group-hover/item:flex";
+
 /**
- * The classes for a row's count (the row is a Tailwind `group/item`). It keeps its room while it's
- * hidden (`invisible`), so names never move when it shows. `swaps`: the row shows its own buttons
- * (Rescan, Remove) on hover and focus, in the count's place, so the count hides then.
+ * The classes for a row's count. It keeps its room while it's hidden (`invisible`), so names never
+ * move when it shows. `swaps`: the row shows its own buttons (Rescan, Remove) on hover and
+ * keyboard focus, in the count's place, so the count hides then.
  */
 export function countClass(shown: CountShown, swaps: boolean): string {
-  if (shown === "always") return swaps ? "group-focus-within/item:hidden group-hover/item:hidden" : "";
-  return swaps ? "invisible group-focus-within/item:hidden group-hover/item:hidden" : "invisible group-focus-within/item:visible group-hover/item:visible";
+  if (shown === "always") return swaps ? "group-has-[:focus-visible]/item:hidden group-hover/item:hidden" : "";
+  return swaps
+    ? "invisible group-has-[:focus-visible]/item:hidden group-hover/item:hidden"
+    : "invisible group-has-[:focus-visible]/item:visible group-hover/item:visible";
 }
 
 /** A style count in words, for screen readers: "1 style", "1,234 styles". */

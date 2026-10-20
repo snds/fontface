@@ -30,7 +30,7 @@ interface Props {
   /** font-variation-settings from the Axes tab, for each text size: optical size follows the
    *  size unless it's set by hand, so each waterfall line gets its own. */
   variation: VariationAt;
-  /** font-feature-settings: the View options' features with the OpenType tab's switches on top. */
+  /** font-feature-settings: the preview bar's features with the OpenType tab's switches on top. */
   features: string | undefined;
   /** Room the fit keeps for features that can draw past the plain ink (openType.featureSlack). */
   slack: number;
@@ -46,7 +46,7 @@ const PARAGRAPH_SIZE = 18;
 
 /**
  * The waterfall and a paragraph in the chosen style, then every style with its own switch. The
- * waterfall and paragraph follow the View options' preview styling and the OpenType tab's
+ * waterfall and paragraph follow the preview bar's preview styling and the OpenType tab's
  * switches; with a paper color, each sits on one sheet of it.
  */
 export function SpecimenTab({ family, face, previewText, variation, features, slack, lang, busy, onChoose, onActivate }: Props) {

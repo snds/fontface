@@ -54,7 +54,7 @@ test("samples: the font's own characters for alternates, Fontface's text where i
   assert.equal(describeFeature(f("smcp"), caps).sample, undefined);
 });
 
-test("a feature's sample keeps its case, whatever case the View options set", () => {
+test("a feature's sample keeps its case, whatever case the preview bar sets", () => {
   // Fontface's own texts (some show a feature only in one case: "Small Caps", "CAPITALS"), and
   // the font's own characters (a character variant's "a à á", a set's "J", a ligature's "fi").
   const samples = [
@@ -62,7 +62,7 @@ test("a feature's sample keeps its case, whatever case the View options set", ()
     ...["a à á â ã ä å ā ă ą", "J", "I", "fi fl", "a g y"].map((s) => describeFeature(f("cv07", { sample: s })).sample),
   ].filter((s): s is string => !!s);
   assert.ok(samples.includes("Small Caps") && samples.includes("CAPITALS") && samples.includes("fi fl ff ffi"));
-  // What each feature's row draws, in every case the View options offer.
+  // What each feature's row draws, in every case the preview bar offers.
   for (const c of PREVIEW_CASES) for (const s of samples) assert.equal(featureSampleText({ ...describeFeature(f("cv07")), sample: s }, c.id), s, `${c.id}: ${s}`);
   assert.equal(featureSampleText(describeFeature(f("salt")), "upper"), undefined, "no sample, nothing drawn");
   // Treated as words, they'd change, and their switches would show nothing: "SMALL CAPS" has no
@@ -95,10 +95,10 @@ test("only groups the face has, in order, each in a steady order", () => {
   assert.deepEqual(groupFeatures([]), []);
 });
 
-test("a switch's state: the page's switch, else the View options, else the font's default", () => {
+test("a switch's state: the page's switch, else the preview bar, else the font's default", () => {
   const preview = previewFeatureValues(["noLigatures", "smallCaps"]);
   assert.equal(isOn("liga", true, {}, {}), true);
-  assert.equal(isOn("liga", true, {}, preview), false, "No ligatures in the View options");
+  assert.equal(isOn("liga", true, {}, preview), false, "No ligatures in the preview bar");
   assert.equal(isOn("liga", true, { liga: true }, preview), true, "the page's switch wins");
   assert.equal(isOn("smcp", false, {}, preview), true);
   assert.equal(isOn("ss01", false, {}, preview), false);
@@ -113,12 +113,12 @@ test("switching back to how it would be anyway leaves nothing to reset", () => {
   toggles = setToggle(toggles, "ss01", false, false, preview);
   assert.deepEqual(toggles, { liga: false });
   toggles = setToggle(toggles, "smcp", false, false, preview);
-  assert.deepEqual(toggles, { liga: false, smcp: false }, "turning off what the View options turned on");
+  assert.deepEqual(toggles, { liga: false, smcp: false }, "turning off what the preview bar turned on");
   toggles = setToggle(toggles, "smcp", true, false, preview);
   assert.deepEqual(toggles, { liga: false });
 });
 
-test("the page's switches go on top of the View options' features", () => {
+test("the page's switches go on top of the preview bar's features", () => {
   const preview = previewFeatureValues(["tabularFigures"]);
   const values = pageFeatureValues(preview, { ss01: true, liga: false, tnum: false });
   assert.equal(featureSettings(values), '"liga" 0, "ss01" 1, "tnum" 0');

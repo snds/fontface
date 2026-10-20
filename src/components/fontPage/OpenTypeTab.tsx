@@ -38,7 +38,7 @@ interface Props {
   onTestText: (text: string) => void;
   testSize: number;
   onTestSize: (px: number) => void;
-  /** The page's own switches, and what they add up to with the View options' features. */
+  /** The page's own switches, and what they add up to with the preview bar's features. */
   toggles: Toggles;
   values: FeatureValues;
   onToggle: (tag: string, on: boolean, defaultOn: boolean) => void;
@@ -149,7 +149,7 @@ export function OpenTypeTab(props: Props) {
               style={{
                 ...styleCss(look.options, look.colors, testSize, false),
                 backgroundColor: look.colors.paper,
-                // The field holds the text as typed; the View options' case shows by CSS here
+                // The field holds the text as typed; the preview bar's case shows by CSS here
                 // (a field can't hold one text and show another).
                 textTransform: TEXT_TRANSFORM[look.options.case],
                 fontFamily,

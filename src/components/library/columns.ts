@@ -149,8 +149,8 @@ export function pinnedOffsets(columns: readonly Column[]): Map<ColumnId, number>
   return out;
 }
 
-/** The Preview column's text size: 18px at the default 32px preview size, following the size
- *  slider within 12–32px. */
+/** The Preview column's text size: 18px at the default 32px preview size, following the
+ *  preview bar's size within 12–32px. */
 export const tablePreviewSize = (size: number) => Math.min(32, Math.max(12, Math.round((size * 18) / 32)));
 
 /** Row height, px: 28 compact, 32 regular; with the Preview column, at least 40 and tall enough

@@ -175,7 +175,7 @@ function YourCopy({ font }: { font: FontSummary }) {
  *  so what you type never leaves your Mac. The family itself may well have them. */
 function AlphabetHint({ text }: { text: string }) {
   const { options } = usePreviewStyle();
-  // The text as previews draw it: in the View options' case.
+  // The text as previews draw it: in the preview bar's case.
   const outside = outsideAlphabet(applyCase(text, options.case));
   if (!outside.length) return null;
   const list = outside.join(" ");

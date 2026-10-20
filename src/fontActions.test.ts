@@ -35,6 +35,7 @@ import {
   switchTip,
   actionTip,
   turnOnLabel,
+  viewCommands,
   type ActionContext,
   type FontTarget,
   type ShortcutKey,
@@ -349,6 +350,24 @@ test("menu state: the list's commands only while it shows; Back only with a page
 
   assert.equal(menuStateKey(list), menuStateKey({ ...list, enabled: [...list.enabled].reverse() }), "order doesn't matter");
   assert.notEqual(menuStateKey(list), menuStateKey(page));
+});
+
+test("view commands: the size wherever the preview bar's size applies, the layouts and sort only in the library list", () => {
+  assert.deepEqual(viewCommands({ covered: false, service: null }), { size: true, arrange: true });
+  assert.deepEqual(viewCommands({ covered: false, service: "google" }), { size: true, arrange: false });
+  // Adobe Fonts' previews follow the bar's size too, once there are fonts (and so a bar).
+  assert.deepEqual(viewCommands({ covered: false, service: "adobe", adobeFonts: true }), { size: true, arrange: false });
+  assert.deepEqual(viewCommands({ covered: false, service: "adobe", adobeFonts: false }), { size: false, arrange: false });
+  for (const service of [null, "google", "adobe"] as const)
+    assert.deepEqual(viewCommands({ covered: true, service, adobeFonts: true }), { size: false, arrange: false }, "nothing under Settings or a page");
+
+  // What App sends the menus for Adobe Fonts: Bigger and Smaller on, the layouts and sort off.
+  const adobe = viewCommands({ covered: false, service: "adobe", adobeFonts: true });
+  const actions = fontActionStates(null, ctx);
+  const menus = nativeMenuState({ list: adobe.size, catalog: !adobe.arrange, back: false, layout: "rows", groupStyles: true, sort: { key: "name", desc: false }, size: 32, actions });
+  assert.ok(menus.enabled.includes(BIGGER_ITEM) && menus.enabled.includes(SMALLER_ITEM));
+  assert.ok(!menus.enabled.includes(LAYOUT_ITEMS.tiles) && !menus.enabled.includes(GROUP_ITEM));
+  assert.ok(!menus.enabled.some((id) => id.startsWith("sort.")));
 });
 
 test("a font switch's tooltip says what a click does now", () => {

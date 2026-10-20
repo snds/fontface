@@ -40,7 +40,7 @@ export interface CssStyle {
   /** The axis values set on the page (by hand or by a named style); the others are at their
    *  defaults. Optical size follows the text size unless it's here. */
   values: Readonly<Record<string, number>>;
-  /** The features the page's previews use (the View options' and the page's switches): 1 on, 0 off. */
+  /** The features the page's previews use (the preview bar's and the page's switches): 1 on, 0 off. */
   features: FeatureValues;
   /** The tags of the features the style has, or null when that isn't known (then every feature
    *  set counts, and no keyword that could fake one is used). */

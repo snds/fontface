@@ -7,7 +7,7 @@
 // them. For a font whose whole first palette is dark like that, the page defines a CSS font
 // palette (`@font-palette-values`) giving each entry the dark theme's text color at the entry's
 // own opacity, and elements marked with the face (`data-face`) use it on dark paper: under
-// `.dark`, or inside a preview's own dark paper (`data-paper="dark"`, the View options' paper
+// `.dark`, or inside a preview's own dark paper (`data-paper="dark"`, the preview bar's paper
 // in the light theme). Inside a light paper (`data-paper="light"`) the font's own palette stays,
 // in the dark theme too. Colorful palettes (emoji, flags) are left alone, and so are glyphs
 // drawn in the text color.

@@ -168,7 +168,7 @@ pub struct GooglePreview {
     /// the icons, or the script sample. For the alphabet file: the characters it holds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    /// `text` is a sample, not the family name, so the View options' case isn't applied (like
+    /// `text` is a sample, not the family name, so the preview bar's case isn't applied (like
     /// the library's sample kinds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sample: Option<bool>,
@@ -1009,7 +1009,7 @@ fn entry_for(f: &CatalogFamily, kind: FileKind, held: &str, bytes: &[u8]) -> Res
     let mut info = PreviewInfo::from_profile(&p);
     // The other files hold just a few characters on purpose, so only the alphabet's missing
     // characters mean what they do in the library. A name file keeps the ones it was asked
-    // for and lacks (a capitals-only font's lowercase), so the View options' case isn't
+    // for and lacks (a capitals-only font's lowercase), so the preview bar's case isn't
     // applied to a name the font can't draw in it.
     match kind {
         FileKind::Alphabet => {}

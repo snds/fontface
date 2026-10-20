@@ -25,7 +25,7 @@ interface Props {
   profile?: PreviewInfo;
   /** `text` is the profile's own text, so its stored ink counts too. */
   ownText?: boolean;
-  /** `text` is what was typed: the View options' case always applies to it. Otherwise (the
+  /** `text` is what was typed: the preview bar's case always applies to it. Otherwise (the
    *  font's name, the page's words) only if the font can draw the result. */
   typed?: boolean;
   /** "row": a list preview, 1.3 em tall, shrunk if needed. "waterfall": never shrunk; the row
@@ -34,12 +34,12 @@ interface Props {
   /** A sample of characters rather than words: hidden from screen readers, which read the
    *  family name and the badge instead. Its case never changes. */
   sample?: boolean;
-  /** `font-feature-settings` instead of the View options' (the font page's own switches). */
+  /** `font-feature-settings` instead of the preview bar's (the font page's own switches). */
   features?: string;
   /** More room the fit keeps above and below, in em, for features that can draw past the
    *  plain text's ink (openType.featureSlack). */
   slack?: number;
-  /** Draw the View options' paper behind this preview (false: an enclosing sheet has it). */
+  /** Draw the preview bar's paper behind this preview (false: an enclosing sheet has it). */
   paper?: boolean;
   /** The language the text is in (turns on the font's localized forms). */
   lang?: string;
@@ -70,7 +70,7 @@ function useFit({ fontFamily, face, text, size, ready, profile, ownText, mode = 
 /**
  * Preview text fitted to its box: nothing clipped, the baseline where it belongs (see
  * previewFit.ts). Hidden until ready. Always left to right, so Hebrew and Arabic samples line
- * up with everything else. Styled as the View options say (PreviewStyle): alignment, case,
+ * up with everything else. Styled as the preview bar says (PreviewStyle): alignment, case,
  * outline, underline, colors and features, with room in the fit for each.
  */
 export function PreviewText(props: Props) {

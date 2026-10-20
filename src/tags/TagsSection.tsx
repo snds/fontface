@@ -61,7 +61,7 @@ const NO_FACES: Face[] = [];
 /**
  * One tag in the sidebar: open/close (if tags are inside it), its name (shows its fonts), how many
  * fonts it covers, and its "…" menu (also on right-click), which turns its fonts on or off among
- * other things. The count shows only while the row is hovered, has focus or is being viewed
+ * other things. The count shows only while the row is hovered, has keyboard focus or is viewed
  * (sidebar.ts, countShown); screen readers always hear it, with the name. A built-in tag is
  * quieter: an outlined label, dimmer text, and a read-only menu.
  */

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
+import { cn } from "@/lib/utils";
 import { CONTEXT, Tip, TipItem, type Kit } from "@/components/Tip";
 import { dividerLabel, dividerTip, SECTIONS, type MenuLine, type SidebarCommand, type SidebarSection } from "@/sidebar";
 import { openMenuFromKeyboard } from "@/tags/menus";
@@ -96,7 +97,9 @@ export function SectionDivider({
             onKeyDown={onKeyDown}
           >
             <Icon name={SECTIONS[section].icon} size={16} />
-            {!open && <Icon name="chevron_right" size={14} className="-mr-0.5" />}
+            {/* Only while collapsed, but its room is always kept, so a click never moves the icon
+                (or the Tags divider's (i)) out from under the pointer. */}
+            <Icon name="chevron_right" size={14} className={cn("-mr-0.5", open && "invisible")} />
           </button>
         </Tip>
         {after}

@@ -177,12 +177,13 @@ pub enum PreviewCase {
     Title,
 }
 
-/// The features the View options can apply to every preview, in the order they're shown. Must
+/// The features the preview bar can apply to every preview, in the order they're shown. Must
 /// match `PREVIEW_FEATURES` in src/previewStyle.ts.
 pub const PREVIEW_FEATURES: &[&str] = &["noLigatures", "smallCaps", "tabularFigures", "caseForms"];
 
-/// The View options' preview styling: applied to every layout and to the font page. Must match
-/// `PreviewOptions` in src/api.ts. Colors are "#rrggbb", or None for the theme's.
+/// The preview bar's preview styling: applied to every layout, Google Fonts, Adobe Fonts and the
+/// font page. Must match `PreviewOptions` in src/api.ts. Colors are "#rrggbb", or None for the
+/// theme's.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PreviewOptions {
@@ -280,7 +281,7 @@ pub struct AppSettings {
     /// Empty: the UI's default columns.
     pub table_columns: Vec<TableColumn>,
     pub table_density: TableDensity,
-    /// The View options' preview styling (alignment, case, outline, underline, colors, features).
+    /// The preview bar's preview styling (alignment, case, outline, underline, colors, features).
     pub preview: PreviewOptions,
     /// Settings › "Show previews of Google Fonts you haven't downloaded": the Google Fonts page
     /// draws each family in its own font from a tiny file with its name, downloaded from Google
