@@ -495,7 +495,11 @@ export interface ReplaceResult {
 // Must match AppSettings in src-tauri/src/settings.rs. Events: "settings-changed" (payload:
 // AppSettings, after every update or reset), "restore-pending" (payload: PendingRestore, at
 // launch when restoreOnLaunch is "ask" and there's something to ask about) and "open-settings"
-// (no payload: the macOS app menu's Settings… item, ⌘,).
+// (no payload: the macOS app menu's Settings… item, ⌘,, or the menu bar icon's Settings…).
+//
+// The menu bar icon (src-tauri/src/tray.rs) also sends "tray-tag" (payload: a tag id, to turn
+// its fonts on or off as its sidebar switch would) and "activation-changed" (payload:
+// TemporaryOffReport, after "Turn Off Temporary Fonts"; the list reloads).
 
 export type ThemeSetting = "system" | "light" | "dark";
 /** "persistent": fonts stay on after quitting and restarting. "temporary": on until logout or restart. */
@@ -510,6 +514,8 @@ export type ActivationMode = "persistent" | "temporary";
 export type SwitchOrigin = "switch" | "arrival";
 /** What launch does with fonts that were on last time but aren't on now. */
 export type RestorePolicy = "always" | "ask" | "never";
+/** macOS: when the Dock shows Fontface. "whileOpen" (the default) applies only while it's in the menu bar. */
+export type DockIcon = "always" | "whileOpen";
 /** A font page's tabs. "axes" shows only for variable styles (the page falls back to "specimen"). */
 export type FontPageTab = "specimen" | "characters" | "opentype" | "axes" | "info";
 
@@ -588,8 +594,15 @@ export interface AppSettings {
   restoreLastView: boolean;
   /** Read from the LaunchAgent itself (macOS). Turning it on elsewhere fails with a plain message. */
   launchAtLogin: boolean;
-  /** macOS: closing the window hides it; clicking the Dock icon brings it back. */
+  /** macOS: closing the window hides it; clicking the Dock icon brings it back. While Fontface
+   *  is in the menu bar (`showInMenuBar`), closing the window always does that; this decides
+   *  only for when it isn't. */
   keepRunningInBackground: boolean;
+  /** An icon in the menu bar (macOS) or the notification area (Windows), with a short menu.
+   *  While it's there, closing the window keeps Fontface running. On by default. */
+  showInMenuBar: boolean;
+  /** macOS: whether the Dock shows Fontface while its window is closed. */
+  dockIcon: DockIcon;
   scanAtLaunch: boolean;
   showInstalledInAll: boolean;
   sidebar: SidebarSections;
@@ -621,6 +634,9 @@ export interface AppSettings {
   /** "Installed" (yours first) on a font service's catalog page: families you have (downloaded, or already
    *  in your library) come before the rest. On by default. */
   catalogYoursFirst: boolean;
+  /** The tags turned on or off most recently, newest first (at most 8): the menu bar icon's
+   *  Tags menu always lists them. Remembered by the UI. */
+  recentTags: number[];
 }
 
 /** Only the keys given change; `sidebar` and `preview` may be partial too. */
@@ -639,6 +655,25 @@ export interface PendingRestore {
 export interface RestoreReport {
   restored: number;
   failed: number;
+}
+
+/** A tag in the menu bar icon's Tags menu. Must match TrayTag in src-tauri/src/tray.rs.
+ *  "on": all its fonts (choosing it turns them off); "some": some (it turns on the rest). */
+export interface TrayTag {
+  id: number;
+  name: string;
+  state: "on" | "some" | "off";
+}
+
+/** What the menu bar icon's "Turn Off Temporary Fonts" did ("activation-changed"). Must match
+ *  TemporaryOff in src-tauri/src/tray.rs. */
+export interface TemporaryOffReport {
+  /** Fonts (styles) turned off. */
+  turnedOff: number;
+  /** [file, why] for each file that couldn't be turned off. */
+  failed: [string, string][];
+  /** Why nothing could be done, if so. */
+  error: string | null;
 }
 
 export interface TurnOffAllReport {
@@ -828,6 +863,8 @@ export const api = {
   titleBarDoubleClick: () => invoke<void>("title_bar_double_click"),
   /** The macOS View and Font menus follow the page (fontActions.nativeMenuState). Elsewhere it does nothing. */
   setMenuState: (state: import("./fontActions").NativeMenuState) => invoke<void>("set_menu_state", { state }),
+  /** The menu bar icon's Tags menu (src/trayMenu.ts): at most 10, recently used first. */
+  setTrayTags: (tags: TrayTag[]) => invoke<void>("set_tray_tags", { tags }),
   /** Remove from Library: these fonts' files are turned off and no longer listed. Files aren't touched. */
   fontsRemove: (fontIds: number[]) => invoke<RemoveReport>("fonts_remove", { fontIds }),
   fontsRemoved: () => invoke<RemovedFile[]>("fonts_removed"),

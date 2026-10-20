@@ -546,12 +546,38 @@ them and keeps their fonts' activation state. This guarantees each file belongs 
   after the rescan, and `activation::reconcile` turns each back on in the scope
   `activation::wanted_scope` gives: session scope for a file listed as temporary, else
   persistent. Launch never hands reconcile a temporary file, so only Locate… does that.
-- **Keep running (macOS):** closing the main window hides it, and clicking the Dock icon
-  (`RunEvent::Reopen`) shows it again. Cmd+Q still quits. A window in full screen leaves full
-  screen first and hides when macOS says it has (`NSWindowDidExitFullScreenNotification`, in
-  `window.rs`), so no empty full-screen space is left behind.
+- **Keep running:** closing the main window hides it while the menu bar icon is there, or (macOS)
+  while "Keep running when the window is closed" is on (`tray::on_close`); otherwise it quits.
+  Clicking the Dock icon or opening Fontface again (`RunEvent::Reopen`), or the menu bar icon's
+  Open Fontface, shows it again. Cmd+Q and the icon's Quit still quit. A window in full screen
+  leaves full screen first and hides when macOS says it has
+  (`NSWindowDidExitFullScreenNotification`, in `window.rs`), so no empty full-screen space is left
+  behind. On Windows the taskbar button goes with the window (`skip_taskbar`). A window whose
+  screen was unplugged while it was closed comes back in the middle of the main screen
+  (`window::reachable`).
+- **Menu bar icon** (`tray.rs`; Windows: the notification area): made once at launch (or when
+  the setting is turned on), then only shown or hidden, because Tauri never lets go of an icon's
+  handlers; its menu items go through the app's one menu handler (`lib.rs`). The menu is rebuilt
+  only when what it shows changes: the count of fonts on until logout (read when the pointer
+  reaches the icon, when the page sends tags, and after launch's restore) and the tags the page
+  sends (`set_tray_tags`; which tags, and what choosing one does, are worked out by the page in
+  `src/trayMenu.ts`, since tag sets live there). Choosing a tag sends `tray-tag` to the page,
+  which runs the sidebar's tag switch. Turn Off Temporary Fonts runs in Rust through
+  `commands::switch` and `sync::activation_chosen`, as the user's own switch, then sends
+  `activation-changed` (the page reloads the list and says what happened). The macOS icon is
+  drawn in code (`tray::glyph`), a template image.
+- **The Dock (macOS):** with "Show in the Dock: only while open" (the default) and the menu bar icon there,
+  Fontface switches to an accessory app (no Dock icon, no Cmd-Tab) once its window has closed,
+  and back to a regular app just before it opens (`window::dock`). It never switches away within
+  1.2 s of coming back (macOS can leave a dead Dock icon behind otherwise); a waiting switch is
+  called off when the window opens again. Opened at login straight into the menu bar, the policy
+  is set before macOS finishes launching the app, from the saved settings opened read-only, so
+  no Dock icon shows at all. The window is created hidden (`tauri.conf.json`) and shown in setup
+  unless the launch starts in the menu bar.
 - **Open at login (macOS):** a LaunchAgent at `~/Library/LaunchAgents/design.snds.fontface.plist`
-  that runs Fontface's executable (`RunAtLoad`, `ProcessType` Interactive). The file is the
+  that runs Fontface's executable with `--login` (`RunAtLoad`, `ProcessType` Interactive), so a
+  launch at login can start in the menu bar; a login item written before `--login` existed is
+  updated at launch. The file is the
   truth: the setting reads as on only while it exists and starts this copy. At launch, a copy
   running from an app bundle points it at itself only if the copy it starts is gone (the app
   moved). A copy on a disk image, or one macOS runs from a hidden folder because it was opened

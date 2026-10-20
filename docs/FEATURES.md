@@ -187,8 +187,10 @@ search results from all of them, and every change saves at once. Not yet checked
 | Appearance: System / Light / Dark | 🟡 | ⬜ | Applies at once, to the window's own buttons too; System follows the OS live. The last choice is applied before the first paint (a small script in index.html), so launch doesn't flash |
 | Default preview text and size | 🟡 | ⬜ | Used at launch; changing them also changes the current preview |
 | Open where you left off | 🟡 | ⬜ | The view plus All / Active / Inactive and Variable; a folder or hidden section that's gone opens All Fonts. Views saved by earlier versions still open: a macOS font folder opens as Font Book, a Google Fonts or Purchases folder as that source's row, and a folder inside a source (from the old folder picker) as the whole source |
-| Open at login | 🟡 | n/a | A LaunchAgent; hidden on Windows for now |
-| Keep running when the window is closed | 🟡 | n/a | Click the Dock icon to bring the window back |
+| Open at login | 🟡 | n/a | A LaunchAgent; hidden on Windows for now. With the menu bar icon on, it starts in the menu bar with the window closed (the login item passes `--login`; older login items are updated at launch) |
+| Show Fontface in the menu bar (Windows: the notification area) | 🟡 | ⬜ | On by default. While it's there, closing the window keeps Fontface running. Turning it off with the window closed can't happen (the switch is in the window); if the icon can't be made, the window opens |
+| Show in the Dock: Always / Only while open | 🟡 | n/a | "Only while open" (the default) makes Fontface a menu bar app while its window is closed; the menu bar icon, or opening Fontface again (Spotlight, Applications), brings the window back. Greyed out, with a tooltip saying why, while the menu bar icon is off (the Dock icon then always shows) |
+| Keep running when the window is closed | 🟡 | n/a | Click the Dock icon to bring the window back. While the menu bar icon is on it shows as on and greyed out (Fontface always keeps running then); it decides only when the icon is off |
 | Check folders for changes when Fontface opens | 🟡 | ⬜ | When off, only folders with no fonts yet are scanned |
 | Show installed fonts in All Fonts | 🟡 | ⬜ | When off, All Fonts leaves out fonts that are only in the OS font folders (including ones the user installed); a font with a copy in one of their folders stays. Font Book still lists them; the All Fonts count follows |
 | Show or hide sidebar sections | 🟡 | ⬜ | In the sidebar's order: Your Fonts, Recently Added, Active and Not Tagged; Font Book, Google Fonts, Adobe Fonts and Purchases; Tags, and Built-in tags (inside Tags; off while Tags is off). All Fonts and your folders always show. A view whose entry or section is hidden (including the one you're in) goes to All Fonts. Hidden built-in tags still exist, still show on fonts and still appear in tag menus |
@@ -261,7 +263,7 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Export tags as CSV or a Typeface backup | ✅ | ⬜ |
 | Export tags as Finder tags or Font Book collections | ✅ | n/a |
 | Export / import the rest of the library (folders, on/off choices) | ⬜ | ⬜ |
-| Menu bar quick toggle | ⬜ | ⬜ |
+| Menu bar icon (Windows: notification area), `src-tauri/src/tray.rs`: Open Fontface, Turn On Fonts from a List…, Tags (up to 10, recently switched ones first, checked when all on, "(some on)" when some; choosing one works like its sidebar switch), Turn Off Temporary Fonts (with how many are on until logout), Settings…, Quit Fontface. A template image on macOS, so it suits light and dark menu bars. On Windows a click opens the window and a right-click the menu; written but not yet built there. Not yet checked in the running app | 🟡 | ⬜ |
 | Launch at login | 🟡 | ⬜ |
 | Auto-activate fonts a design file needs | ⬜ | ⬜ |
 | Auto-activation test, listen and log (`FONTFACE_LISTEN_FONT_REQUESTS=1` at launch): logs which apps ask macOS for a missing font, what each request holds and whether the library has it; answers "no fonts", so nothing changes for the asking app (docs/AUTO-ACTIVATION-TEST.md). Not yet tried with other apps | 🟡 | n/a |

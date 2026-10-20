@@ -21,6 +21,8 @@ import { useSettings } from "./useSettings";
 const OS = IS_MAC ? "macOS" : "Windows";
 const COMPUTER = IS_MAC ? "Mac" : "computer";
 const FILE_BROWSER = IS_MAC ? "Finder" : "File Explorer";
+/** Where Fontface's icon sits while it runs: the macOS menu bar, or the Windows notification area. */
+const TRAY_PLACE = IS_MAC ? "menu bar" : "notification area";
 const n = (v: number) => v.toLocaleString();
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 const meta = (id: SectionId) => SECTION_LIST.find((s) => s.id === id)!;
@@ -379,23 +381,84 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 {
                   id: "launchAtLogin",
                   label: "Open at login",
-                  description: "Start Fontface when you log in to your Mac.",
+                  description: s.showInMenuBar
+                    ? "Start Fontface when you log in to your Mac. It starts in the menu bar, with its window closed."
+                    : "Start Fontface when you log in to your Mac.",
                   keywords: "launch startup login item",
                   labelsControl: true,
                   control: (ids) =>
                     flag("launchAtLogin", ids, { on: "Starts Fontface when you log in to your Mac", off: "Stops Fontface starting when you log in" }),
                 },
+              ] satisfies RowDef[])
+            : []),
+          {
+            id: "showInMenuBar",
+            label: `Show Fontface in the ${TRAY_PLACE}`,
+            description: `Its menu opens Fontface, turns your recent tags on and off, and turns off fonts that are on until logout. While it's there, closing the window keeps Fontface running.`,
+            keywords: "menu bar tray status icon notification area system tray background close window quit",
+            labelsControl: true,
+            control: (ids) =>
+              flag("showInMenuBar", ids, {
+                on: `Puts Fontface's icon in the ${TRAY_PLACE}`,
+                off: IS_MAC
+                  ? "Takes Fontface's icon out of the menu bar. Closing the window then follows “Keep running when the window is closed”."
+                  : "Takes Fontface's icon out of the notification area. Closing the window then quits Fontface.",
+              }),
+          },
+          ...(IS_MAC
+            ? ([
+                {
+                  id: "dockIcon",
+                  label: "Show in the Dock",
+                  description:
+                    "With the window closed, Fontface can stay in the menu bar alone. To bring the window back, use its menu bar icon, or open Fontface again from Spotlight or Applications.",
+                  keywords: "dock icon hide menu bar only background accessory spotlight",
+                  control: (ids) => (
+                    <ChoiceGroup
+                      labelledBy={ids.label}
+                      describedBy={ids.description}
+                      value={s.showInMenuBar ? s.dockIcon : "always"}
+                      onChange={(dockIcon) => update({ dockIcon })}
+                      disabledReason={!s.showInMenuBar && "Turn on “Show Fontface in the menu bar” first: without it, the Dock icon is the way back to Fontface"}
+                      options={[
+                        { value: "always", label: "Always", tip: "Keeps Fontface in the Dock, even with its window closed" },
+                        {
+                          value: "whileOpen",
+                          label: "Only while open",
+                          tip: "Takes Fontface out of the Dock when you close its window. Its menu bar icon brings the window back.",
+                        },
+                      ]}
+                    />
+                  ),
+                },
                 {
                   id: "keepRunningInBackground",
                   label: "Keep running when the window is closed",
-                  description: "Fontface keeps watching for font purchases. Click its Dock icon to bring the window back.",
+                  description: s.showInMenuBar
+                    ? "While Fontface is in the menu bar, it always keeps running. Without it there, this decides: click Fontface's Dock icon to bring the window back."
+                    : "Fontface keeps watching for font purchases. Click its Dock icon to bring the window back.",
                   keywords: "background close window dock quit",
                   labelsControl: true,
-                  control: (ids) =>
-                    flag("keepRunningInBackground", ids, {
-                      on: "Keeps Fontface running after you close its window",
-                      off: "Quits Fontface when you close its window",
-                    }),
+                  control: (ids) => (
+                    <Tip
+                      tip={switchTip(s.keepRunningInBackground, {
+                        on: "Keeps Fontface running after you close its window",
+                        off: "Quits Fontface when you close its window",
+                      })}
+                      disabledReason={
+                        s.showInMenuBar && "Fontface always keeps running while it's in the menu bar. To choose here, turn off “Show Fontface in the menu bar” first."
+                      }
+                    >
+                      <Switch
+                        id={ids.control}
+                        {...describe(ids)}
+                        checked={s.keepRunningInBackground || s.showInMenuBar}
+                        disabled={s.showInMenuBar}
+                        focusableWhenDisabled
+                        onCheckedChange={(on) => update({ keepRunningInBackground: on })}
+                      />
+                    </Tip>
+                  ),
                 },
               ] satisfies RowDef[])
             : []),

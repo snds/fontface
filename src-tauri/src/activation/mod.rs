@@ -209,6 +209,23 @@ pub fn temporary_paths(conn: &Connection) -> AppResult<HashSet<String>> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// How many fonts (styles) are on until logout: the menu bar icon's "Turn Off Temporary Fonts".
+pub fn temporary_on_count(conn: &Connection) -> AppResult<usize> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM fonts WHERE activated = 1 AND path IN (SELECT path FROM temporary_activations)",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n as usize)
+}
+
+/// Every font in the files that are on until logout, to turn them off.
+pub fn temporary_font_ids(conn: &Connection) -> AppResult<Vec<i64>> {
+    let mut stmt = conn.prepare("SELECT id FROM fonts WHERE path IN (SELECT path FROM temporary_activations) ORDER BY id")?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Records the scope a file was just turned on in: session scope lists it as temporary,
 /// persistent scope takes it off the list.
 pub fn record_scope(conn: &Connection, path: &str, scope: Scope) -> AppResult<()> {

@@ -13,10 +13,11 @@ use crate::{
     activation::{launch_plan, temporary_after_swap, turn_on_plan, LaunchPlan, Scope, TurnOn},
     backups, db,
     settings::{
-        self, ActivationMode, AppSettings, FontPageTab, Layout, PreviewAlign, PreviewCase, PreviewOptions, RestorePolicy,
-        SidebarSections, SortKey, SortOrder, TableColumn, TableDensity, Theme,
+        self, ActivationMode, AppSettings, DockIcon, FontPageTab, Layout, PreviewAlign, PreviewCase, PreviewOptions,
+        RestorePolicy, SidebarSections, SortKey, SortOrder, TableColumn, TableDensity, Theme,
     },
     tags,
+    tray::{self, OnClose, TagState, TrayAction, TrayModel, TraySlot, TrayTag},
     window::{self, DoubleClick},
 };
 
@@ -42,6 +43,9 @@ fn defaults_match_the_spec() {
     assert!(d.restore_last_view);
     assert!(!d.launch_at_login);
     assert!(!d.keep_running_in_background);
+    assert!(d.show_in_menu_bar, "Fontface is in the menu bar unless that's turned off");
+    assert_eq!(d.dock_icon, DockIcon::WhileOpen, "with its window closed, Fontface is in the menu bar alone");
+    assert!(d.recent_tags.is_empty());
     assert!(d.scan_at_launch);
     assert!(d.show_installed_in_all);
     assert_eq!(
@@ -98,6 +102,8 @@ fn serializes_in_the_shape_the_ui_expects() {
             "restoreLastView": true,
             "launchAtLogin": false,
             "keepRunningInBackground": false,
+            "showInMenuBar": true,
+            "dockIcon": "whileOpen",
             "scanAtLaunch": true,
             "showInstalledInAll": true,
             "sidebar": {
@@ -121,7 +127,8 @@ fn serializes_in_the_shape_the_ui_expects() {
                 "ink": null, "paper": null, "features": []
             },
             "googlePreviews": true,
-            "catalogYoursFirst": true
+            "catalogYoursFirst": true,
+            "recentTags": []
         })
     );
 }
@@ -457,6 +464,8 @@ fn every_setting_can_be_changed_by_a_patch() {
         restore_last_view: false,
         launch_at_login: true,
         keep_running_in_background: true,
+        show_in_menu_bar: false,
+        dock_icon: DockIcon::Always,
         scan_at_launch: false,
         show_installed_in_all: false,
         sidebar: SidebarSections {
@@ -497,6 +506,7 @@ fn every_setting_can_be_changed_by_a_patch() {
         },
         google_previews: false,
         catalog_yours_first: false,
+        recent_tags: vec![7, 3],
     };
     let patch = serde_json::to_value(&custom).unwrap();
     assert_eq!(settings::apply_patch(&AppSettings::default(), &patch).unwrap(), custom);
@@ -689,7 +699,7 @@ mod login {
         let dict = value.as_dictionary().unwrap();
         assert_eq!(dict.get("Label").and_then(plist::Value::as_string), Some("design.snds.fontface"));
         let args: Vec<&str> = dict["ProgramArguments"].as_array().unwrap().iter().filter_map(plist::Value::as_string).collect();
-        assert_eq!(args, vec![exe.to_str().unwrap()]);
+        assert_eq!(args, vec![exe.to_str().unwrap(), "--login"], "a launch at login can start in the menu bar");
         assert_eq!(dict.get("RunAtLoad").and_then(plist::Value::as_boolean), Some(true));
         assert_eq!(dict.get("ProcessType").and_then(plist::Value::as_string), Some("Interactive"));
 
@@ -729,6 +739,38 @@ mod login {
         assert!(login_item::refresh(&agents, &new).unwrap());
         assert_eq!(login_item::program(&agents).unwrap(), new);
         assert!(login_item::is_enabled(&agents, &new));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn refresh_adds_the_login_argument_to_an_older_login_item() {
+        let dir = temp("agent-older");
+        let agents = dir.join("LaunchAgents");
+        let exe = app(&dir, "Applications");
+        let other = app(&dir, "Other");
+        let older = |program: &Path| {
+            std::fs::create_dir_all(&agents).unwrap();
+            let mut dict = plist::Dictionary::new();
+            dict.insert("Label".into(), plist::Value::String(login_item::LABEL.into()));
+            dict.insert("ProgramArguments".into(), plist::Value::Array(vec![plist::Value::String(program.to_str().unwrap().into())]));
+            dict.insert("RunAtLoad".into(), plist::Value::Boolean(true));
+            plist::Value::Dictionary(dict).to_file_xml(login_item::plist_path(&agents)).unwrap();
+        };
+        let args = || -> Vec<String> {
+            let value = plist::Value::from_file(login_item::plist_path(&agents)).unwrap();
+            value.as_dictionary().unwrap()["ProgramArguments"].as_array().unwrap().iter().filter_map(|v| v.as_string().map(String::from)).collect()
+        };
+
+        older(&exe);
+        assert!(login_item::is_enabled(&agents, &exe), "an older login item still counts as on");
+        assert!(login_item::refresh(&agents, &exe).unwrap());
+        assert_eq!(args(), vec![exe.to_str().unwrap().to_string(), login_item::LOGIN_ARG.to_string()]);
+        assert!(!login_item::refresh(&agents, &exe).unwrap(), "up to date: nothing to do");
+
+        // Another copy's older login item is left alone while that copy is there.
+        older(&other);
+        assert!(!login_item::refresh(&agents, &exe).unwrap());
+        assert_eq!(args(), vec![other.to_str().unwrap().to_string()]);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1103,4 +1145,232 @@ fn a_chosen_check_item_keeps_the_mark_the_page_gave_it() {
     }
     assert_eq!(marks.after_choice("view.tiles"), Some(false));
     assert_eq!(marks.after_choice("view.rows"), Some(true));
+}
+
+// ------------------------------------------------------------------------------- menu bar
+
+#[test]
+fn the_menu_bar_and_dock_settings_change_by_patch_and_refuse_bad_values() {
+    let d = AppSettings::default();
+    let next = settings::apply_patch(&d, &json!({ "showInMenuBar": false, "dockIcon": "always" })).unwrap();
+    assert!(!next.show_in_menu_bar);
+    assert_eq!(next.dock_icon, DockIcon::Always);
+    assert_eq!(settings::apply_patch(&next, &json!({ "dockIcon": "whileOpen" })).unwrap().dock_icon, DockIcon::WhileOpen);
+
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "showInMenuBar": "yes" }))), "“Show Fontface in the menu bar” must be on or off");
+    assert_eq!(
+        error_text(settings::apply_patch(&d, &json!({ "dockIcon": "never", "showInMenuBar": false }))),
+        "Show in the Dock must be “always” or “whileOpen”"
+    );
+    assert!(settings::apply_patch(&d, &json!({ "dockIcon": null })).is_err());
+}
+
+#[test]
+fn recent_tags_keep_each_tag_once_newest_first_and_at_most_eight() {
+    let d = AppSettings::default();
+    let next = settings::apply_patch(&d, &json!({ "recentTags": [5, 3, 5, 9, 1, 2, 4, 6, 7, 8, 10] })).unwrap();
+    assert_eq!(next.recent_tags, vec![5, 3, 9, 1, 2, 4, 6, 7], "a repeat keeps its first place; the rest past eight are dropped");
+    assert_eq!(settings::apply_patch(&next, &json!({ "recentTags": [] })).unwrap().recent_tags, Vec::<i64>::new());
+    for bad in [json!({ "recentTags": [1, "2"] }), json!({ "recentTags": [0] }), json!({ "recentTags": [1.5] }), json!({ "recentTags": 3 })] {
+        assert_eq!(error_text(settings::apply_patch(&next, &bad)), "Recent tags must be a list of tag numbers");
+    }
+}
+
+#[test]
+fn closing_the_window_keeps_fontface_running_while_it_is_in_the_menu_bar() {
+    let mut s = AppSettings::default();
+    for mac in [true, false] {
+        assert_eq!(tray::on_close(&s, true, mac), OnClose::Hide, "the icon is the way back");
+        assert_eq!(tray::on_close(&s, false, mac), OnClose::Quit, "no icon, keep running off: closing quits");
+    }
+    // Without the icon, the older setting still decides, on macOS (the Dock icon is the way back).
+    s.keep_running_in_background = true;
+    assert_eq!(tray::on_close(&s, false, true), OnClose::Hide);
+    assert_eq!(tray::on_close(&s, false, false), OnClose::Quit, "elsewhere nothing would bring it back");
+    assert_eq!(tray::on_close(&s, true, false), OnClose::Hide);
+}
+
+#[test]
+fn the_dock_icon_goes_only_with_the_menu_bar_icon_there() {
+    let mut s = AppSettings::default();
+    assert!(tray::dock_hidden_while_closed(&s, true), "by default, only in the menu bar with the window closed");
+    assert!(!tray::dock_hidden_while_closed(&s, false), "with no menu bar icon, the Dock icon is the only way back");
+    s.dock_icon = DockIcon::Always;
+    assert!(!tray::dock_hidden_while_closed(&s, true));
+}
+
+#[test]
+fn a_launch_at_login_starts_closed_only_with_the_icon_there() {
+    assert!(tray::starts_hidden(true, true));
+    assert!(!tray::starts_hidden(true, false), "no icon: the window opens, or Fontface couldn't be found");
+    assert!(!tray::starts_hidden(false, true), "opened by hand: the window opens");
+}
+
+fn tag(id: i64, name: &str, state: TagState) -> TrayTag {
+    TrayTag { id, name: name.into(), state }
+}
+
+/// The menu as (id or "-", text, enabled, checked) lines; a submenu's items are indented.
+fn lines(slots: &[TraySlot]) -> Vec<String> {
+    fn walk(slots: &[TraySlot], depth: usize, out: &mut Vec<String>) {
+        for slot in slots {
+            let pad = "  ".repeat(depth);
+            match slot {
+                TraySlot::Separator => out.push(format!("{pad}-")),
+                TraySlot::Item { action, text, enabled, checked } => {
+                    let mark = match checked {
+                        Some(true) => "[x] ",
+                        Some(false) => "[ ] ",
+                        None => "",
+                    };
+                    out.push(format!("{pad}{mark}{text}{}", if *enabled { "" } else { " (disabled)" }));
+                    assert_eq!(TrayAction::parse(&action.id()), Some(*action), "{} reads back", action.id());
+                }
+                TraySlot::Submenu { text, items } => {
+                    out.push(format!("{pad}{text} >"));
+                    walk(items, depth + 1, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(slots, 0, &mut out);
+    out
+}
+
+#[test]
+fn the_menu_is_short_and_says_what_each_item_does() {
+    let quiet = tray::menu_slots(&TrayModel::default());
+    assert_eq!(
+        lines(&quiet),
+        vec![
+            "Open Fontface",
+            "Turn On Fonts from a List…",
+            "-",
+            "Turn Off Temporary Fonts (disabled)",
+            "-",
+            "Settings…",
+            "-",
+            "Quit Fontface",
+        ],
+        "no tags until the page sends them; nothing temporary to turn off"
+    );
+
+    let busy = TrayModel {
+        temporary: 12,
+        tags: Some(vec![tag(4, "Sci-Fi", TagState::On), tag(9, "Sci-Fi/Star Trek", TagState::Partly), tag(2, "Display", TagState::Off)]),
+    };
+    assert_eq!(
+        lines(&tray::menu_slots(&busy)),
+        vec![
+            "Open Fontface",
+            "Turn On Fonts from a List…",
+            "-",
+            "Tags >",
+            "  [x] Sci-Fi",
+            "  [ ] Sci-Fi/Star Trek (some on)",
+            "  [ ] Display",
+            "Turn Off Temporary Fonts (12)",
+            "-",
+            "Settings…",
+            "-",
+            "Quit Fontface",
+        ]
+    );
+
+    let none = TrayModel { temporary: 0, tags: Some(vec![]) };
+    assert!(!lines(&tray::menu_slots(&none)).iter().any(|l| l.starts_with("Tags")), "no tags with fonts: no Tags menu");
+
+    let many = TrayModel { temporary: 0, tags: Some((1..=15).map(|i| tag(i, &format!("Tag {i}"), TagState::Off)).collect()) };
+    let slots = tray::menu_slots(&many);
+    let Some(TraySlot::Submenu { items, .. }) = slots.iter().find(|s| matches!(s, TraySlot::Submenu { .. })) else { panic!("a Tags menu") };
+    assert_eq!(items.len(), tray::MAX_TAGS, "the Tags menu stays short");
+}
+
+#[test]
+fn tag_names_show_as_typed_on_one_short_line() {
+    assert_eq!(tray::menu_text("Arts & Crafts"), "Arts && Crafts", "a single & would be taken as the access key and vanish");
+    assert_eq!(tray::menu_text("Two\nlines   here"), "Two lines here");
+    let long = "A very long tag name that goes on and on and on";
+    let shown = tray::menu_text(long);
+    assert!(shown.ends_with('…') && shown.chars().count() <= 40, "{shown}");
+    assert_eq!(tray::menu_text("Ünïcödé ✓"), "Ünïcödé ✓");
+}
+
+#[test]
+fn only_the_menu_bar_menu_items_are_its_own() {
+    assert_eq!(TrayAction::parse("tray.open"), Some(TrayAction::Open));
+    assert_eq!(TrayAction::parse("tray.tag.42"), Some(TrayAction::Tag(42)));
+    assert_eq!(TrayAction::parse("tray.quit"), Some(TrayAction::Quit));
+    for other in ["settings", "file.fontList", "view.tiles", "tray.tag.", "tray.tag.x", "tray.tag.-3", "tray.tag.0", "tray.nope", "quit"] {
+        assert_eq!(TrayAction::parse(other), None, "{other}");
+    }
+}
+
+#[test]
+fn the_menu_bar_glyph_is_a_square_with_ff_cut_out() {
+    let size = 36;
+    let rgba = tray::glyph(size);
+    assert_eq!(rgba.len(), (size * size * 4) as usize);
+    let alpha = |x: u32, y: u32| rgba[((y * size + x) * 4 + 3) as usize];
+    assert!(rgba.chunks(4).all(|p| p[..3] == [0, 0, 0]), "black only: macOS colors a template image by its opacity");
+    assert_eq!(alpha(0, 0), 0, "outside the square");
+    assert_eq!(alpha(4, 4), 0, "the rounded corner");
+    assert_eq!(alpha(17, 5), 255, "inside the square, above the letters");
+    assert_eq!(alpha(9, 20), 0, "the F's stem is cut out");
+    assert_eq!(alpha(22, 24), 0, "the f's stem is cut out");
+    assert_eq!(alpha(15, 25), 255, "between the letters");
+    assert!(rgba.chunks(4).any(|p| p[3] > 0 && p[3] < 255), "smooth edges");
+    // The same shape at 1×.
+    let small = tray::glyph(18);
+    assert_eq!(small.len(), 18 * 18 * 4);
+    assert_eq!(small[((2 * 18 + 8) * 4 + 3) as usize], 255);
+}
+
+#[test]
+fn a_window_left_off_every_screen_comes_back_in_the_middle_of_the_main_one() {
+    let main = (0, 0, 1920, 1080);
+    let left = (-2560, 0, 2560, 1440);
+    assert!(window::reachable((100, 100, 1280, 820), &[main]));
+    assert!(window::reachable((-1500, 200, 1280, 820), &[left, main]), "on the second screen");
+    assert!(!window::reachable((-1500, 200, 1280, 820), &[main]), "its screen was unplugged");
+    assert!(window::reachable((1800, 50, 1280, 820), &[main]), "enough of the title bar to grab");
+    assert!(!window::reachable((1900, 50, 1280, 820), &[main]), "only a sliver: can't be grabbed");
+    assert!(!window::reachable((100, -40, 1280, 820), &[main]), "the title bar is above the screen");
+    assert!(!window::reachable((100, 100, 1280, 820), &[]));
+
+    assert_eq!(window::centered((1280, 820), main), (320, 130));
+    assert_eq!(window::centered((1280, 820), left), (-1920, 310));
+    assert_eq!(window::centered((3000, 2000), main), (0, 0), "too big: kept at the screen's corner");
+}
+
+#[test]
+fn temporary_fonts_are_counted_by_style_and_turned_off_by_file() {
+    let (dir, mut conn) = library("temporary-count");
+    crate::activation::ensure_schema(&conn).unwrap();
+    let folder = db::insert_folder(&mut conn, Path::new("/fonts"), "user").unwrap();
+    let font = |path: &str, face: i64, on: bool| {
+        conn.execute(
+            "INSERT INTO fonts (folder_id, path, face_index, file_size, mtime, family, subfamily, weight, width, italic, monospace, variable, glyph_count, format, activated)
+             VALUES (?1, ?2, ?3, 1, 1, 'Test', 'Regular', 400, 5, 0, 0, 0, 1, 'TrueType', ?4)",
+            rusqlite::params![folder, path, face, on],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    };
+    let a1 = font("/fonts/a.ttc", 0, true);
+    let a2 = font("/fonts/a.ttc", 1, true);
+    let b = font("/fonts/b.otf", 0, true);
+    font("/fonts/c.otf", 0, false);
+    assert_eq!(crate::activation::temporary_on_count(&conn).unwrap(), 0);
+    assert!(crate::activation::temporary_font_ids(&conn).unwrap().is_empty());
+
+    conn.execute("INSERT INTO temporary_activations (path) VALUES ('/fonts/a.ttc'), ('/fonts/gone.otf')", []).unwrap();
+    assert_eq!(crate::activation::temporary_on_count(&conn).unwrap(), 2, "both styles in the collection");
+    assert_eq!(crate::activation::temporary_font_ids(&conn).unwrap(), vec![a1, a2]);
+    conn.execute("UPDATE fonts SET activated = 0 WHERE id = ?1", [a2]).unwrap();
+    assert_eq!(crate::activation::temporary_on_count(&conn).unwrap(), 1, "only fonts that are on count");
+    assert_eq!(crate::activation::temporary_font_ids(&conn).unwrap(), vec![a1, a2], "the whole file is turned off");
+    let _ = b;
+    std::fs::remove_dir_all(&dir).ok();
 }

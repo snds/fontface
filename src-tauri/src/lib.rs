@@ -21,6 +21,7 @@ mod settings;
 mod sfnt;
 mod sync;
 mod tags;
+mod tray;
 mod window;
 
 use std::{
@@ -154,8 +155,16 @@ pub fn run() {
     // macOS: the menu bar adds Settings… to the app menu, and the View and Font menus the page
     // drives (window.rs). Other systems keep Tauri's default.
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(window::app_menu).on_menu_event(window::on_menu_event);
-    let app = builder
+    let builder = builder.menu(window::app_menu);
+    // One handler for every menu: the app menu's items and the menu bar icon's (tray.rs). Set
+    // here once: a handler given to the icon itself could never be taken back.
+    let builder = builder.on_menu_event(|app, event| {
+        tray::on_menu_event(app, event.id().as_ref());
+        #[cfg(target_os = "macos")]
+        window::on_menu_event(app, event);
+    });
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("ff", |ctx, req, resp| protocol::handle(ctx, req, resp))
@@ -205,6 +214,22 @@ pub fn run() {
                 launch_checked: tokio::sync::watch::channel(false).0,
                 google_previews: services::google::previews::Previews::new(preview_cache, dir.clone()),
             });
+            // The menu bar icon, then the window: closed when opened at login with the icon
+            // there (tray.rs), else opened (it's created hidden; see tauri.conf.json).
+            app.manage(tray::TrayState::default());
+            let icon = app_settings.show_in_menu_bar
+                && match tray::show_icon(app.handle(), true) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!("fontface: couldn't put Fontface in the menu bar: {e}");
+                        false
+                    }
+                };
+            if let Some(main) = app.get_webview_window("main") {
+                if !tray::starts_hidden(tray::launched_at_login(), icon) {
+                    window::show(&main);
+                }
+            }
             commands::restart_purchase_watcher(app.handle());
             // The auto-activation test: logs other apps' font requests, only when asked for at
             // launch (docs/AUTO-ACTIVATION-TEST.md).
@@ -329,6 +354,7 @@ pub fn run() {
             commands::app_data_reveal,
             window::title_bar_double_click,
             window::set_menu_state,
+            tray::set_tray_tags,
             removed::fonts_remove,
             removed::fonts_removed,
             removed::fonts_put_back,
@@ -366,19 +392,30 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Fontface");
 
+    // Opened at login straight into the menu bar, with no Dock icon: the policy is set before
+    // macOS finishes launching the app, so the Dock never shows one (window.rs, `dock`).
+    #[cfg(target_os = "macos")]
+    if tray::launched_at_login() {
+        let saved = saved_settings(&app).unwrap_or_default();
+        if tray::starts_hidden(true, saved.show_in_menu_bar) && tray::dock_hidden_while_closed(&saved, true) {
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            window::dock::started_in_menu_bar();
+        }
+    }
+
     app.run(|app, event| match event {
-        // "Keep running when the window is closed" (macOS): hide instead of closing. Cmd+Q
-        // still quits, because quitting doesn't go through the window's close request.
+        // With the menu bar icon there, or "Keep running when the window is closed" (macOS):
+        // hide instead of closing (tray.rs, `on_close`). Quitting (Cmd+Q, or Quit in the icon's
+        // menu) doesn't go through the window's close request, so it still quits.
         tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } if label == "main" => {
-            #[cfg(target_os = "macos")]
-            if app.try_state::<AppState>().is_some_and(|s| s.settings().keep_running_in_background) {
+            let mac = cfg!(target_os = "macos");
+            let keep = app.try_state::<AppState>().is_some_and(|s| tray::on_close(&s.settings(), tray::icon_shown(), mac) == tray::OnClose::Hide);
+            if keep {
                 api.prevent_close();
                 if let Some(main) = app.get_webview_window("main") {
                     window::hide(&main);
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = api;
         }
         // With Appearance set to System, keep the window colour in step when macOS switches
         // between light and dark (the page follows by itself).
@@ -390,7 +427,8 @@ pub fn run() {
                 }
             }
         }
-        // Clicking the Dock icon brings the hidden window back.
+        // Clicking the Dock icon, or opening Fontface again (Spotlight, Finder), brings the
+        // hidden window back, with the Dock icon if it had gone.
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
             if let Some(main) = app.get_webview_window("main") {
@@ -448,6 +486,18 @@ fn restore_at_launch(handle: &tauri::AppHandle, policy: settings::RestorePolicy)
     }) {
         eprintln!("fontface: reconcile failed: {e}");
     }
+    // Temporary fonts whose login ended are off now.
+    tray::refresh(handle);
+}
+
+/// The saved settings, read before the app has started (setup reads them properly). None if
+/// there's no library yet or it can't be read. Never creates a library or changes one.
+#[cfg(target_os = "macos")]
+fn saved_settings(app: &tauri::App) -> Option<settings::AppSettings> {
+    use rusqlite::OpenFlags;
+    let path = app.path().app_data_dir().ok()?.join("library.sqlite3");
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()?;
+    settings::load(&conn).ok()
 }
 
 #[cfg(test)]

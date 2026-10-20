@@ -22,6 +22,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   restoreLastView: true,
   launchAtLogin: false,
   keepRunningInBackground: false,
+  showInMenuBar: true,
+  dockIcon: "whileOpen",
   scanAtLaunch: true,
   showInstalledInAll: true,
   sidebar: { yours: true, recent: true, active: true, untagged: true, fontBook: true, google: true, adobe: true, purchases: true, tags: true, builtinTags: true },
@@ -40,6 +42,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   preview: DEFAULT_PREVIEW,
   googlePreviews: true,
   catalogYoursFirst: true,
+  recentTags: [],
 };
 
 export interface Settings {

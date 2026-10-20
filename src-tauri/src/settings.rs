@@ -54,6 +54,19 @@ pub enum RestorePolicy {
     Never,
 }
 
+/// macOS: when the Dock shows Fontface's icon. "While open" applies only while Fontface is in
+/// the menu bar (`AppSettings::show_in_menu_bar`); without that icon, the Dock icon is the way
+/// back, so it always shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DockIcon {
+    Always,
+    /// Only while the window is open: with it closed, Fontface is in the menu bar alone. The
+    /// default, so Fontface stays out of the way with its window closed.
+    #[default]
+    WhileOpen,
+}
+
 /// The font page tab used last; the next font page opens on it. The page shows Axes only for a
 /// variable style and falls back to Specimen otherwise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -232,8 +245,15 @@ pub struct AppSettings {
     /// The UI remembers the last view itself; this only says whether to reopen it.
     pub restore_last_view: bool,
     pub launch_at_login: bool,
-    /// macOS: closing the window hides it, and clicking the Dock icon brings it back.
+    /// macOS: closing the window hides it, and clicking the Dock icon brings it back. While the
+    /// menu bar icon is there (`show_in_menu_bar`), closing the window always does that, whatever
+    /// this says; it decides only for when the icon is off (tray.rs, `on_close`).
     pub keep_running_in_background: bool,
+    /// An icon in the menu bar (macOS) or the notification area (Windows), with a short menu
+    /// (tray.rs). While it's there, closing the window keeps Fontface running. On by default.
+    pub show_in_menu_bar: bool,
+    /// macOS: whether the Dock shows Fontface while its window is closed.
+    pub dock_icon: DockIcon,
     /// The UI gates its launch rescan on this.
     pub scan_at_launch: bool,
     /// Whether "All" lists fonts in the macOS font folders (a UI filter).
@@ -269,6 +289,9 @@ pub struct AppSettings {
     /// "Installed" (yours first) on a font service's catalog page (Google Fonts): families you have,
     /// downloaded or already in your library, come before the rest. On by default.
     pub catalog_yours_first: bool,
+    /// The tags turned on or off most recently, newest first: the menu bar icon's Tags menu
+    /// always lists them. Remembered by the UI, at most `RECENT_TAGS`.
+    pub recent_tags: Vec<i64>,
 }
 
 impl Default for AppSettings {
@@ -280,6 +303,8 @@ impl Default for AppSettings {
             restore_last_view: true,
             launch_at_login: false,
             keep_running_in_background: false,
+            show_in_menu_bar: true,
+            dock_icon: DockIcon::WhileOpen,
             scan_at_launch: true,
             show_installed_in_all: true,
             sidebar: SidebarSections::default(),
@@ -298,6 +323,7 @@ impl Default for AppSettings {
             preview: PreviewOptions::default(),
             google_previews: true,
             catalog_yours_first: true,
+            recent_tags: Vec::new(),
         }
     }
 }
@@ -309,6 +335,8 @@ pub const COLUMN_WIDTH: RangeInclusive<u32> = 32..=1200;
 pub const MAX_COLUMNS: usize = 40;
 pub const BACKUP_KEEP: RangeInclusive<u32> = 1..=50;
 pub const MAX_PREVIEW_TEXT: usize = 500;
+/// How many recently used tags are remembered.
+pub const RECENT_TAGS: usize = 8;
 
 // ------------------------------------------------------------------------------- changes
 
@@ -336,6 +364,10 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
         "restoreLastView" => s.restore_last_view = flag(value, "Reopen the last view")?,
         "launchAtLogin" => s.launch_at_login = flag(value, "Open at login")?,
         "keepRunningInBackground" => s.keep_running_in_background = flag(value, "Keep running when the window is closed")?,
+        "showInMenuBar" => s.show_in_menu_bar = flag(value, "Show Fontface in the menu bar")?,
+        "dockIcon" => {
+            s.dock_icon = choice(value, "Show in the Dock", &[("always", DockIcon::Always), ("whileOpen", DockIcon::WhileOpen)])?
+        }
         "scanAtLaunch" => s.scan_at_launch = flag(value, "Check folders at launch")?,
         "showInstalledInAll" => s.show_installed_in_all = flag(value, "Show installed fonts in All")?,
         "sidebar" => {
@@ -401,6 +433,7 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
         "preview" => s.preview = preview_options(&s.preview, value)?,
         "googlePreviews" => s.google_previews = flag(value, "Show previews of Google Fonts you haven't downloaded")?,
         "catalogYoursFirst" => s.catalog_yours_first = flag(value, "Installed")?,
+        "recentTags" => s.recent_tags = recent_tags(value)?,
         // A setting from a newer Fontface, or a typo: ignored.
         _ => {}
     }
@@ -458,6 +491,20 @@ fn preview_features(value: &Value) -> AppResult<Vec<String>> {
         asked.push(item.as_str().ok_or_else(bad)?);
     }
     Ok(PREVIEW_FEATURES.iter().filter(|f| asked.contains(f)).map(|f| f.to_string()).collect())
+}
+
+/// A list of tag ids, newest first. Each is kept once, in its first place, and only the first
+/// `RECENT_TAGS`. Tags that no longer exist are the UI's to skip.
+fn recent_tags(value: &Value) -> AppResult<Vec<i64>> {
+    let bad = || invalid("Recent tags must be a list of tag numbers");
+    let mut ids: Vec<i64> = Vec::new();
+    for item in value.as_array().ok_or_else(bad)? {
+        let id = item.as_i64().filter(|id| *id > 0).ok_or_else(bad)?;
+        if ids.len() < RECENT_TAGS && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
 }
 
 /// `{ key, desc }`: the key is required, the direction defaults to the usual one.

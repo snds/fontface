@@ -1241,11 +1241,13 @@ pub fn settings_reset(app: AppHandle, state: State<'_, AppState>) -> AppResult<A
     Ok(next)
 }
 
-/// After a change is saved: the window's color follows the Appearance setting, and the page hears.
+/// After a change is saved: the window's color follows the Appearance setting, the menu bar icon
+/// follows its setting, and the page hears.
 fn settings_changed(app: &AppHandle, before: &AppSettings, next: &AppSettings) {
     if next.theme != before.theme {
         crate::window::paint_background(app, next.theme);
     }
+    crate::tray::settings_changed(app, before, next);
     let _ = app.emit("settings-changed", next);
 }
 

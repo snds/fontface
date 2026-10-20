@@ -1,6 +1,6 @@
 //! The main window's native side: the macOS menu bar (with the View and Font menus the page
 //! drives), double-clicking the title bar, the window's color before the page paints, and hiding
-//! the window when it's closed.
+//! the window when it's closed (with the Dock icon, on macOS; see tray.rs).
 //!
 //! On macOS the title bar is an overlay (src-tauri/tauri.macos.conf.json): the page draws the
 //! top row and marks it as the place to drag the window from (src/components/TitleBar.tsx).
@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
-use tauri::{Emitter, WebviewWindow};
-use tauri::{AppHandle, Manager};
+use tauri::Emitter;
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 use crate::{
     error::{AppError, AppResult},
@@ -526,39 +526,194 @@ pub fn paint_background(app: &AppHandle, theme: Theme) {
     }
 }
 
-// ------------------------------------------------------------- hiding and showing (macOS)
+// ------------------------------------------------------------------- hiding and showing
 
 /// Set while the window leaves full screen on its way to being hidden.
 #[cfg(target_os = "macos")]
 static HIDE_AFTER_FULL_SCREEN: AtomicBool = AtomicBool::new(false);
 
-/// "Keep running when the window is closed": hides the main window. A window in full screen
-/// leaves full screen first and is hidden once it has (`full_screen::watch`): hidden in full
-/// screen, it would leave its full-screen space behind, empty and black.
-#[cfg(target_os = "macos")]
+/// Closing the window while Fontface keeps running (tray.rs, `on_close`): hides the main window.
+/// On macOS a window in full screen leaves full screen first and is hidden once it has
+/// (`full_screen::watch`): hidden in full screen, it would leave its full-screen space behind,
+/// empty and black. Once hidden, the Dock icon goes if the settings say so (`dock`). On Windows
+/// the taskbar button goes with the window.
 pub fn hide(window: &WebviewWindow) {
-    // A hide is already waiting for the window to leave full screen (a second Cmd+W during the
-    // animation): hiding now would leave the empty space behind after all.
-    if HIDE_AFTER_FULL_SCREEN.load(Relaxed) {
-        return;
-    }
-    if window.is_fullscreen().unwrap_or(false) {
-        HIDE_AFTER_FULL_SCREEN.store(true, Relaxed);
-        if window.set_fullscreen(false).is_ok() {
+    #[cfg(target_os = "macos")]
+    {
+        // A hide is already waiting for the window to leave full screen (a second Cmd+W during
+        // the animation): hiding now would leave the empty space behind after all.
+        if HIDE_AFTER_FULL_SCREEN.load(Relaxed) {
             return;
         }
-        HIDE_AFTER_FULL_SCREEN.store(false, Relaxed);
+        if window.is_fullscreen().unwrap_or(false) {
+            HIDE_AFTER_FULL_SCREEN.store(true, Relaxed);
+            if window.set_fullscreen(false).is_ok() {
+                return;
+            }
+            HIDE_AFTER_FULL_SCREEN.store(false, Relaxed);
+        }
     }
-    let _ = window.hide();
+    hidden(window);
 }
 
-/// Brings the main window back (the Dock icon, or the Settings… menu item).
-#[cfg(target_os = "macos")]
+/// The hide itself, and what follows it.
+fn hidden(window: &WebviewWindow) {
+    #[cfg(windows)]
+    let _ = window.set_skip_taskbar(true);
+    let _ = window.hide();
+    #[cfg(target_os = "macos")]
+    dock::closed(window.app_handle());
+}
+
+/// Brings the main window back (the menu bar icon, the Dock icon, opening Fontface again, or
+/// the Settings… menu item): the Dock icon or taskbar button first, then the window, in front
+/// and focused. A window left off every screen (its display was unplugged while it was closed)
+/// comes back in the middle of the main one.
 pub fn show(window: &WebviewWindow) {
-    HIDE_AFTER_FULL_SCREEN.store(false, Relaxed);
+    #[cfg(target_os = "macos")]
+    {
+        HIDE_AFTER_FULL_SCREEN.store(false, Relaxed);
+        dock::opening(window.app_handle());
+    }
+    #[cfg(windows)]
+    let _ = window.set_skip_taskbar(false);
+    bring_on_screen(window);
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+/// A rectangle in physical pixels: left, top, width, height.
+pub type Area = (i32, i32, u32, u32);
+
+/// How much of the window's top strip (where the title bar is) must be on a screen for it to be
+/// reachable: enough to grab and drag.
+const GRAB: (u32, u32) = (80, 24);
+
+/// Whether enough of the window's top strip is on one of the screens to grab it.
+pub fn reachable(window: Area, screens: &[Area]) -> bool {
+    let (x, y, w, _) = window;
+    let strip = (x, y, w, GRAB.1);
+    screens.iter().any(|s| {
+        let (ix, iy) = overlap(strip, *s);
+        ix >= GRAB.0.min(w) && iy >= GRAB.1
+    })
+}
+
+/// The width and height two rectangles share.
+fn overlap(a: Area, b: Area) -> (u32, u32) {
+    let span = |a0: i32, a1: u32, b0: i32, b1: u32| {
+        let lo = i64::from(a0).max(i64::from(b0));
+        let hi = (i64::from(a0) + i64::from(a1)).min(i64::from(b0) + i64::from(b1));
+        (hi - lo).max(0) as u32
+    };
+    (span(a.0, a.2, b.0, b.2), span(a.1, a.3, b.1, b.3))
+}
+
+/// Where a window of `size` goes to sit in the middle of `screen` (kept inside it if it's bigger).
+pub fn centered(size: (u32, u32), screen: Area) -> (i32, i32) {
+    let along = |start: i32, room: u32, len: u32| start + (i64::from(room).saturating_sub(i64::from(len)).max(0) / 2) as i32;
+    (along(screen.0, screen.2, size.0), along(screen.1, screen.3, size.1))
+}
+
+fn bring_on_screen(window: &WebviewWindow) {
+    let (Ok(pos), Ok(size), Ok(monitors)) = (window.outer_position(), window.outer_size(), window.available_monitors()) else { return };
+    let area = |m: &tauri::Monitor| (m.position().x, m.position().y, m.size().width, m.size().height);
+    let screens: Vec<Area> = monitors.iter().map(area).collect();
+    if screens.is_empty() || reachable((pos.x, pos.y, size.width, size.height), &screens) {
+        return;
+    }
+    let main = window.primary_monitor().ok().flatten().map(|m| area(&m)).unwrap_or(screens[0]);
+    let (x, y) = centered((size.width, size.height), main);
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// macOS: Fontface's Dock icon, with "Show in the Dock: only while the window is open" (see
+/// tray.rs). Fontface is a regular app (Dock icon, menus, Cmd-Tab) while its window is open, and
+/// a menu bar app (an "accessory") while it's closed.
+///
+/// macOS can leave a second, dead Dock icon behind when an app goes back and forth quickly. So
+/// the icon never goes within `SETTLE` of coming back: the switch waits, and is called off if
+/// the window opens again meanwhile. Launching at login straight into the menu bar sets the
+/// policy before macOS finishes launching the app (lib.rs), so no icon shows at all.
+#[cfg(target_os = "macos")]
+pub mod dock {
+    use std::{
+        sync::{
+            atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
+            Mutex,
+        },
+        time::{Duration, Instant},
+    };
+
+    use tauri::{ActivationPolicy, AppHandle, Manager};
+
+    /// Fontface is a regular app now, with its Dock icon.
+    static REGULAR: AtomicBool = AtomicBool::new(true);
+    /// Counts the window's openings, so a wait for the icon to go is called off by the next one.
+    static OPENINGS: AtomicU64 = AtomicU64::new(0);
+    /// When the icon last came back.
+    static CAME_BACK: Mutex<Option<Instant>> = Mutex::new(None);
+    const SETTLE: Duration = Duration::from_millis(1200);
+
+    /// Launching with the window closed and no Dock icon (lib.rs set the policy).
+    pub fn started_in_menu_bar() {
+        REGULAR.store(false, Relaxed);
+    }
+
+    /// Before the window opens: the Dock icon (and the app's menus) come back. Requests reach
+    /// the app in the order they're made, so the window then opens in a regular app.
+    pub fn opening(app: &AppHandle) {
+        OPENINGS.fetch_add(1, Relaxed);
+        let mut came_back = CAME_BACK.lock().unwrap_or_else(|p| p.into_inner());
+        if !REGULAR.swap(true, Relaxed) {
+            *came_back = Some(Instant::now());
+            if let Err(e) = app.set_activation_policy(ActivationPolicy::Regular) {
+                eprintln!("fontface: couldn't bring back the Dock icon: {e}");
+            }
+        } else if came_back.is_none() {
+            // The first opening, at launch: the icon has only just appeared.
+            *came_back = Some(Instant::now());
+        }
+    }
+
+    /// After the window has closed: the Dock icon goes, if the settings say so.
+    pub fn closed(app: &AppHandle) {
+        if !REGULAR.load(Relaxed) || !wanted(app) {
+            return;
+        }
+        let since = CAME_BACK.lock().unwrap_or_else(|p| p.into_inner()).map(|t| t.elapsed());
+        let wait = since.map_or(Duration::ZERO, |s| SETTLE.saturating_sub(s));
+        if wait.is_zero() {
+            go(app);
+            return;
+        }
+        let (app, opening) = (app.clone(), OPENINGS.load(Relaxed));
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
+            if OPENINGS.load(Relaxed) == opening {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || go(&handle));
+            }
+        });
+    }
+
+    /// Whether the icon should go now the window is closed.
+    fn wanted(app: &AppHandle) -> bool {
+        app.try_state::<crate::AppState>()
+            .is_some_and(|s| crate::tray::dock_hidden_while_closed(&s.settings(), crate::tray::icon_shown()))
+    }
+
+    fn go(app: &AppHandle) {
+        let open = app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false));
+        if open || !wanted(app) || !REGULAR.swap(false, Relaxed) {
+            return;
+        }
+        if let Err(e) = app.set_activation_policy(ActivationPolicy::Accessory) {
+            REGULAR.store(true, Relaxed);
+            eprintln!("fontface: couldn't take away the Dock icon: {e}");
+        }
+    }
 }
 
 /// Finishes a `hide` that waited for the window to leave full screen. macOS says when with
@@ -594,7 +749,7 @@ pub mod full_screen {
             #[unsafe(method(windowDidExitFullScreen:))]
             fn did_exit(&self, _notification: &NSNotification) {
                 if super::HIDE_AFTER_FULL_SCREEN.swap(false, Relaxed) {
-                    let _ = self.ivars().hide();
+                    super::hidden(self.ivars());
                 }
             }
         }

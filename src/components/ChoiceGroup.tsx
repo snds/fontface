@@ -19,18 +19,23 @@ interface Props<T extends string> {
   /** "segments": joined buttons in a frame. "chips": separate rounded pills. "cards": one
    *  full-width row per choice, with a radio dot and a description. */
   look?: "segments" | "chips" | "cards";
+  /** Set while the choice can't be changed: why, and what would make it work. Every option is
+   *  greyed out but still takes the pointer and focus, so its tooltip says this instead. */
+  disabledReason?: string | false | null;
 }
 
 /**
  * A single-choice control (WAI-ARIA radio group): one tab stop, arrow keys move the choice,
  * Home/End jump to the ends. Each option has a design-system tooltip (components/Tip).
  */
-export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, value, options, onChange, look = "segments" }: Props<T>) {
+export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, value, options, onChange, look = "segments", disabledReason }: Props<T>) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const current = Math.max(0, options.findIndex((o) => o.value === value));
   const base = useId();
 
+  const disabled = !!disabledReason;
   const move = (to: number) => {
+    if (disabled) return;
     const i = (to + options.length) % options.length;
     onChange(options[i].value);
     refs.current[i]?.focus();
@@ -58,6 +63,7 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
       aria-label={labelledBy ? undefined : label}
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
+      aria-disabled={disabled || undefined}
       onKeyDown={onKeyDown}
       className={cn(
         "flex shrink-0",
@@ -73,7 +79,7 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
         };
         // The option in its tooltip (the button itself is unchanged).
         const tipped = (button: React.ReactElement) => (
-          <Tip key={o.value} tip={o.tip} shortcut={o.shortcut}>
+          <Tip key={o.value} tip={o.tip} shortcut={o.shortcut} disabledReason={disabledReason}>
             {button}
           </Tip>
         );
@@ -88,9 +94,10 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
               aria-labelledby={`${id}-label`}
               aria-describedby={o.description ? `${id}-desc` : undefined}
               tabIndex={checked ? 0 : -1}
-              onClick={() => onChange(o.value)}
+              aria-disabled={disabled || undefined}
+              onClick={() => !disabled && onChange(o.value)}
               className={cn(
-                "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+                "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-disabled:opacity-50",
                 checked ? "border-primary/40 bg-background" : "border-transparent hover:bg-background/60",
               )}
             >
@@ -124,9 +131,10 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
             role="radio"
             aria-checked={checked}
             tabIndex={checked ? 0 : -1}
-            onClick={() => onChange(o.value)}
+            aria-disabled={disabled || undefined}
+            onClick={() => !disabled && onChange(o.value)}
             className={cn(
-              "text-xs whitespace-nowrap",
+              "text-xs whitespace-nowrap aria-disabled:opacity-50",
               look === "segments" ? "h-6 rounded-md px-2.5" : "h-7 rounded-full border px-3",
               checked
                 ? cn("bg-secondary font-medium text-secondary-foreground", look === "chips" && "border-transparent")

@@ -5,6 +5,10 @@
 //! The file is the truth: the setting reads as on only while the file exists, is Fontface's,
 //! and starts this copy of the app. Every function takes the LaunchAgents folder, so tests use
 //! a temporary folder.
+//!
+//! It starts Fontface with `--login`, so a launch at login can start in the menu bar with its
+//! window closed (tray.rs, `starts_hidden`). Login items written before that are brought up to
+//! date at launch (`refresh`).
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +17,9 @@ use plist::{Dictionary, Value};
 use crate::error::{AppError, AppResult};
 
 pub const LABEL: &str = "design.snds.fontface";
+
+/// The argument the login item starts Fontface with.
+pub const LOGIN_ARG: &str = "--login";
 
 /// `~/Library/LaunchAgents`.
 pub fn agents_dir() -> Option<PathBuf> {
@@ -25,13 +32,18 @@ pub fn plist_path(dir: &Path) -> PathBuf {
 
 /// The program our LaunchAgent starts, if the file is there and is Fontface's.
 pub fn program(dir: &Path) -> Option<PathBuf> {
+    arguments(dir)?.into_iter().next().map(PathBuf::from)
+}
+
+/// Everything our LaunchAgent starts Fontface with (the program first), if it's Fontface's.
+fn arguments(dir: &Path) -> Option<Vec<String>> {
     let value = Value::from_file(plist_path(dir)).ok()?;
     let dict = value.as_dictionary()?;
     if dict.get("Label").and_then(Value::as_string) != Some(LABEL) {
         return None;
     }
-    let first = dict.get("ProgramArguments")?.as_array()?.first()?.as_string()?;
-    Some(PathBuf::from(first))
+    let args: Vec<String> = dict.get("ProgramArguments")?.as_array()?.iter().filter_map(Value::as_string).map(String::from).collect();
+    (!args.is_empty()).then_some(args)
 }
 
 /// Compares the way the OS will: through any links.
@@ -56,7 +68,7 @@ pub fn enable(dir: &Path, exe: &Path) -> AppResult<()> {
     let exe = exe.to_str().ok_or_else(|| AppError::Invalid("Fontface's location has characters macOS can't use here".into()))?;
     let mut dict = Dictionary::new();
     dict.insert("Label".into(), Value::String(LABEL.into()));
-    dict.insert("ProgramArguments".into(), Value::Array(vec![Value::String(exe.into())]));
+    dict.insert("ProgramArguments".into(), Value::Array(vec![Value::String(exe.into()), Value::String(LOGIN_ARG.into())]));
     dict.insert("RunAtLoad".into(), Value::Boolean(true));
     dict.insert("ProcessType".into(), Value::String("Interactive".into()));
     let mut xml = Vec::new();
@@ -76,17 +88,23 @@ pub fn disable(dir: &Path) -> AppResult<()> {
     }
 }
 
-/// If the LaunchAgent starts a copy that's gone (the app was moved), points it at `exe`.
-/// Returns whether it was rewritten. Does nothing when there's no LaunchAgent (the user turned
-/// it off), when the copy it starts is still there (this is a second copy, e.g. a newer version
-/// opened before it replaced the installed one), or when `exe` won't be there at the next login.
+/// If the LaunchAgent starts a copy that's gone (the app was moved), points it at `exe`; if it
+/// starts `exe` without `--login` (it was written by an older Fontface), adds it. Returns
+/// whether it was rewritten. Does nothing when there's no LaunchAgent (the user turned it off),
+/// when the copy it starts is still there (this is a second copy, e.g. a newer version opened
+/// before it replaced the installed one), or when `exe` won't be there at the next login.
 pub fn refresh(dir: &Path, exe: &Path) -> AppResult<bool> {
     if temporary_location(exe) {
         return Ok(false);
     }
-    match program(dir) {
-        Some(p) if !p.exists() && !same_file(&p, exe) => enable(dir, exe).map(|_| true),
-        _ => Ok(false),
+    let Some(args) = arguments(dir) else { return Ok(false) };
+    let program = Path::new(&args[0]);
+    let moved = !program.exists() && !same_file(program, exe);
+    let older = same_file(program, exe) && !args.iter().skip(1).any(|a| a == LOGIN_ARG);
+    if moved || older {
+        enable(dir, exe).map(|_| true)
+    } else {
+        Ok(false)
     }
 }
 

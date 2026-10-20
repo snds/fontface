@@ -24,6 +24,7 @@ import {
   type SkippedFiles,
   type SortOrder,
   type SwitchOrigin,
+  type TemporaryOffReport,
 } from "@/api";
 import {
   activationIds,
@@ -117,6 +118,8 @@ import { useLocations } from "@/tags/locations";
 import { leafOf, useFilterContext, useTagIndex } from "@/tags/model";
 import { openTagDialog } from "@/tags/dialogs";
 import { TagDialogHost } from "@/tags/TagDialogs";
+import { TrayTags } from "@/tags/TrayTags";
+import { temporaryOffMessage } from "@/trayMenu";
 import { useLastView } from "@/settings/lastView";
 import type { SectionId } from "@/settings/parts";
 import { useRestorePrompt } from "@/settings/restorePrompt";
@@ -679,6 +682,18 @@ export default function App() {
     const unlisten = [listen("added-dates", () => loadFonts().catch(() => {})), listen("family-names", () => loadFonts().catch(() => {}))];
     return () => {
       for (const u of unlisten) u.then((fn) => fn()).catch(() => {});
+    };
+  }, [loadFonts]);
+  // The menu bar icon's "Turn Off Temporary Fonts" (src-tauri/src/tray.rs): the list reloads, and
+  // says what happened.
+  useEffect(() => {
+    const unlisten = listen<TemporaryOffReport>("activation-changed", (e) => {
+      loadFonts().catch(() => {});
+      const m = temporaryOffMessage(e.payload);
+      if (m) toast[m.tone](m.title, { description: m.description, duration: m.tone === "success" ? undefined : 12_000 });
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
     };
   }, [loadFonts]);
   // Your family choices (merge, keep separate, move), kept by Fontface.
@@ -1989,6 +2004,8 @@ export default function App() {
           onDeleted={(ids) => setView((v) => (v.kind === "tag" && ids.includes(v.id) ? { kind: "all" } : v))}
           switchFonts={(ids, on, scope, report) => setActivation(ids, on, undefined, scope, "switch", report)}
         />
+        {/* The menu bar icon's Tags menu. */}
+        <TrayTags families={allFamilies} settings={settings} onRecent={(recentTags) => void settingsStore.update({ recentTags })} />
         {/* The library search for Compare and Pair, and Remove from Library's confirmation. */}
         <FontPickerDialog request={picker} families={pickerFamilies} onClose={() => setPicker(null)} />
         <RemoveFontsDialog request={removal} onConfirm={(r) => void confirmRemoval({ ...r, closePage: removal?.closePage ?? null })} onCancel={() => setRemoval(null)} />
