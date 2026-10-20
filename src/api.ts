@@ -9,6 +9,31 @@ export interface Folder {
   label: string;
   fontCount: number;
   missing: boolean;
+  /** What the folder's latest finished scan found but didn't add. Left out until a scan has
+   *  counted them. */
+  skipped?: SkippedFiles;
+}
+
+/** How many files of each kind a scan found but didn't add (skippedFiles.ts words them). Must
+ *  match SkippedFiles in src-tauri/src/model.rs. */
+export interface SkippedFiles {
+  /** PostScript Type 1 outlines: .pfb, .pfa, and Mac LWFN files. */
+  type1: number;
+  /** The spacing files that go with Type 1 fonts: .pfm, .afm, .inf. */
+  type1Metrics: number;
+  woff: number;
+  woff2: number;
+  dfont: number;
+  eot: number;
+  /** .fon and .fnt files. */
+  windowsBitmap: number;
+  /** Classic Mac font suitcases. */
+  suitcase: number;
+  /** TrueType or OpenType files with no extension. */
+  noExtension: number;
+  /** Files that couldn't be read or aren't usable fonts, including ones remembered from earlier
+   *  scans and unchanged since. */
+  unreadable: number;
 }
 
 export interface FontSummary {
@@ -238,6 +263,8 @@ export interface ScanReport {
   failed: { path: string; reason: string }[];
   walkErrors: number;
   cancelled: boolean;
+  /** Files it found but didn't add, by kind. All zero for a cancelled scan. */
+  skipped: SkippedFiles;
 }
 
 export interface ActivationOutcome {

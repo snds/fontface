@@ -67,6 +67,12 @@ A scan runs off the UI thread with its own SQLite connection (WAL mode allows th
 1. **Discover:** walk the folder and compare each file's size and modified time. Unchanged files are skipped.
 2. **Read:** 8 worker threads read and parse changed files. A single writer thread commits about every 400 ms.
 3. **Clean up:** forget files that are gone.
+4. **Count what was left out:** font files in formats Fontface can't use yet (Type 1, WOFF,
+   .dfont, EOT, Windows bitmap fonts, old Mac suitcases), by kind, plus files that couldn't be
+   read. Names say what most are. A name with no extension is looked up by the Finder type code
+   in its `com.apple.FinderInfo` attribute, on a thread that never downloads online-only files;
+   the file and its resource fork are never opened. The counts go in the scan's report and in
+   `folders.skipped_counts` (scanner/unsupported.rs).
 
 Progress events (`discovering` → `reading`) begin immediately, and the UI reloads the list
 during a scan, so fonts appear while it runs. One scan per folder at a time, and each can be

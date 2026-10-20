@@ -11,6 +11,10 @@ pub struct Folder {
     pub label: String,
     pub font_count: i64,
     pub missing: bool,
+    /// What the folder's latest finished scan found but didn't add, by kind. Left out until a
+    /// scan has counted them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<SkippedFiles>,
 }
 
 /// The lightweight row the library list needs. Everything else lives in `FontDetail`.
@@ -129,6 +133,34 @@ pub struct ScanReport {
     /// Folders that couldn't be listed. When non-zero, nothing is removed from the library.
     pub walk_errors: usize,
     pub cancelled: bool,
+    /// Files the scan found but didn't add, by kind (see scanner/unsupported.rs). All zero for a
+    /// cancelled scan.
+    pub skipped: SkippedFiles,
+}
+
+/// How many files of each kind a scan found but didn't add to the library: fonts in formats
+/// Fontface can't use yet, and files that couldn't be read. Kept with the folder as JSON
+/// (`folders.skipped_counts`), so a kind added later reads as 0 from older rows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SkippedFiles {
+    /// PostScript Type 1 outlines: .pfb, .pfa, and Mac LWFN files.
+    pub type1: usize,
+    /// The spacing files that go with Type 1 fonts: .pfm, .afm, .inf.
+    pub type1_metrics: usize,
+    pub woff: usize,
+    pub woff2: usize,
+    pub dfont: usize,
+    pub eot: usize,
+    /// Windows bitmap fonts: .fon, .fnt.
+    pub windows_bitmap: usize,
+    /// Classic Mac font suitcases, whose fonts live in the resource fork.
+    pub suitcase: usize,
+    /// TrueType or OpenType files with no extension (known by their Finder type code).
+    pub no_extension: usize,
+    /// Files that couldn't be read or aren't usable fonts: this scan's failures, plus files
+    /// remembered as unreadable and unchanged since.
+    pub unreadable: usize,
 }
 
 /// Activation works per file: one file can hold several faces (.ttc), and the OS

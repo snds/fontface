@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::{
     error::{AppError, AppResult},
-    model::{Axis, Folder, FontDetail, FontSummary},
+    model::{Axis, Folder, FontDetail, FontSummary, SkippedFiles},
 };
 
 pub(crate) const SCHEMA_V1: &str = "
@@ -155,14 +155,19 @@ pub fn open(path: &Path) -> AppResult<Connection> {
 ///   grouping (families.rs). `names_rev` says they've been read (`families::NAMES_REV`); null
 ///   for rows from before, until `families::backfill_names` reads them.
 ///
-/// A future migration that rebuilds `fonts` must list these columns too (v3's `SELECT *` would
-/// break on them).
+/// And one on `folders`:
+/// - `skipped_counts`: what the folder's latest finished scan found but didn't add, by kind
+///   (`model::SkippedFiles` as JSON). Null until a scan has counted them.
+///
+/// A future migration that rebuilds `fonts` or `folders` must list these columns too (v3's
+/// `SELECT *` would break on them).
 fn ensure_schema(conn: &Connection) -> AppResult<()> {
     crate::tags::ensure_column(conn, "fonts", "added_at", "added_at INTEGER")?;
     crate::tags::ensure_column(conn, "fonts", "typo_family", "typo_family TEXT")?;
     crate::tags::ensure_column(conn, "fonts", "legacy_family", "legacy_family TEXT")?;
     crate::tags::ensure_column(conn, "fonts", "legacy_style", "legacy_style TEXT")?;
     crate::tags::ensure_column(conn, "fonts", "names_rev", "names_rev INTEGER")?;
+    crate::tags::ensure_column(conn, "folders", "skipped_counts", "skipped_counts TEXT")?;
     Ok(())
 }
 
@@ -306,6 +311,7 @@ fn folder_from_row(r: &Row) -> rusqlite::Result<Folder> {
         label: String::new(),
         missing: false,
         font_count: r.get(3)?,
+        skipped: r.get::<_, Option<String>>(4)?.and_then(|json| serde_json::from_str(&json).ok()),
     })
 }
 
@@ -318,7 +324,8 @@ pub fn check_folders(folders: &mut [Folder]) {
     }
 }
 
-const FOLDER_SELECT: &str = "SELECT f.id, f.path, f.kind, (SELECT COUNT(*) FROM fonts WHERE folder_id = f.id) FROM folders f";
+const FOLDER_SELECT: &str =
+    "SELECT f.id, f.path, f.kind, (SELECT COUNT(*) FROM fonts WHERE folder_id = f.id), f.skipped_counts FROM folders f";
 
 pub fn list_folders(conn: &Connection) -> AppResult<Vec<Folder>> {
     let mut stmt = conn.prepare(&format!(
@@ -332,6 +339,14 @@ pub fn get_folder(conn: &Connection, id: i64) -> AppResult<Folder> {
     conn.query_row(&format!("{FOLDER_SELECT} WHERE f.id = ?1"), [id], folder_from_row)
         .optional()?
         .ok_or_else(|| AppError::NotFound(format!("folder {id}")))
+}
+
+/// Keeps what a folder's scan found but didn't add (see `Folder::skipped`), in place of the
+/// previous scan's counts.
+pub fn save_skipped(conn: &Connection, folder_id: i64, skipped: &SkippedFiles) -> AppResult<()> {
+    let json = serde_json::to_string(skipped).map_err(|e| AppError::Other(e.to_string()))?;
+    conn.execute("UPDATE folders SET skipped_counts = ?1 WHERE id = ?2", params![json, folder_id])?;
+    Ok(())
 }
 
 /// Adds a folder, keeping the rule that folders never overlap, so each file belongs to exactly one.
