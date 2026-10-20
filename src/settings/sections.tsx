@@ -17,7 +17,16 @@ import { createTipHandle, ROW_TIP_DELAY, Tip, TipHost } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { openTagDialog } from "@/tags/dialogs";
 import { useSyncSection } from "@/sync/SyncSection";
+import {
+  PLATFORM,
+  TRANSLUCENT_LABEL,
+  translucentDescription,
+  translucentDisabledReason,
+  translucentSwitchOn,
+  translucentSwitchTip,
+} from "@/translucency";
 import { ConfirmButton, describe, NumberField, SECTION_LIST, TextSetting, type RowDef, type RowIds, type SectionDef, type SectionId } from "./parts";
+import { useTranslucency } from "./translucent";
 import { useSettings } from "./useSettings";
 
 const OS = IS_MAC ? "macOS" : "Windows";
@@ -273,6 +282,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
   const outside = useOutsideState(props.onPurchasesChanged);
   const syncSection = useSyncSection();
   const removed = useRemovedFonts(props.onPutBack);
+  const translucency = useTranslucency();
   // Font files Fontface has turned on, outside the OS's own font folders: what Turn Off All
   // covers (`wanted`), and how many of those macOS has on right now (`on`). The rest are set to
   // come back on, e.g. from a drive that isn't connected, or waiting on "Ask me".
@@ -337,6 +347,29 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 ]}
               />
             ),
+          },
+          {
+            id: "translucentSidebar",
+            label: TRANSLUCENT_LABEL,
+            description: translucentDescription(PLATFORM, translucency),
+            keywords: "transparent transparency translucent see-through blur frosted glass vibrancy mica window background reduce transparency",
+            labelsControl: true,
+            control: (ids) => {
+              const on = translucentSwitchOn(s.translucentSidebar, translucency);
+              const disabledReason = translucentDisabledReason(PLATFORM, translucency);
+              return (
+                <Tip tip={translucentSwitchTip(on, PLATFORM)} disabledReason={disabledReason}>
+                  <Switch
+                    id={ids.control}
+                    {...describe(ids)}
+                    checked={on}
+                    disabled={!!disabledReason}
+                    focusableWhenDisabled
+                    onCheckedChange={(translucentSidebar) => update({ translucentSidebar })}
+                  />
+                </Tip>
+              );
+            },
           },
           {
             id: "previewText",

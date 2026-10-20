@@ -1744,7 +1744,7 @@ export default function App() {
               onShowSkipped={showSkipped}
               onFontList={openFontList}
             />
-            <main className="relative flex min-h-0 min-w-0 flex-col outline-none" tabIndex={-1}>
+            <main className="relative flex min-h-0 min-w-0 flex-col bg-background outline-none" tabIndex={-1}>
               {/* The list layer: the place picked in the sidebar. While a page is open it stays as it
                   was (scroll, selection, loaded previews), hidden and out of reach underneath. */}
               <div inert={pageOpen} className={cn("flex min-h-0 flex-1 flex-col", pageOpen && "invisible")}>

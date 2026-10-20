@@ -515,13 +515,15 @@ fn system_dark() -> bool {
 /// Colors the main window with the app's background for this Appearance setting (macOS), so a
 /// dark launch doesn't flash white before the page's first paint. Called at launch, when the
 /// setting changes, and when macOS switches between light and dark (for "system"), so the strip a
-/// window resize uncovers matches the page.
+/// window resize uncovers matches the page. While the sidebar is see-through, the color is clear.
 pub fn paint_background(app: &AppHandle, theme: Theme) {
     let [r, g, b] = background(theme, system_dark());
+    // See-through behind the sidebar (translucency.rs): clear, so the system's blur shows.
+    let alpha = if crate::translucency::see_through() { 0 } else { 255 };
     // Other systems keep their default until it's been tried there.
     if cfg!(target_os = "macos") {
         if let Some(window) = app.get_webview_window("main") {
-            let _ = window.set_background_color(Some(tauri::window::Color(r, g, b, 255)));
+            let _ = window.set_background_color(Some(tauri::window::Color(r, g, b, alpha)));
         }
     }
 }

@@ -595,6 +595,9 @@ export interface SidebarSections {
 
 export interface AppSettings {
   theme: ThemeSetting;
+  /** "Translucent sidebar": the desktop shows softly through the sidebars (src-tauri/src/translucency.rs).
+   *  On by default on macOS and Windows, off on Linux. The OS's "reduce transparency" choice wins. */
+  translucentSidebar: boolean;
   /** Empty: each family previews its own name. */
   previewText: string;
   /** 10–128 (clamped). */
@@ -649,6 +652,22 @@ export type AppSettingsPatch = Partial<Omit<AppSettings, "sidebar" | "preview">>
   sidebar?: Partial<SidebarSections>;
   preview?: Partial<PreviewOptions>;
 };
+
+/** How the sidebars look while see-through: "blur" (the OS blurs what's behind: macOS, Windows 11)
+ *  or "plain" (nothing blurs it: Linux). */
+export type TranslucentLook = "blur" | "plain";
+
+/** What the sidebar does now (src-tauri/src/translucency.rs, `Translucency`). */
+export interface Translucency {
+  /** Null: solid. */
+  look: TranslucentLook | null;
+  /** The OS asks apps to reduce transparency, so the sidebar stays solid. */
+  reduced: boolean;
+  /** This system has no blur Fontface uses (Windows 10). */
+  unsupported: boolean;
+  /** Turned on after the window was made: it shows the next time Fontface opens (Windows, Linux). */
+  nextLaunch: boolean;
+}
 
 export interface PendingRestore {
   /** Font files that were on last time and aren't on now. 0: nothing to ask. */
@@ -836,6 +855,8 @@ export const api = {
   settingsGet: () => invoke<AppSettings>("settings_get"),
   settingsUpdate: (patch: AppSettingsPatch) => invoke<AppSettings>("settings_update", { patch }),
   settingsReset: () => invoke<AppSettings>("settings_reset"),
+  /** What the sidebar does now; "translucency-changed" says when that changes. */
+  translucencyGet: () => invoke<Translucency>("translucency_get"),
   /** Waits until launch has worked out what to ask about, so it's safe to call once at startup. */
   activationPendingRestore: () => invoke<PendingRestore>("activation_pending_restore"),
   activationRestoreDecide: (restore: boolean) => invoke<RestoreReport>("activation_restore_decide", { restore }),

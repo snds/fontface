@@ -239,6 +239,10 @@ impl Default for SidebarSections {
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     pub theme: Theme,
+    /// "Translucent sidebar": the desktop shows softly through the sidebars, blurred by the OS
+    /// (translucency.rs). On by default on macOS and Windows; off on Linux, which has no blur.
+    /// The OS's own "reduce transparency" choice always wins.
+    pub translucent_sidebar: bool,
     /// Empty: each family previews its own name.
     pub preview_text: String,
     pub preview_size: u32,
@@ -295,6 +299,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
             theme: Theme::System,
+            translucent_sidebar: TRANSLUCENT_BY_DEFAULT,
             preview_text: String::new(),
             preview_size: 32,
             restore_last_view: true,
@@ -323,6 +328,9 @@ impl Default for AppSettings {
         }
     }
 }
+
+/// Linux has no standard blur, so what's behind the window would show through sharp.
+pub const TRANSLUCENT_BY_DEFAULT: bool = !cfg!(target_os = "linux");
 
 pub const PREVIEW_SIZE: RangeInclusive<u32> = 10..=128;
 /// A Table column's width in px.
@@ -353,6 +361,7 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
         "theme" => {
             s.theme = choice(value, "Appearance", &[("system", Theme::System), ("light", Theme::Light), ("dark", Theme::Dark)])?
         }
+        "translucentSidebar" => s.translucent_sidebar = flag(value, "Translucent sidebar")?,
         "previewText" => s.preview_text = text(value)?,
         "previewSize" => s.preview_size = number(value, "Preview size", PREVIEW_SIZE)?,
         "restoreLastView" => s.restore_last_view = flag(value, "Reopen the last view")?,

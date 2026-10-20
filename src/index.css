@@ -126,6 +126,39 @@
     --active: oklch(0.72 0.17 150);
 }
 
+/* The see-through sidebar: Settings › General › Translucent sidebar. The window is see-through
+   and the OS blurs what's behind it (src-tauri/src/translucency.rs); src/settings/translucent.ts
+   puts data-translucent on <html> while it does. Only the sidebars (bg-sidebar) let it show: the
+   page behind them goes clear, while the library's content, pages, cards, menus and dialogs keep
+   their own solid backgrounds, so previews and text keep their contrast.
+   "blur": the OS softens what's behind (macOS, Windows 11), so a light tint is enough.
+   "plain": nothing does (Linux), so the tint stays heavy enough to read on. */
+:root {
+    --sidebar-glass: oklch(0.985 0 0 / 30%);
+    --sidebar-glass-plain: oklch(0.985 0 0 / 88%);
+    --sidebar-glass-accent: oklch(0.145 0 0 / 7%);
+}
+
+.dark {
+    --sidebar-glass: oklch(0.205 0 0 / 35%);
+    --sidebar-glass-plain: oklch(0.205 0 0 / 90%);
+    --sidebar-glass-accent: oklch(0.985 0 0 / 9%);
+}
+
+[data-translucent="blur"] {
+    --sidebar: var(--sidebar-glass);
+    --sidebar-accent: var(--sidebar-glass-accent);
+}
+
+[data-translucent="plain"] {
+    --sidebar: var(--sidebar-glass-plain);
+    --sidebar-accent: var(--sidebar-glass-accent);
+}
+
+[data-translucent] body {
+    background-color: transparent;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
