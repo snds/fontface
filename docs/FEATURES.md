@@ -266,6 +266,7 @@ Tags, colors, import and export are described in [TAGS.md](TAGS.md).
 | Auto-activate fonts a design file needs | ⬜ | ⬜ |
 | One name matcher for every place that names fonts (`src-tauri/src/font_names`) | 🟡 | ⬜ |
 | Turn On Fonts from a List…: paste PostScript names, full names, "Family Style" lines, a CSS font-family list or the Figma plugin's list; see what the library has; Turn On (Option-click: the other way), Add to Tag…, Copy Not Found. From the button by LIBRARY in the sidebar, and File › Turn On Fonts from a List… on macOS. Not yet checked in the running app | 🟡 | ⬜ |
+| Figma plugin, private (`figma-plugin/`): lists the fonts a Figma file uses (all pages, this page or the selection), with how many layers use each and which Figma can't find; Copy missing, Copy all ("Family Style" lines) and Copy as JSON, for Turn On Fonts from a List…. No network access, changes nothing in the file. Loaded from its manifest in the Figma desktop app (its README). Not yet run in Figma | 🟡 | ⬜ |
 | Sync tags and on/off choices between computers | 🟡 | ⬜ |
 
 ## Sync (2026-10-12)
