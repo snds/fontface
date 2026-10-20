@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import { DialogDragStrip } from "@/components/TitleBar"
+import { Tip } from "@/components/Tip"
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
@@ -64,20 +65,23 @@ function DialogContent({
         {...props}
       >
         {children}
+        {/* An icon with no words, so it has a tooltip with its name (Tip.tsx). */}
         {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            render={
-              <Button
-                variant="ghost"
-                className="absolute top-2 right-2"
-                size="icon-sm"
-              />
-            }
-          >
-            <Icon name="close" size={18} />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
+          <Tip tip="Close" shortcut="Esc">
+            <DialogPrimitive.Close
+              data-slot="dialog-close"
+              aria-label="Close"
+              render={
+                <Button
+                  variant="ghost"
+                  className="absolute top-2 right-2"
+                  size="icon-sm"
+                />
+              }
+            >
+              <Icon name="close" size={18} />
+            </DialogPrimitive.Close>
+          </Tip>
         )}
       </DialogPrimitive.Popup>
     </DialogPortal>
