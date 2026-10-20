@@ -3,6 +3,7 @@ name = "fontface"
 version = "0.1.0"
 description = "A subscription-free font manager"
 edition = "2021"
+license = "Apache-2.0"
 
 [lib]
 name = "fontface_lib"

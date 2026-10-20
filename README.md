@@ -29,3 +29,7 @@ npm run typecheck
 - [docs/FEATURES.md](docs/FEATURES.md): phased feature plan and parity checklist
 - [docs/SYNC.md](docs/SYNC.md): syncing tags and on/off choices between your computers through a folder
 - [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md): cloud font services (Google Fonts, Adobe Fonts and others): what's allowed and the plan
+
+## Licence
+
+Fontface is licensed under the [Apache License 2.0](LICENSE). [NOTICE](NOTICE) lists the parts that come from other projects.

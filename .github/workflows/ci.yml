@@ -1,0 +1,33 @@
+# Checks every push to main and every pull request on macOS, the platform Fontface ships on:
+# types, the UI tests, the front-end build, then the Rust tests. Windows and Linux jobs come once
+# their code first compiles (docs/FEATURES.md lists them as designed for, not built).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:ui
+      - run: npm run build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked

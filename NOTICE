@@ -1,0 +1,12 @@
+Fontface
+Copyright 2026 Sean Sands
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Parts of the user interface in src/components/ui are derived from shadcn/ui
+(https://ui.shadcn.com), MIT License, Copyright (c) 2023 shadcn.
+
+The app bundles these, installed as packages under their own licences:
+- IBM Plex Sans and IBM Plex Mono, through @fontsource (SIL Open Font License 1.1)
+- Google Material Symbols, through the material-symbols package (Apache License 2.0)
+- Base UI (MIT License)
