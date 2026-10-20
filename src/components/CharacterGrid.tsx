@@ -6,7 +6,7 @@ import { codeLabel, findCharacters, parseCharacterQuery, type CharacterMatch } f
 import type { FaceState } from "@/fontLoader";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { createTipHandle, Tip, TIP_DELAY, TIP_INSTANT_WINDOW, TipHost } from "@/components/Tip";
+import { TIP_DELAY, TIP_INSTANT_WINDOW } from "@/components/Tip";
 import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
@@ -186,8 +186,7 @@ function Grid({ data, fontFamily, face, variation, ready, query, results, result
   const [showAll, setShowAll] = useState(false);
   const [focus, setFocus] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
-  // One tooltip for the block buttons, and one for every cell (CellTip).
-  const [blockTips] = useState(createTipHandle);
+  // One tooltip for every cell (CellTip). The block buttons show their names: no tooltips.
   const cellTip = useRef<CellTipControl>(null);
   /** "Show all" was used: once the new cells are there, focus the first of them. */
   const focusFirstNew = useRef(false);
@@ -257,24 +256,20 @@ function Grid({ data, fontFamily, face, variation, ready, query, results, result
         <p className="text-xs text-muted-foreground">{charactersSummary(data)}</p>
       )}
       {!results && data.blocks.length > 1 && (
-        <>
-          <TipHost handle={blockTips} />
-          <div role="group" aria-label="Unicode blocks" className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
-            {data.blocks.map((b) => (
-              <Tip key={b.name} handle={blockTips} tip={`Shows the characters in ${b.name}`}>
-                <Button
-                  size="xs"
-                  variant={b.name === block.name ? "secondary" : "ghost"}
-                  aria-pressed={b.name === block.name}
-                  onClick={() => setBlockName(b.name)}
-                >
-                  {b.name}
-                  <span className="font-mono text-muted-foreground tabular-nums">{count(b).toLocaleString()}</span>
-                </Button>
-              </Tip>
-            ))}
-          </div>
-        </>
+        <div role="group" aria-label="Unicode blocks" className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+          {data.blocks.map((b) => (
+            <Button
+              key={b.name}
+              size="xs"
+              variant={b.name === block.name ? "secondary" : "ghost"}
+              aria-pressed={b.name === block.name}
+              onClick={() => setBlockName(b.name)}
+            >
+              {b.name}
+              <span className="font-mono text-muted-foreground tabular-nums">{count(b).toLocaleString()}</span>
+            </Button>
+          ))}
+        </div>
       )}
       <div
         ref={gridRef}
@@ -303,21 +298,19 @@ function Grid({ data, fontFamily, face, variation, ready, query, results, result
         <CellTip key={`${block.name}\n${query}`} control={cellTip} />
       </div>
       {!showAll && all.length > FIRST_CELLS && (
-        <Tip tip={results ? `Shows the other ${(all.length - FIRST_CELLS).toLocaleString()} characters found` : `Shows the other ${(all.length - FIRST_CELLS).toLocaleString()} characters in ${block.name}`}>
-          <Button
-            variant="outline"
-            size="sm"
-            className="self-start"
-            onClick={() => {
-              // This button goes away; focus moves to the first cell it reveals.
-              focusFirstNew.current = true;
-              setFocus(FIRST_CELLS);
-              setShowAll(true);
-            }}
-          >
-            Show all {all.length.toLocaleString()}
-          </Button>
-        </Tip>
+        <Button
+          variant="outline"
+          size="sm"
+          className="self-start"
+          onClick={() => {
+            // This button goes away; focus moves to the first cell it reveals.
+            focusFirstNew.current = true;
+            setFocus(FIRST_CELLS);
+            setShowAll(true);
+          }}
+        >
+          Show all {all.length.toLocaleString()}
+        </Button>
       )}
     </div>
   );
@@ -334,15 +327,16 @@ interface CellProps {
   onCopy: (cp: number, name: string) => void;
 }
 
-/** One character. Memoized: moving focus re-renders two cells, not the whole block. Its tooltip's
- *  words (`data-tip`) are shown by the grid's one CellTip. */
+/** One character. Memoized: moving focus re-renders two cells, not the whole block. It shows a
+ *  character, not its name, so it has a tooltip: its name (`data-tip`, "Copy U+00DF ·
+ *  germandbls"), shown by the grid's one CellTip. */
 const Cell = memo(function Cell({ cp, index, name, tabbable, glyphStyle, onFocusCell, onCopy }: CellProps) {
   return (
     <button
       type="button"
       data-cell
       tabIndex={tabbable ? 0 : -1}
-      data-tip={`Copies ${hex(cp)}${name ? ` (glyph “${name}”)` : ""}`}
+      data-tip={`Copy ${hex(cp)}${name ? ` · ${name}` : ""}`}
       aria-label={`${hex(cp)}${name ? `, glyph ${name}` : ""}. Copy`}
       onFocus={() => onFocusCell(index)}
       onClick={() => onCopy(cp, name)}
@@ -372,7 +366,7 @@ interface CellTipControl {
 }
 
 /**
- * The cells' one tooltip ("Copies U+00DF (glyph “germandbls”)"), on the cell the pointer rests on
+ * The cells' one tooltip ("Copy U+00DF · germandbls"), on the cell the pointer rests on
  * or keyboard focus is on, with the app's timing (components/Tip.tsx): it opens once the pointer
  * rests for TIP_DELAY, and at once while one is open or has just closed. It's one for the whole
  * grid, not a Tip per cell, because a block can hold tens of thousands of cells (Show all), and

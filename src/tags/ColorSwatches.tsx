@@ -13,7 +13,7 @@ interface Props {
 }
 
 /** The fixed palette as a radio group: one tab stop, arrow keys move, names for screen readers.
- *  Each swatch's tooltip names its color (hover or the arrow keys), since the dot alone doesn't. */
+ *  Each swatch's tooltip shows its name ("Blue", "Gray (default)"), since the dot alone doesn't. */
 export function ColorSwatches({ value, onChange, label = "Color", defaultColor }: Props) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const current = value ? PALETTE.indexOf(value) : -1;
@@ -34,9 +34,9 @@ export function ColorSwatches({ value, onChange, label = "Color", defaultColor }
       {PALETTE.map((c, i) => {
         const checked = c === value;
         const name = COLOR_NAMES[c] + (c === defaultColor ? " (default)" : "");
-        // The name is the swatch's accessible name already, so the tooltip isn't its description too.
+        // The tooltip is the swatch's name (aria-label), so it isn't its description too.
         return (
-          <Tip key={c} tip={checked ? `${name}, chosen` : `Uses ${name}`} describe={false}>
+          <Tip key={c} tip={name}>
             <button
               ref={(el) => {
                 refs.current[i] = el;

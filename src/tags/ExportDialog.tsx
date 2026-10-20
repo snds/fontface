@@ -3,7 +3,6 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { tagsApi, type FileExportFormat, type Tag } from "./api";
 
@@ -11,46 +10,36 @@ const n = (v: number) => v.toLocaleString();
 
 type Format = FileExportFormat | "finder" | "fontBook";
 
-/** `tip`: the choice's tooltip, a short version of its `hint` (which the card shows). `run`: the
- *  Export button's tooltip with it chosen. */
-const FORMATS: { value: Format; title: string; hint: string; tip: string; run: string; ext?: string }[] = [
+/** The choices, as cards with their `hint` under the title. They show their words, so they have no
+ *  tooltip, and neither has the Export button. */
+const FORMATS: { value: Format; title: string; hint: string; ext?: string }[] = [
   {
     value: "json",
     title: "Fontface tags file (.json)",
     hint: "Tags, their colors and their fonts. Fontface can import it again, on this Mac or another.",
-    tip: "Exports a file Fontface can import again",
-    run: "Asks where to save the file, then saves it",
     ext: "json",
   },
   {
     value: "csv",
     title: "Spreadsheet (.csv)",
     hint: "One row for each font and tag. Opens in Numbers or Excel.",
-    tip: "Exports a spreadsheet of fonts and their tags",
-    run: "Asks where to save the spreadsheet, then saves it",
     ext: "csv",
   },
   {
     value: "typeface",
     title: "Another font manager's backup",
     hint: "The backup format that Import reads, for restoring your tags in the app that makes it. Not yet tried in that app.",
-    tip: "Exports a backup that another font manager can restore",
-    run: "Asks where to save the backup, then saves it",
     ext: "typeface-backup",
   },
   {
     value: "finder",
     title: "Finder tags on the font files",
     hint: "Adds each tag to the font files, so Finder and Spotlight can find them. Tags already on a file stay. Fonts in macOS Fonts are left alone. Files in cloud folders sync their tags too.",
-    tip: "Adds the tags to the font files, for Finder and Spotlight",
-    run: "Adds the tags to the font files now",
   },
   {
     value: "fontBook",
     title: "macOS font collections",
     hint: "Adds a font collection on this Mac for each tag. Fonts already in a collection stay. Collections only list fonts that are turned on.",
-    tip: "Adds a font collection on this Mac for each tag",
-    run: "Adds a font collection for each tag now",
   },
 ];
 
@@ -110,31 +99,26 @@ export function ExportDialog({ open, tag, onClose }: { open: boolean; tag?: Tag;
         </DialogHeader>
         <fieldset className="flex flex-col gap-1.5">
           <legend className="sr-only">Format</legend>
-          {/* The tooltip is on the whole card, so hovering it or focusing its radio shows it. The
-              card's words are the radio's name already, so it isn't a description too. */}
           {FORMATS.map((f) => (
-            <Tip key={f.value} tip={f.tip} describe={false}>
-              <label
-                className={cn("flex cursor-default items-start gap-3 rounded-lg border p-3", format === f.value ? "border-ring bg-muted/60" : "hover:bg-muted/40")}
-              >
-                <input type="radio" name="export-format" value={f.value} checked={format === f.value} onChange={() => setFormat(f.value)} className="mt-1 accent-primary" />
-                <span className="flex flex-col gap-0.5">
-                  <span className="text-sm font-medium">{f.title}</span>
-                  <span className="text-xs text-muted-foreground">{f.hint}</span>
-                </span>
-              </label>
-            </Tip>
+            <label
+              key={f.value}
+              className={cn("flex cursor-default items-start gap-3 rounded-lg border p-3", format === f.value ? "border-ring bg-muted/60" : "hover:bg-muted/40")}
+            >
+              <input type="radio" name="export-format" value={f.value} checked={format === f.value} onChange={() => setFormat(f.value)} className="mt-1 accent-primary" />
+              <span className="flex flex-col gap-0.5">
+                <span className="text-sm font-medium">{f.title}</span>
+                <span className="text-xs text-muted-foreground">{f.hint}</span>
+              </span>
+            </label>
           ))}
         </fieldset>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Tip tip={FORMATS.find((f) => f.value === format)!.run} disabledReason={working && "Wait: Fontface is still exporting"}>
-            <Button onClick={run} disabled={working} focusableWhenDisabled className="aria-disabled:opacity-50">
-              {working ? "Exporting…" : format === "finder" ? "Add Finder tags" : format === "fontBook" ? "Add collections" : "Export…"}
-            </Button>
-          </Tip>
+          <Button onClick={run} disabled={working} focusableWhenDisabled className="aria-disabled:opacity-50">
+            {working ? "Exporting…" : format === "finder" ? "Add Finder tags" : format === "fontBook" ? "Add collections" : "Export…"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

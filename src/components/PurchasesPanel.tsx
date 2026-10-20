@@ -19,16 +19,14 @@ import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
-  checkNowBlocked,
+  canCheckNow,
   emptyFindsText,
   foldersLabel,
   PRIVACY_SETTINGS_LABEL,
-  PRIVACY_SETTINGS_TIP,
   PRIVACY_SETTINGS_URL,
   WATCH_LABEL,
   watchExplainer,
   watchNotice,
-  watchSwitchTip,
 } from "@/purchaseWatch";
 import { Tip } from "./Tip";
 import { IS_MAC, PageHeader, type PageBack } from "./TitleBar";
@@ -75,34 +73,6 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const fileName = (path: string) => path.split(/[/\\]/).pop() || path;
 const FILE_BROWSER = IS_MAC ? "Finder" : "File Explorer";
 
-/** File names for a tooltip, one per line: the first dozen, then how many more. */
-const fileLines = (files: string[], max = 12) =>
-  files.length <= max ? files.join("\n") : `${files.slice(0, max).join("\n")}\n+${files.length - max} more`;
-
-/** What Add to library does, on the button and in the store dialog. */
-const ADD_TIP = "Copies these fonts into Fontface, adds them and turns them on";
-/** What Remove does once you confirm. */
-const REMOVE_TIP = "Turns its fonts off and deletes the copy Fontface made";
-/** What I bought it does. */
-const BOUGHT_TIP = "Stops marking it as a trial, because you have a license";
-/** Why a purchase's buttons are greyed out while something runs on it. */
-const ITEM_BUSY = "Wait: Fontface is still working on this purchase";
-const SWAPPING = "Wait: Fontface is still swapping in a newer version of it";
-const SETTING_BUSY = "Wait: Fontface is still saving the last change";
-const TURNING_ON = IS_MAC ? "Wait: macOS may be asking whether Fontface can see your folders" : SETTING_BUSY;
-
-/** A badge that explains itself on hover; screen readers hear the explanation with it. */
-function NoteBadge({ note, children }: { note: string; children: React.ReactNode }) {
-  return (
-    <Tip tip={note} describe={false} contentClassName="max-w-xs">
-      <Badge variant="outline">
-        {children}
-        <span className="sr-only">. {note}</span>
-      </Badge>
-    </Tip>
-  );
-}
-
 function StoreSelect({
   value,
   stores,
@@ -115,22 +85,20 @@ function StoreSelect({
   label: string;
 }) {
   return (
-    <Tip tip="Picks the store these fonts came from, to file them under">
-      <select
-        aria-label={label}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-7 rounded-md border bg-background px-2 text-xs"
-      >
-        <option value="">Store unknown: choose…</option>
-        {stores.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-        <option value="other">Other / not listed</option>
-      </select>
-    </Tip>
+    <select
+      aria-label={label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-7 rounded-md border bg-background px-2 text-xs"
+    >
+      <option value="">Store unknown: choose…</option>
+      {stores.map((s) => (
+        <option key={s.id} value={s.id}>
+          {s.name}
+        </option>
+      ))}
+      <option value="other">Other / not listed</option>
+    </select>
   );
 }
 
@@ -149,9 +117,6 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
   const [settingBusy, setSettingBusy] = useState(false);
   /** Why turning watching on didn't fully work (a folder macOS wouldn't let Fontface see). */
   const [watchNote, setWatchNote] = useState<string | null>(null);
-  /** Watching is being turned on: macOS may be asking about Downloads right now. */
-  const [turningOn, setTurningOn] = useState(false);
-  const watchHintId = useId();
   const watchAboutId = useId();
   const setting = async (op: () => Promise<unknown>, done?: string) => {
     if (settingBusy) return;
@@ -247,8 +212,6 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
     );
   }
 
-  /** What the watch switch does now, or why it's greyed out. */
-  const watchTip = settingBusy ? (turningOn ? TURNING_ON : SETTING_BUSY) : watchSwitchTip(status.watching, IS_MAC);
   /** Turning on is when macOS asks for access to Downloads; the answer decides what's shown. */
   const setWatching = (on: boolean) =>
     setting(async () => {
@@ -257,32 +220,23 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
         await api.purchasesSetWatching(false);
         return;
       }
-      setTurningOn(true);
-      try {
-        const change = await api.purchasesSetWatching(true);
-        setWatchNote(watchNotice(change, IS_MAC));
-        if (change.watching) toast.success("Watching for font downloads");
-      } finally {
-        setTurningOn(false);
-      }
+      const change = await api.purchasesSetWatching(true);
+      setWatchNote(watchNotice(change, IS_MAC));
+      if (change.watching) toast.success("Watching for font downloads");
     });
-  const checkBlocked = checkNowBlocked(status.watching, status.folders.length, checking);
+  const checkBlocked = !canCheckNow(status.watching, status.folders.length, checking);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader icon="shopping_bag" title="Purchases" back={back}>
-        <Tip tip="Adds fonts you bought earlier, from a zip or font files">
-          <Button size="sm" variant="outline" onClick={() => pickImport(false)}>
-            <Icon name="upload_file" size={16} />
-            Import zip or fonts…
-          </Button>
-        </Tip>
-        <Tip tip="Adds fonts you bought earlier, from a folder">
-          <Button size="sm" variant="outline" onClick={() => pickImport(true)}>
-            <Icon name="drive_folder_upload" size={16} />
-            Import folder…
-          </Button>
-        </Tip>
+        <Button size="sm" variant="outline" onClick={() => pickImport(false)}>
+          <Icon name="upload_file" size={16} />
+          Import zip or fonts…
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => pickImport(true)}>
+          <Icon name="drive_folder_upload" size={16} />
+          Import folder…
+        </Button>
       </PageHeader>
       <div className="flex flex-col gap-3 border-b px-4 py-3">
         <p className="max-w-2xl text-xs text-muted-foreground">
@@ -292,44 +246,36 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
           is uploaded anywhere.
         </p>
         <div className="flex flex-wrap items-center gap-3">
-          {/* The whole label shows the tooltip (keyboard focus on the switch too). Its words are
-              the switch's description. */}
-          <Tip tip={watchTip} describe={false}>
-            <label className="flex items-center gap-2 text-sm">
-              <Switch
-                checked={status.watching}
-                disabled={settingBusy}
-                focusableWhenDisabled
-                onCheckedChange={setWatching}
-                aria-label={WATCH_LABEL}
-                aria-describedby={status.watching ? watchHintId : `${watchHintId} ${watchAboutId}`}
-              />
-              {WATCH_LABEL}
-              <span id={watchHintId} hidden>
-                {watchTip}
-              </span>
-            </label>
-          </Tip>
-          <Tip tip="Looks in your watched folders for new font downloads now" disabledReason={checkBlocked}>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!!checkBlocked}
+          {/* While it's off, the words under it say what turning it on does. */}
+          <label className="flex items-center gap-2 text-sm">
+            <Switch
+              checked={status.watching}
+              disabled={settingBusy}
               focusableWhenDisabled
-              className="aria-disabled:opacity-50"
-              onClick={async () => {
-                setChecking(true);
-                await run(async () => {
-                  const n = await api.purchasesCheckNow();
-                  toast.info(n ? `Found ${n} new font ${n === 1 ? "download" : "downloads"}` : "No new font downloads");
-                });
-                setChecking(false);
-              }}
-            >
-              <Icon name="refresh" size={16} className={cn(checking && "animate-spin")} />
-              Check now
-            </Button>
-          </Tip>
+              onCheckedChange={setWatching}
+              aria-label={WATCH_LABEL}
+              aria-describedby={status.watching ? undefined : watchAboutId}
+            />
+            {WATCH_LABEL}
+          </label>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={checkBlocked}
+            focusableWhenDisabled
+            className="aria-disabled:opacity-50"
+            onClick={async () => {
+              setChecking(true);
+              await run(async () => {
+                const n = await api.purchasesCheckNow();
+                toast.info(n ? `Found ${n} new font ${n === 1 ? "download" : "downloads"}` : "No new font downloads");
+              });
+              setChecking(false);
+            }}
+          >
+            <Icon name="refresh" size={16} className={cn(checking && "animate-spin")} />
+            Check now
+          </Button>
         </div>
         {!status.watching && (
           <p id={watchAboutId} className="max-w-2xl text-xs text-muted-foreground">
@@ -341,11 +287,9 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
             <Icon name="lock" size={16} className="text-muted-foreground" />
             <p className="min-w-0 flex-1 text-pretty">{watchNote}</p>
             {IS_MAC && (
-              <Tip tip={PRIVACY_SETTINGS_TIP}>
-                <Button size="xs" variant="outline" onClick={() => openUrl(PRIVACY_SETTINGS_URL).catch((e) => toast.error(message(e)))}>
-                  {PRIVACY_SETTINGS_LABEL}
-                </Button>
-              </Tip>
+              <Button size="xs" variant="outline" onClick={() => openUrl(PRIVACY_SETTINGS_URL).catch((e) => toast.error(message(e)))}>
+                {PRIVACY_SETTINGS_LABEL}
+              </Button>
             )}
           </div>
         )}
@@ -361,16 +305,16 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                   f.problem && "border-destructive/50 text-destructive",
                 )}
               >
-                {/* The whole path, or what's wrong with the folder (also listed below). */}
-                <Tip tip={f.problem ?? f.path} describe={false} contentClassName="max-w-sm break-all">
+                {/* The folder's name, and its whole path on hover. What's wrong with it is listed below. */}
+                <Tip tip={f.path} contentClassName="max-w-sm break-all">
                   <span className="flex items-center gap-1">
                     {f.problem && <Icon name="warning" size={14} />}
                     {fileName(f.path)}
                   </span>
                 </Tip>
-                {/* Greyed out with aria-disabled, not disabled, so its tooltip still shows;
+                {/* Greyed out with aria-disabled, not disabled, so it keeps focus and its tooltip;
                     `setting` ignores the click while busy. */}
-                <Tip tip="Stops watching this folder for font downloads" disabledReason={settingBusy && SETTING_BUSY}>
+                <Tip tip="Stop watching">
                   <button
                     className="rounded-full hover:text-foreground aria-disabled:opacity-50"
                     aria-label={`Stop watching ${f.path}`}
@@ -382,12 +326,10 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                 </Tip>
               </span>
             ))}
-            <Tip tip="Picks another folder to watch for font downloads" disabledReason={settingBusy && SETTING_BUSY}>
-              <Button size="xs" variant="ghost" onClick={addFolder} disabled={settingBusy} focusableWhenDisabled className="aria-disabled:opacity-50">
-                <Icon name="add" size={14} />
-                Add folder
-              </Button>
-            </Tip>
+            <Button size="xs" variant="ghost" onClick={addFolder} disabled={settingBusy} focusableWhenDisabled className="aria-disabled:opacity-50">
+              <Icon name="add" size={14} />
+              Add folder
+            </Button>
           </div>
           {status.folders
             .filter((f) => f.problem)
@@ -429,12 +371,8 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <Tip tip={find.path} describe={false} contentClassName="max-w-sm break-all">
-                      <span className="truncate text-sm font-medium">{find.contents.families.length ? list(find.contents.families) : find.name}</span>
-                    </Tip>
-                    {find.contents.trial && (
-                      <NoteBadge note="The name suggests trial or demo fonts, which usually aren't licensed for commercial work">Looks like a trial</NoteBadge>
-                    )}
+                    <span className="truncate text-sm font-medium">{find.contents.families.length ? list(find.contents.families) : find.name}</span>
+                    {find.contents.trial && <Badge variant="outline">Looks like a trial</Badge>}
                   </div>
                   <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
                     <span className="font-mono">{find.name}</span>
@@ -442,33 +380,17 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                       {find.contents.fonts.length} {find.contents.fonts.length === 1 ? "font" : "fonts"}
                       {find.contents.licenses.length > 0 ? ` · ${find.contents.licenses.length} license` : " · no license file found"}
                     </span>
-                    {find.contents.skippedFonts.length > 0 && (
-                      <Tip tip={fileLines(find.contents.skippedFonts)} describe={false} contentClassName="max-w-sm break-all whitespace-pre-line">
-                        <span>
-                          {find.contents.skippedFonts.length} web, app or duplicate files left out
-                          <span className="sr-only">: {list(find.contents.skippedFonts, 12)}</span>
-                        </span>
-                      </Tip>
-                    )}
+                    {find.contents.skippedFonts.length > 0 && <span>{find.contents.skippedFonts.length} web, app or duplicate files left out</span>}
                     {find.contents.unreadable.length > 0 && (
-                      <Tip tip={fileLines(find.contents.unreadable)} describe={false} contentClassName="max-w-sm break-all whitespace-pre-line">
-                        <span className="text-destructive">
-                          {find.contents.unreadable.length} {find.contents.unreadable.length === 1 ? "file" : "files"} couldn't be
-                          read
-                          <span className="sr-only">: {list(find.contents.unreadable, 12)}</span>
-                        </span>
-                      </Tip>
+                      <span className="text-destructive">
+                        {find.contents.unreadable.length} {find.contents.unreadable.length === 1 ? "file" : "files"} couldn't be read
+                      </span>
                     )}
                     {from &&
                       (from.openable ? (
-                        <Tip tip="Opens the page this download came from, in your browser">
-                          <button
-                            className="underline-offset-2 hover:underline"
-                            onClick={() => openUrl(from.url).catch((e) => toast.error(message(e)))}
-                          >
-                            from {from.host}
-                          </button>
-                        </Tip>
+                        <button className="underline-offset-2 hover:underline" onClick={() => openUrl(from.url).catch((e) => toast.error(message(e)))}>
+                          from {from.host}
+                        </button>
                       ) : (
                         <span>from {from.host}</span>
                       ))}
@@ -489,57 +411,33 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                   onChange={(v) => setStoreChoice((c) => ({ ...c, [find.id]: v }))}
                 />
                 {older ? (
-                  <Tip
-                    tip="Swaps in the new files and turns the same styles back on"
-                    disabledReason={
-                      busy.has(key)
-                        ? "Wait: Fontface is still swapping in this version"
-                        : busy.has(`dir:${older.dir}`)
-                          ? `Wait: Fontface is still working on “${older.label}”`
-                          : find.missing && "The download is gone, so there's nothing to swap in. Dismiss it."
-                    }
+                  <Button
+                    size="sm"
+                    disabled={busy.has(key) || busy.has(`dir:${older.dir}`) || find.missing}
+                    focusableWhenDisabled
+                    className="aria-disabled:opacity-50"
+                    aria-label={`Replace ${older.label} with ${find.name}`}
+                    onClick={() => run(() => onReplace(find, older.dir))}
                   >
-                    <Button
-                      size="sm"
-                      disabled={busy.has(key) || busy.has(`dir:${older.dir}`) || find.missing}
-                      focusableWhenDisabled
-                      className="aria-disabled:opacity-50"
-                      aria-label={`Replace ${older.label} with ${find.name}`}
-                      onClick={() => run(() => onReplace(find, older.dir))}
-                    >
-                      {busy.has(key) ? (
-                        <Icon name="progress_activity" size={16} className="animate-spin" />
-                      ) : (
-                        <Icon name="swap_horiz" size={16} />
-                      )}
-                      Replace
-                    </Button>
-                  </Tip>
-                ) : (
-                  <Tip
-                    tip={ADD_TIP}
-                    disabledReason={
-                      busy.has(key) ? "Wait: Fontface is still adding these fonts" : find.missing && "The download is gone, so there's nothing to add. Dismiss it."
-                    }
-                  >
-                    <Button
-                      size="sm"
-                      disabled={busy.has(key) || find.missing}
-                      focusableWhenDisabled
-                      className="aria-disabled:opacity-50"
-                      aria-label={`Add ${find.name} to the library`}
-                      onClick={() => run(() => onImport(find, chosen || null))}
-                    >
-                      {busy.has(key) ? <Icon name="progress_activity" size={16} className="animate-spin" /> : <Icon name="add" size={16} />}
-                      Add to library
-                    </Button>
-                  </Tip>
-                )}
-                <Tip tip="Takes this download off the list. The file stays where it is.">
-                  <Button size="sm" variant="ghost" aria-label={`Dismiss ${find.name}`} onClick={() => run(() => api.purchasesDismiss(find.id))}>
-                    Dismiss
+                    {busy.has(key) ? <Icon name="progress_activity" size={16} className="animate-spin" /> : <Icon name="swap_horiz" size={16} />}
+                    Replace
                   </Button>
-                </Tip>
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={busy.has(key) || find.missing}
+                    focusableWhenDisabled
+                    className="aria-disabled:opacity-50"
+                    aria-label={`Add ${find.name} to the library`}
+                    onClick={() => run(() => onImport(find, chosen || null))}
+                  >
+                    {busy.has(key) ? <Icon name="progress_activity" size={16} className="animate-spin" /> : <Icon name="add" size={16} />}
+                    Add to library
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" aria-label={`Dismiss ${find.name}`} onClick={() => run(() => api.purchasesDismiss(find.id))}>
+                  Dismiss
+                </Button>
               </div>
             );
           })}
@@ -560,31 +458,27 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                     If you bought a license, say so. If not, remove it.
                   </p>
                 </div>
-                <Tip tip={BOUGHT_TIP} disabledReason={busy.has(`dir:${item.dir}`) && ITEM_BUSY}>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy.has(`dir:${item.dir}`)}
-                    focusableWhenDisabled
-                    className="aria-disabled:opacity-50"
-                    onClick={() => boughtIt(item)}
-                  >
-                    <Icon name="check" size={16} />I bought it
-                  </Button>
-                </Tip>
-                <Tip tip={`${REMOVE_TIP}, after asking`} disabledReason={busy.has(`dir:${item.dir}`) ? ITEM_BUSY : replacing.has(item.dir) && SWAPPING}>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label={`Remove ${item.label}`}
-                    disabled={busy.has(`dir:${item.dir}`) || replacing.has(item.dir)}
-                    focusableWhenDisabled
-                    className="aria-disabled:opacity-50"
-                    onClick={() => ask({ kind: "remove", item })}
-                  >
-                    Remove
-                  </Button>
-                </Tip>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy.has(`dir:${item.dir}`)}
+                  focusableWhenDisabled
+                  className="aria-disabled:opacity-50"
+                  onClick={() => boughtIt(item)}
+                >
+                  <Icon name="check" size={16} />I bought it
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Remove ${item.label}`}
+                  disabled={busy.has(`dir:${item.dir}`) || replacing.has(item.dir)}
+                  focusableWhenDisabled
+                  className="aria-disabled:opacity-50"
+                  onClick={() => ask({ kind: "remove", item })}
+                >
+                  Remove
+                </Button>
               </div>
             ))}
           </section>
@@ -613,94 +507,80 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
                   <span className="text-sm font-semibold">{storeName}</span>
                   <span className="text-xs text-muted-foreground">{items.length}</span>
                   {subscription && (
-                    <Tip
-                      tip={`Removes your ${storeName} subscription fonts, after asking`}
-                      disabledReason={storeBusy && `Wait: Fontface is still working on your ${storeName} fonts`}
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="ml-auto aria-disabled:opacity-50"
+                      disabled={storeBusy}
+                      focusableWhenDisabled
+                      onClick={() => ask({ kind: "ended", store: subscription.store, name: storeName })}
                     >
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        className="ml-auto aria-disabled:opacity-50"
-                        disabled={storeBusy}
-                        focusableWhenDisabled
-                        onClick={() => ask({ kind: "ended", store: subscription.store, name: storeName })}
-                      >
-                        {busy.has(`store:${subscription.store}`) && <Icon name="progress_activity" size={14} className="animate-spin" />}
-                        My {storeName} subscription ended…
-                      </Button>
-                    </Tip>
+                      {busy.has(`store:${subscription.store}`) && <Icon name="progress_activity" size={14} className="animate-spin" />}
+                      My {storeName} subscription ended…
+                    </Button>
                   )}
                 </div>
                 {items.map((item) => {
                   const itemBusy = busy.has(`dir:${item.dir}`) || storeBusy || replacing.has(item.dir);
-                  const busyReason = replacing.has(item.dir) ? SWAPPING : ITEM_BUSY;
                   return (
                     <div key={item.dir} className="flex flex-wrap items-center gap-2 border-b py-2 last:border-b-0">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm">{item.label}</span>
-                          {item.subscriptionBound && <NoteBadge note="The license ends with your subscription">Subscription</NoteBadge>}
-                          {item.mayBeTrial && <NoteBadge note="Trial fonts usually aren't licensed for commercial work">May be a trial</NoteBadge>}
+                          {item.subscriptionBound && <Badge variant="outline">Subscription</Badge>}
+                          {item.mayBeTrial && <Badge variant="outline">May be a trial</Badge>}
                         </div>
                         <div className="text-xs text-muted-foreground">
                           {item.fontFiles} {item.fontFiles === 1 ? "font file" : "font files"} · added {when(item.importedAt)} ·{" "}
                           {item.licenseFiles.length ? `license: ${list(item.licenseFiles, 2)}` : "no license file was included"}
                         </div>
                       </div>
-                      <Tip tip={`Shows the copy Fontface made, in ${FILE_BROWSER}`}>
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          aria-label={`Show ${item.label} in ${FILE_BROWSER}`}
-                          onClick={() => api.purchasesReveal(item.dir).catch((e) => toast.error(message(e)))}
-                        >
-                          <Icon name="folder_open" size={14} />
-                          Show
-                        </Button>
-                      </Tip>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        aria-label={`Show ${item.label} in ${FILE_BROWSER}`}
+                        onClick={() => api.purchasesReveal(item.dir).catch((e) => toast.error(message(e)))}
+                      >
+                        <Icon name="folder_open" size={14} />
+                        Show
+                      </Button>
                       {item.mayBeTrial && (
-                        <Tip tip={BOUGHT_TIP} disabledReason={itemBusy && busyReason}>
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            aria-label={`I bought ${item.label}`}
-                            disabled={itemBusy}
-                            focusableWhenDisabled
-                            className="aria-disabled:opacity-50"
-                            onClick={() => boughtIt(item)}
-                          >
-                            <Icon name="check" size={14} />I bought it
-                          </Button>
-                        </Tip>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          aria-label={`I bought ${item.label}`}
+                          disabled={itemBusy}
+                          focusableWhenDisabled
+                          className="aria-disabled:opacity-50"
+                          onClick={() => boughtIt(item)}
+                        >
+                          <Icon name="check" size={14} />I bought it
+                        </Button>
                       )}
-                      <Tip tip="Removes these fonts, after asking, because you passed the license on" disabledReason={itemBusy && busyReason}>
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          aria-label={`Mark ${item.label} as transferred`}
-                          disabled={itemBusy}
-                          focusableWhenDisabled
-                          className="aria-disabled:opacity-50"
-                          onClick={() => ask({ kind: "transferred", item })}
-                        >
-                          <Icon name="move_item" size={14} />
-                          License transferred…
-                        </Button>
-                      </Tip>
-                      <Tip tip={`${REMOVE_TIP}, after asking`} disabledReason={itemBusy && busyReason}>
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          aria-label={`Remove ${item.label}`}
-                          disabled={itemBusy}
-                          focusableWhenDisabled
-                          className="aria-disabled:opacity-50"
-                          onClick={() => ask({ kind: "remove", item })}
-                        >
-                          <Icon name="delete" size={14} />
-                          Remove
-                        </Button>
-                      </Tip>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        aria-label={`Mark ${item.label} as transferred`}
+                        disabled={itemBusy}
+                        focusableWhenDisabled
+                        className="aria-disabled:opacity-50"
+                        onClick={() => ask({ kind: "transferred", item })}
+                      >
+                        <Icon name="move_item" size={14} />
+                        License transferred…
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        aria-label={`Remove ${item.label}`}
+                        disabled={itemBusy}
+                        focusableWhenDisabled
+                        className="aria-disabled:opacity-50"
+                        onClick={() => ask({ kind: "remove", item })}
+                      >
+                        <Icon name="delete" size={14} />
+                        Remove
+                      </Button>
                     </div>
                   );
                 })}
@@ -723,16 +603,14 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
           <StoreSelect label="Store" value={importStore} stores={status.stores} onChange={setImportStore} />
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <Tip tip={ADD_TIP}>
-              <AlertDialogAction
-                onClick={() => {
-                  if (importing) run(() => onImportPath(importing.path, importStore || null));
-                  setImporting(null);
-                }}
-              >
-                Add to library
-              </AlertDialogAction>
-            </Tip>
+            <AlertDialogAction
+              onClick={() => {
+                if (importing) run(() => onImportPath(importing.path, importStore || null));
+                setImporting(null);
+              }}
+            >
+              Add to library
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -763,28 +641,18 @@ export function PurchasesPanel({ version, busy, onStatus, onImport, onImportPath
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <Tip
-              tip={
-                confirm?.kind === "transferred"
-                  ? "Removes these fonts, and doesn't offer this download again"
-                  : confirm?.kind === "ended"
-                    ? "Turns these fonts off and deletes the copies Fontface made"
-                    : REMOVE_TIP
-              }
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const c = confirm;
+                setConfirmOpen(false);
+                if (c?.kind === "remove") run(() => onRemove(c.item), `Removed ${c.item.label}`);
+                if (c?.kind === "transferred") run(() => onRemove(c.item, true), `Removed ${c.item.label}`);
+                if (c?.kind === "ended") run(() => onSubscriptionEnded(c.store, c.name));
+              }}
             >
-              <AlertDialogAction
-                variant="destructive"
-                onClick={() => {
-                  const c = confirm;
-                  setConfirmOpen(false);
-                  if (c?.kind === "remove") run(() => onRemove(c.item), `Removed ${c.item.label}`);
-                  if (c?.kind === "transferred") run(() => onRemove(c.item, true), `Removed ${c.item.label}`);
-                  if (c?.kind === "ended") run(() => onSubscriptionEnded(c.store, c.name));
-                }}
-              >
-                {confirm?.kind === "transferred" ? "Turn off and remove" : "Remove"}
-              </AlertDialogAction>
-            </Tip>
+              {confirm?.kind === "transferred" ? "Turn off and remove" : "Remove"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -1,8 +1,8 @@
-// Run with `npm run test:ui`. Shortcut words for tooltips, and their screen-reader description (tips.ts).
+// Run with `npm run test:ui`. Shortcut words for tooltips, and Esc past a closing tooltip (tips.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { shortcutText } from "./fontActions.ts";
-import { joinIds, keyHandled, noteTooltipEscape, shortcutAria, shortcutLabel, shortcutSaid, tipSaid } from "./tips.ts";
+import { joinIds, keyHandled, noteTooltipEscape, shortcutAria, shortcutLabel, shortcutSaid } from "./tips.ts";
 
 test("Mod is Command on macOS and Ctrl on Windows", () => {
   assert.equal(shortcutLabel("Mod+1", true), "⌘1");
@@ -78,11 +78,6 @@ test("said the way each platform names the keys", () => {
 test("a key it doesn't know is shown as written", () => {
   assert.equal(shortcutLabel("Mod+Foo", false), "Ctrl+Foo");
   assert.equal(shortcutLabel("Hyper+K", false), "Hyper+K", "an unknown modifier is part of the key");
-});
-
-test("the description adds the shortcut as said", () => {
-  assert.equal(tipSaid("Shows fonts as tiles"), "Shows fonts as tiles");
-  assert.equal(tipSaid("Shows fonts as tiles", "Command-1"), "Shows fonts as tiles (Command-1)");
 });
 
 test("description ids keep the control's own first", () => {

@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { Tip } from "@/components/Tip";
 import { CopyCssButton, FactsMessage, type FactsState } from "./parts";
 
 interface Props {
@@ -22,9 +21,9 @@ interface Props {
   instances: NamedInstance[] | null;
   facts: FactsState;
   retry: () => void;
-  /** Copy as CSS, and why it can't copy yet (FontPage). */
+  /** Copy as CSS, and whether it's waiting for the style's features (FontPage). */
   onCopyCss: () => void;
-  copyWait?: string | false;
+  copyWait?: boolean;
 }
 
 const tidy = (v: number) => String(Math.round(v * 100) / 100);
@@ -49,7 +48,6 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
   const named = instances ?? [];
   const current = currentInstance(named, axes, values);
   const changed = Object.keys(values).length > 0;
-  const optical = axes.some((a) => a.tag === OPSZ);
   return (
     <div className="flex max-w-2xl flex-col gap-6 px-6 pt-5 pb-12">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -67,11 +65,9 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
               }}
               items={[...named.map((n, i) => ({ value: String(i), label: n.name })), { value: CUSTOM, label: "Custom" }]}
             >
-              <Tip tip="Sets every axis to one of the font's named styles">
-                <SelectTrigger size="sm" aria-labelledby={`${id}-named`} className="min-w-40">
-                  <SelectValue />
-                </SelectTrigger>
-              </Tip>
+              <SelectTrigger size="sm" aria-labelledby={`${id}-named`} className="min-w-40">
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent className="max-h-80">
                 {named.map((n, i) => (
                   <SelectItem key={`${n.name}-${i}`} value={String(i)}>
@@ -91,24 +87,17 @@ export function AxesTab({ axes, values, onChange, onSet, instances, facts, retry
         <span className="flex-1" />
         {hidden > 0 && (
           <label className="flex items-center gap-2 text-sm">
-            <Tip tip={showHidden ? "Hides the fine-tuning axes again" : "Shows the fine-tuning axes the font's maker hid"}>
-              <Checkbox checked={showHidden} onCheckedChange={(on) => setShowHidden(on)} />
-            </Tip>
+            <Checkbox checked={showHidden} onCheckedChange={(on) => setShowHidden(on)} />
             Show hidden axes ({hidden})
           </label>
         )}
-        <CopyCssButton onCopy={onCopyCss} variable waiting={copyWait} />
-        {/* Stays focusable once every axis is back at its default (focus doesn't fall out of the
-            page, and the tooltip says why it's greyed out). */}
-        <Tip
-          tip={optical ? "Puts every axis back to its default, with optical size following the text size" : "Puts every axis back to its default"}
-          disabledReason={!changed && "Nothing to reset yet: every axis is at its default"}
-        >
-          <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={() => onSet({})}>
-            <Icon name="restart_alt" size={16} />
-            Reset
-          </Button>
-        </Tip>
+        <CopyCssButton onCopy={onCopyCss} waiting={copyWait} />
+        {/* Stays focusable once every axis is back at its default, so focus doesn't fall out of
+            the page. */}
+        <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={() => onSet({})}>
+          <Icon name="restart_alt" size={16} />
+          Reset
+        </Button>
       </div>
       {facts.status !== "ready" || facts.answer.unread ? <FactsMessage state={facts} retry={retry} what="named styles" /> : null}
       <p className="-mt-2 text-xs text-muted-foreground">Changes show in Specimen, Characters and OpenType too, for this style.</p>
@@ -176,17 +165,15 @@ function AxisRow({
         {follow && (
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <span id={`${id}-follow`}>Follow text size</span>
-            <Tip tip={following ? "Stops following the text size, so you can set it by hand" : "Makes optical size follow each preview's text size"}>
-              <Switch
-                size="sm"
-                checked={following}
-                onCheckedChange={(on) => {
-                  setDraft(null);
-                  follow.set(on);
-                }}
-                aria-labelledby={`${id}-follow`}
-              />
-            </Tip>
+            <Switch
+              size="sm"
+              checked={following}
+              onCheckedChange={(on) => {
+                setDraft(null);
+                follow.set(on);
+              }}
+              aria-labelledby={`${id}-follow`}
+            />
           </label>
         )}
         {!following && (
@@ -230,17 +217,16 @@ function AxisRow({
       {following ? (
         <p className="col-span-2 text-xs text-muted-foreground">{followText(axis)}</p>
       ) : (
-        <Tip tip={`Sets ${name}, from ${tidy(axis.min)} to ${tidy(axis.max)}`}>
-          <Slider
-            className="col-span-2"
-            min={axis.min}
-            max={axis.max}
-            step={(axis.max - axis.min) / 200 || 1}
-            value={[value]}
-            onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
-            aria-label={name}
-          />
-        </Tip>
+        // Named by the row's label above it: no tooltip.
+        <Slider
+          className="col-span-2"
+          min={axis.min}
+          max={axis.max}
+          step={(axis.max - axis.min) / 200 || 1}
+          value={[value]}
+          onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)}
+          aria-label={name}
+        />
       )}
       <div className="col-span-2 flex justify-between font-mono text-[11px] text-muted-foreground tabular-nums">
         <span>{tidy(axis.min)}</span>

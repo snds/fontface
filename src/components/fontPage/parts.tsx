@@ -9,7 +9,6 @@ import type { Face } from "@/library";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Tip } from "@/components/Tip";
-import { BUILTIN_FONTS_TIP } from "@/tagActions";
 import { colorVar } from "@/tags/api";
 import { leafOf, useTagIndex } from "@/tags/model";
 import { applyTags } from "@/tags/TagPicker";
@@ -95,11 +94,6 @@ export function useFontFacts(fontId: number, enabled: boolean, refresh = ""): { 
 /** The file's facts, if they were read. */
 export const factsOf = (state: FactsState) => (state.status === "ready" ? state.answer.facts : null);
 
-/** Check again's tooltip: an online-only file is read once it has downloaded; any other try
- *  reads it again now. */
-export const checkAgainTip = (cloud: boolean) =>
-  cloud ? "Reads the file again, once your cloud drive has downloaded it" : "Tries reading the file's details again";
-
 /**
  * Why the file's details aren't here: "Download to see details" for an online-only file (with
  * Check again, for once it has downloaded), or what stopped it. Nothing while it's read or once
@@ -120,12 +114,10 @@ export function FactsMessage({ state, retry, what = "details" }: { state: FactsS
         <span className="text-xs text-muted-foreground">{words.text}</span>
       </span>
       {(cloud || unread === "missing" || unread === "changed" || state.status === "error") && (
-        <Tip tip={checkAgainTip(cloud)}>
-          <Button variant="outline" size="sm" onClick={retry}>
-            <Icon name="refresh" size={16} />
-            Check again
-          </Button>
-        </Tip>
+        <Button variant="outline" size="sm" onClick={retry}>
+          <Icon name="refresh" size={16} />
+          Check again
+        </Button>
       )}
     </div>
   );
@@ -141,28 +133,16 @@ export function copyCss(style: CssStyle, name: string) {
   );
 }
 
-/** The Axes and OpenType tabs' Copy as CSS button. `variable`: the style has axes (the tooltip
- *  says they're in it); `waiting`: why it can't copy yet. */
-export function CopyCssButton({ onCopy, variable, waiting }: { onCopy: () => void; variable: boolean; waiting?: string | false }) {
+/** The Axes and OpenType tabs' Copy as CSS button. `waiting`: greyed out while the style's
+ *  features are still being read. Its words are its name: no tooltip. */
+export function CopyCssButton({ onCopy, waiting = false }: { onCopy: () => void; waiting?: boolean }) {
   return (
-    // Stays focusable while it waits, so its tooltip can say why.
-    <Tip
-      tip={variable ? "Copies this style as CSS, with its axes and OpenType settings" : "Copies this style as CSS, with its OpenType settings"}
-      disabledReason={waiting}
-    >
-      <Button variant="outline" size="sm" disabled={!!waiting} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={onCopy}>
-        <Icon name="content_copy" size={16} />
-        Copy as CSS
-      </Button>
-    </Tip>
+    // Stays focusable while it waits, so focus doesn't fall out of the page.
+    <Button variant="outline" size="sm" disabled={waiting} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={onCopy}>
+      <Icon name="content_copy" size={16} />
+      Copy as CSS
+    </Button>
   );
-}
-
-/** A tag chip's remove button: which styles it comes off (only those that have it). */
-function removeTagTip(name: string, has: number, total: number): string {
-  if (total === 1) return `Takes “${name}” off this font`;
-  if (has === total) return `Takes “${name}” off all ${total} styles`;
-  return has === 1 ? `Takes “${name}” off the one style that has it` : `Takes “${name}” off the ${has} styles that have it`;
 }
 
 /**
@@ -192,25 +172,25 @@ export function TagChipsRow({ faces }: { faces: Face[] }) {
             }}
           >
             <span className="size-2 rounded-full" style={{ background: colorVar(t.color) }} aria-hidden />
-            {/* A dashed tag says, on hover, how many styles have it (screen readers hear it in
-                the name). The full name always shows, so a tag on every style needs no tooltip. */}
-            <Tip tip={`On ${n} of ${faces.length} styles`} describe={false} hide={!partial}>
-              <span>
-                {t.name.includes("/") && <span className="text-muted-foreground">{t.name.slice(0, t.name.lastIndexOf("/") + 1)}</span>}
-                {leafOf(t.name)}
-                {partial && <span className="sr-only">, on {n} of {faces.length} styles</span>}
-              </span>
-            </Tip>
+            {/* The full name always shows. A dashed tag is on only some styles (screen readers
+                hear how many in the name). */}
+            <span>
+              {t.name.includes("/") && <span className="text-muted-foreground">{t.name.slice(0, t.name.lastIndexOf("/") + 1)}</span>}
+              {leafOf(t.name)}
+              {partial && <span className="sr-only">, on {n} of {faces.length} styles</span>}
+            </span>
             {t.builtin ? (
-              // Built-in tags are read-only: a lock where the remove button would be (not a control).
-              <Tip tip={BUILTIN_FONTS_TIP} describe={false} contentClassName="max-w-64">
+              // Built-in tags are read-only: a lock where the remove button would be (not a control),
+              // named by its tooltip.
+              <Tip tip="Built-in, read-only">
                 <span className="flex size-5 items-center justify-center text-muted-foreground">
                   <Icon name="lock" size={12} />
                   <span className="sr-only">Built-in, read-only</span>
                 </span>
               </Tip>
             ) : (
-              <Tip tip={removeTagTip(t.name, n, faces.length)}>
+              // An icon: its tooltip is its name (which, for screen readers, also names the tag).
+              <Tip tip="Remove tag">
                 <Button variant="ghost" size="icon-xs" className="size-5 rounded-full" aria-label={`Remove tag ${t.name}`} onClick={() => applyTags([t.id], on, false)}>
                   <Icon name="close" size={14} />
                 </Button>

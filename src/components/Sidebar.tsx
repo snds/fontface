@@ -2,15 +2,15 @@ import { useCallback, useEffect, useId, useRef } from "react";
 import type { Folder, ScanProgress, ServiceInfo, SidebarSections, SkippedFiles } from "@/api";
 import { INSTALLED_LABEL, type Family, type LibraryView, type PlaceCounts } from "@/library";
 import { smartRows, sourceFolders, sourceOf, sourceRows, sourceView, type SourceKey } from "@/places";
-import { ADD_FOLDER_TIP, addMenu, countClass, countShown, dividerMenu, ROW_ACTIONS_CLASS, SECTION_STARTS_OPEN, SECTIONS, sourceRevealed, stylesSaid, type SidebarCommand } from "@/sidebar";
-import { skippedMenuTip, skippedTotal, sumSkipped } from "@/skippedFiles";
+import { addMenu, countClass, countShown, dividerMenu, ROW_ACTIONS_CLASS, SECTION_STARTS_OPEN, SECTIONS, sourceRevealed, stylesSaid, type SidebarCommand } from "@/sidebar";
+import { skippedTotal, sumSkipped } from "@/skippedFiles";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { BrandIcon } from "@/components/BrandIcon";
 import { MenuLines, SectionDivider } from "@/components/SectionDivider";
-import { DROPDOWN, ROW_TIP_DELAY, Tip } from "@/components/Tip";
+import { DROPDOWN, Tip } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { openTagDialog } from "@/tags/dialogs";
 import { isOpen, setOpen, useOpenRows } from "@/tags/expanded";
@@ -69,10 +69,10 @@ const itemClass = (selected: boolean) =>
 const n = (v: number) => v.toLocaleString();
 const FILE_BROWSER = IS_MAC ? "Finder" : "Explorer";
 
-/** A small icon button: `label` is its name, `tip` its tooltip (what a click does). */
-function IconAction({ icon, label, tip, onClick }: { icon: string; label: string; tip: string; onClick: () => void }) {
+/** A small icon-only button: `label` is its name, and its tooltip shows the same words. */
+function IconAction({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
   return (
-    <Tip tip={tip}>
+    <Tip tip={label}>
       <Button
         variant="ghost"
         size="icon-xs"
@@ -85,17 +85,6 @@ function IconAction({ icon, label, tip, onClick }: { icon: string; label: string
     </Tip>
   );
 }
-
-/** The tooltips of a source's scan commands, on its hover buttons and in its right-click menu. */
-const RESCAN_TIP = "Looks again for added, changed or removed fonts";
-const STOP_TIP = "Stops the scan. Fonts read so far are kept.";
-const LOCATE_TIP = "Points Fontface at where the folder moved, then rescans it";
-const REMOVE_TIP = "Turns off its fonts and takes them out of your library. Files stay on disk.";
-const OS = IS_MAC ? "macOS" : "Windows";
-
-/** A smart entry's tooltip. places.ts words each hint as what the entry lists ("Fonts added in the
- *  last 30 days…"), so it reads on from "Shows". */
-const showsTip = (hint: string) => `Shows ${hint.charAt(0).toLowerCase()}${hint.slice(1)}`;
 
 /** One line describing where a scan is up to. */
 export function scanStatus(p: ScanProgress): string {
@@ -132,8 +121,6 @@ interface RowProps {
   /** A highlighted badge before the count ("3 new"), with what screen readers hear for it. */
   badge?: { text: string; said: string };
   selected: boolean;
-  /** The row's tooltip: what it shows. */
-  hint: string;
   onOpen: () => void;
   /** Shown in place of the count on hover or focus: Rescan or Stop (and Remove, for your folders). */
   actions?: React.ReactNode;
@@ -146,35 +133,33 @@ interface RowProps {
  * the row's text color (an outline, but for Google Fonts' solid mark: BrandIcon): location colors
  * show as the dots on fonts, not here. Its count shows only while the row is the place being
  * viewed, or is hovered or has keyboard focus with no buttons of its own to show (sidebar.ts,
- * countShown); screen readers always hear it.
+ * countShown); screen readers always hear it. Its name shows, so it has no tooltip.
  */
-function SourceRow({ label, icon, missing, scan, count, badge, selected, hint, onOpen, actions }: RowProps) {
+function SourceRow({ label, icon, missing, scan, count, badge, selected, onOpen, actions }: RowProps) {
   const progress = scan && scan.phase === "reading" ? `${Math.floor((scan.done / Math.max(1, scan.found)) * 100)}%` : null;
   return (
     <div className={cn(itemClass(selected), "relative")}>
-      <Tip tip={hint} delay={ROW_TIP_DELAY} contentClassName="max-w-72 break-words">
-        <button
-          className="flex min-w-0 flex-1 items-center gap-2 after:absolute after:inset-0 after:rounded-md"
-          aria-current={selected ? "page" : undefined}
-          data-source-link=""
-          onClick={onOpen}
-        >
-          {scan ? (
-            <Icon name="progress_activity" size={18} className="animate-spin text-muted-foreground" />
-          ) : typeof icon === "string" ? (
-            <Icon name={icon} size={18} className={missing ? "text-destructive" : "text-muted-foreground"} />
-          ) : (
-            <BrandIcon brand={icon.brand} size={18} className="text-muted-foreground" />
-          )}
-          <span className="truncate">{label}</span>
-          <span className="sr-only">
-            {count !== null ? `, ${stylesSaid(count)}` : ""}
-            {badge ? `, ${badge.said}` : ""}
-            {scan ? `, scanning${progress ? ` (${progress})` : ""}` : ""}
-            {missing ? ", can't be found" : ""}
-          </span>
-        </button>
-      </Tip>
+      <button
+        className="flex min-w-0 flex-1 items-center gap-2 after:absolute after:inset-0 after:rounded-md"
+        aria-current={selected ? "page" : undefined}
+        data-source-link=""
+        onClick={onOpen}
+      >
+        {scan ? (
+          <Icon name="progress_activity" size={18} className="animate-spin text-muted-foreground" />
+        ) : typeof icon === "string" ? (
+          <Icon name={icon} size={18} className={missing ? "text-destructive" : "text-muted-foreground"} />
+        ) : (
+          <BrandIcon brand={icon.brand} size={18} className="text-muted-foreground" />
+        )}
+        <span className="truncate">{label}</span>
+        <span className="sr-only">
+          {count !== null ? `, ${stylesSaid(count)}` : ""}
+          {badge ? `, ${badge.said}` : ""}
+          {scan ? `, scanning${progress ? ` (${progress})` : ""}` : ""}
+          {missing ? ", can't be found" : ""}
+        </span>
+      </button>
       {badge && (
         <span aria-hidden className="shrink-0 rounded-full bg-primary px-1.5 font-mono text-xs text-primary-foreground tabular-nums">
           {badge.text}
@@ -246,14 +231,14 @@ export function Sidebar(props: Props) {
     const reachable = list.filter((f) => !f.missing);
     if (!reachable.length) return [];
     const out: MenuAction[] = scanning
-      ? [{ icon: "stop_circle", label: "Stop Scanning", tip: STOP_TIP, onClick: () => list.filter((f) => scans.has(f.id)).forEach(props.onCancelScan) }]
-      : [{ icon: "refresh", label: "Rescan", tip: RESCAN_TIP, onClick: () => reachable.forEach(props.onRescan) }];
+      ? [{ icon: "stop_circle", label: "Stop Scanning", onClick: () => list.filter((f) => scans.has(f.id)).forEach(props.onCancelScan) }]
+      : [{ icon: "refresh", label: "Rescan", onClick: () => reachable.forEach(props.onRescan) }];
     if (list.length === 1 && !list[0].missing) {
-      out.push({ icon: "folder_open", label: `Show in ${FILE_BROWSER}`, tip: `Opens the folder in ${FILE_BROWSER}`, onClick: () => props.onRevealFolder(list[0]) });
+      out.push({ icon: "folder_open", label: `Show in ${FILE_BROWSER}`, onClick: () => props.onRevealFolder(list[0]) });
     }
     const skipped = sumSkipped(list.map((f) => f.skipped));
     if (skipped && skippedTotal(skipped) > 0) {
-      out.push({ icon: "visibility_off", label: "Show Skipped Files…", tip: skippedMenuTip(skipped), onClick: () => props.onShowSkipped(name, skipped) });
+      out.push({ icon: "visibility_off", label: "Show Skipped Files…", onClick: () => props.onShowSkipped(name, skipped) });
     }
     return out;
   };
@@ -263,9 +248,9 @@ export function Sidebar(props: Props) {
     const reachable = list.filter((f) => !f.missing);
     if (!reachable.length) return undefined;
     return scanning ? (
-      <IconAction icon="stop_circle" label={`Stop scanning ${name}`} tip={STOP_TIP} onClick={() => list.filter((f) => scans.has(f.id)).forEach(props.onCancelScan)} />
+      <IconAction icon="stop_circle" label={`Stop scanning ${name}`} onClick={() => list.filter((f) => scans.has(f.id)).forEach(props.onCancelScan)} />
     ) : (
-      <IconAction icon="refresh" label={`Rescan ${name}`} tip={RESCAN_TIP} onClick={() => reachable.forEach(props.onRescan)} />
+      <IconAction icon="refresh" label={`Rescan ${name}`} onClick={() => reachable.forEach(props.onRescan)} />
     );
   };
 
@@ -289,7 +274,6 @@ export function Sidebar(props: Props) {
             scan={scan}
             count={counts.installed}
             selected={selected}
-            hint={`Shows the fonts installed in ${OS}. They're always on.`}
             onOpen={open}
             actions={scanButton(list, !!scan, INSTALLED_LABEL)}
           />
@@ -304,7 +288,6 @@ export function Sidebar(props: Props) {
             icon={{ brand: "adobe" }}
             count={adobeCount || null}
             selected={selected}
-            hint="Shows the fonts Adobe Creative Cloud has turned on (read-only)"
             onOpen={open}
           />
         </LocationMenu>
@@ -331,11 +314,6 @@ export function Sidebar(props: Props) {
             count={folder ? (folderCounts.get(folder.id) ?? 0) : 0}
             badge={!google && newPurchases > 0 ? { text: `${n(newPurchases)} new`, said: `${n(newPurchases)} new ${newPurchases === 1 ? "download" : "downloads"} to review` } : undefined}
             selected={selected}
-            hint={
-              google
-                ? "Google's free fonts: get them, turn them on and off, update or uninstall them. The number counts the styles you downloaded."
-                : "Fonts you bought, added from your downloads. Browse to review new downloads."
-            }
             onOpen={open}
             actions={scanButton(list, !!scan, name)}
           />
@@ -353,7 +331,7 @@ export function Sidebar(props: Props) {
         defaultColor={locations.defaultOf(folder.path)}
         onLocate={locate}
         before={scanActions(list, !!scan, folder.label)}
-        after={[{ icon: "close", label: "Remove from Library…", tip: REMOVE_TIP, destructive: true, onClick: () => props.onRemoveFolder(folder) }]}
+        after={[{ icon: "close", label: "Remove from Library…", destructive: true, onClick: () => props.onRemoveFolder(folder) }]}
       >
         <SourceRow
           label={folder.label}
@@ -362,18 +340,17 @@ export function Sidebar(props: Props) {
           scan={scan}
           count={folderCounts.get(folder.id) ?? folder.fontCount}
           selected={selected}
-          hint={folder.missing ? `Can't find ${folder.path}. If it moved, use Locate… to point Fontface at it.` : `Shows the fonts in ${folder.path}`}
           onOpen={open}
           actions={
             <>
               {locate ? (
-                <IconAction icon="folder_open" label="Locate folder…" tip={LOCATE_TIP} onClick={locate} />
+                <IconAction icon="folder_open" label="Locate folder…" onClick={locate} />
               ) : scan ? (
-                <IconAction icon="stop_circle" label="Stop scanning" tip={STOP_TIP} onClick={() => props.onCancelScan(folder)} />
+                <IconAction icon="stop_circle" label="Stop scanning" onClick={() => props.onCancelScan(folder)} />
               ) : (
-                <IconAction icon="refresh" label="Rescan folder" tip={RESCAN_TIP} onClick={() => props.onRescan(folder)} />
+                <IconAction icon="refresh" label="Rescan folder" onClick={() => props.onRescan(folder)} />
               )}
-              <IconAction icon="close" label="Remove from library" tip={REMOVE_TIP} onClick={() => props.onRemoveFolder(folder)} />
+              <IconAction icon="close" label="Remove from library" onClick={() => props.onRemoveFolder(folder)} />
             </>
           }
         />
@@ -394,13 +371,11 @@ export function Sidebar(props: Props) {
             {smart.map((entry) => {
               const selected = view.kind === entry.kind;
               return (
-                <Tip key={entry.kind} tip={showsTip(entry.hint)} delay={ROW_TIP_DELAY} contentClassName="max-w-72">
-                  <button className={itemClass(selected)} aria-current={selected ? "page" : undefined} onClick={() => onView({ kind: entry.kind })}>
-                    <Icon name={entry.icon} size={18} className="text-muted-foreground" />
-                    <span className="flex-1 truncate">{entry.label}</span>
-                    <span className="font-mono text-xs text-muted-foreground tabular-nums">{n(counts[entry.kind])}</span>
-                  </button>
-                </Tip>
+                <button key={entry.kind} className={itemClass(selected)} aria-current={selected ? "page" : undefined} onClick={() => onView({ kind: entry.kind })}>
+                  <Icon name={entry.icon} size={18} className="text-muted-foreground" />
+                  <span className="flex-1 truncate">{entry.label}</span>
+                  <span className="font-mono text-xs text-muted-foreground tabular-nums">{n(counts[entry.kind])}</span>
+                </button>
               );
             })}
           </div>
@@ -418,11 +393,9 @@ export function Sidebar(props: Props) {
             <div id={sourcesId} role="group" aria-label={SECTIONS.sources.label}>
               {sources.map(row)}
               {user.length === 0 && (
-                <Tip tip={ADD_FOLDER_TIP}>
-                  <button className="w-full px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground" onClick={onAddFolder}>
-                    Add a folder of fonts…
-                  </button>
-                </Tip>
+                <button className="w-full px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground" onClick={onAddFolder}>
+                  Add a folder of fonts…
+                </button>
               )}
             </div>
           )}
@@ -441,11 +414,9 @@ export function Sidebar(props: Props) {
                 <div className="flex items-center gap-1.5">
                   <Icon name="progress_activity" size={14} className="animate-spin text-muted-foreground" />
                   <span className="flex-1 truncate font-medium">{folder.label}</span>
-                  <Tip tip={`Stops scanning ${folder.label}. Fonts read so far are kept.`}>
-                    <Button variant="ghost" size="xs" onClick={() => props.onCancelScan(folder)}>
-                      Cancel
-                    </Button>
-                  </Tip>
+                  <Button variant="ghost" size="xs" onClick={() => props.onCancelScan(folder)}>
+                    Cancel
+                  </Button>
                 </div>
                 <div className="h-1 overflow-hidden rounded-full bg-muted">
                   {determinate ? (
@@ -474,7 +445,7 @@ export function Sidebar(props: Props) {
           (FooterRail.tsx, h-7), so the two lines along the bottom of the window meet. */}
       <div className="flex h-7 shrink-0 items-center border-t px-2">
         <DropdownMenu>
-          <Tip tip="Makes a new tag, adds a folder of fonts, or imports fonts or tags">
+          <Tip tip="Add">
             <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Add" />}>
               <Icon name="add" size={16} />
             </DropdownMenuTrigger>

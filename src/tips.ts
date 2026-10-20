@@ -1,8 +1,8 @@
 /**
- * The words around a tooltip that aren't React, so `npm run test:ui` covers them: a keyboard
- * shortcut as the app shows it (the way the menus do: ⌘ on macOS, Ctrl+ on Windows), as a screen
- * reader should say it, and as `aria-keyshortcuts` wants it; and what a tooltip adds to its
- * control's description. The tooltip parts themselves are components/Tip.tsx.
+ * The parts of tooltips that aren't React, so `npm run test:ui` covers them: a keyboard shortcut
+ * as the app shows it (the way the menus do: ⌘ on macOS, Ctrl+ on Windows), as a screen reader
+ * should say it, and as `aria-keyshortcuts` wants it; and how Esc gets past a closing tooltip.
+ * The tooltip parts themselves are components/Tip.tsx.
  */
 
 /**
@@ -140,14 +140,6 @@ export function shortcutAria(spec: ShortcutSpec, mac: boolean): string {
   const word: Record<Modifier, string> = { ctrl: "Control", alt: "Alt", shift: "Shift", mod: mac ? "Meta" : "Control" };
   const names = [...new Set((mac ? MAC_ORDER : OTHER_ORDER).filter((m) => mods.has(m)).map((m) => word[m]))];
   return [...names, k.aria].join("+");
-}
-
-/**
- * What a tooltip adds to its control's description for screen readers: its words, then the
- * shortcut as said ("Shows fonts as tiles (Command-1)").
- */
-export function tipSaid(words: string, said?: string): string {
-  return said ? `${words} (${said})` : words;
 }
 
 /** Ids for `aria-describedby`, the control's own first; undefined when there are none. */

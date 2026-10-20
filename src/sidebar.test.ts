@@ -1,7 +1,7 @@
 // Run with `npm run test:ui`. The sidebar's sections, menus and counts (sidebar.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addMenu, countClass, countShown, dividerMenu, dividerTip, ROW_ACTIONS_CLASS, SECTIONS, sourceRevealed, stylesSaid, type MenuLine } from "./sidebar.ts";
+import { addMenu, countClass, countShown, dividerLabel, dividerMenu, ROW_ACTIONS_CLASS, SECTIONS, sourceRevealed, stylesSaid, type MenuLine } from "./sidebar.ts";
 
 const labels = (lines: MenuLine[]) => lines.map((l) => (l === "-" ? "-" : l.label));
 
@@ -46,7 +46,8 @@ test("the + menu makes a tag, adds a folder, and imports fonts you bought and ta
   assert.deepEqual(labels(addMenu({ purchases: false, tags: false })), ["Add Folder…"]);
   for (const line of addMenu({ purchases: true, tags: true })) {
     if (line === "-") continue;
-    assert.ok(line.tip.length > 10, `${line.label} has a tooltip`);
+    // Menu items show their words, so they have no tooltip.
+    assert.ok(!("tip" in line), `${line.label} has no tooltip`);
     assert.ok(line.icon, `${line.label} has an icon`);
   }
 });
@@ -64,18 +65,23 @@ test("each divider's menu has its section's commands; only Sources collapses", (
   ]);
   // Open and Close All Tags only when some tag has tags inside it.
   assert.deepEqual(labels(dividerMenu("tags", { open: true, anyTags: true, anyNested: false })), ["New Tag…", "Import Tags…", "Export Tags…"]);
-  // Export is greyed out with no tags, and says why.
+  // Export is greyed out with no tags.
   const none = dividerMenu("tags", { open: true, anyTags: false, anyNested: false });
   const exportTags = none.find((l) => l !== "-" && l.id === "exportTags");
   assert.ok(exportTags && exportTags !== "-" && exportTags.disabled);
-  assert.match(exportTags.tip, /no tags/);
 });
 
-test("the dividers' tooltips name their buttons", () => {
-  // Tooltips name icon-only buttons, in a word or two.
-  assert.equal(dividerTip("sources", { open: true, collapsible: true }), `Collapse ${SECTIONS.sources.label}`);
-  assert.equal(dividerTip("sources", { open: false, collapsible: true }), `Expand ${SECTIONS.sources.label}`);
-  assert.equal(dividerTip("tags", { open: true, collapsible: false }), SECTIONS.tags.label, "Tags doesn't collapse: a click opens its menu");
+test("the dividers' icon-only buttons are named in a word or two", () => {
+  // The name is the button's aria-label and its tooltip: a label, not a sentence.
+  assert.equal(dividerLabel("sources", { open: true, collapsible: true }), `Collapse ${SECTIONS.sources.label}`);
+  assert.equal(dividerLabel("sources", { open: false, collapsible: true }), `Expand ${SECTIONS.sources.label}`);
+  assert.equal(dividerLabel("tags", { open: true, collapsible: false }), SECTIONS.tags.label, "Tags doesn't collapse: a click opens its menu");
+  for (const section of ["sources", "tags"] as const) {
+    for (const open of [true, false]) {
+      const label = dividerLabel(section, { open, collapsible: section === "sources" });
+      assert.ok(label.split(" ").length <= 3 && !label.endsWith("."), label);
+    }
+  }
   assert.notEqual(SECTIONS.sources.openId, SECTIONS.tags.openId);
   // Plain outlined icons from the app's icon font.
   assert.match(SECTIONS.sources.icon, /^[a-z_0-9]+$/);

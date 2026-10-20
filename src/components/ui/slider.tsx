@@ -7,8 +7,8 @@ function Slider({
   value,
   min = 0,
   max = 100,
-  // The description goes on the thumbs, which take focus (so a tooltip's words reach screen
-  // readers too), not on the group around them.
+  // The description goes on the thumbs, which take focus (so screen readers hear it there),
+  // not on the group around them.
   "aria-describedby": describedBy,
   ...props
 }: SliderPrimitive.Root.Props) {

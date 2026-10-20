@@ -37,8 +37,8 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
   focused, Right opens it and Left closes it (or moves to the tag above, its group's heading, or
   the Tags divider).
 - **Turn a whole tag on or off** from its "…" button or its right-click menu: **Turn on all
-  fonts**, the same until logout (or to stay), and **Turn off all fonts**, each greyed out with a
-  reason when there's nothing to do. It covers every font in the tag and in the tags inside it;
+  fonts**, the same until logout (or to stay), and **Turn off all fonts**, each greyed out when
+  there's nothing to do. It covers every font in the tag and in the tags inside it;
   on a nested tag, only that tag (and the tags inside it). (The small switch that rows had until
   2026-10-20 is gone, to keep the sidebar quiet.) It goes through the same path as a font's
   switch (one request at a time, busy marks, sync), in about ten requests for a big tag, with a
@@ -48,13 +48,12 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
   Fontface records whether a font should be on, not why, and a family switch works the same way.
 - **Rename, recolor, nest, export or delete** a tag from its "…" button or by right-clicking it.
   Renaming moves the tags inside it too. Deleting removes the tags inside it as well; the fonts
-  themselves are never touched. Every item in the tag menus has a tooltip saying what it does,
-  or why it's greyed out.
+  themselves are never touched. Menu items show their words, so they have no tooltips.
 - **The Tags section** has no heading: a divider with a label icon starts it. Click the icon, or
   press Left or Right on it, to collapse or expand the section; right-click the divider (or
   Shift-F10 on it) for New Tag…, Import Tags…, Export Tags…, Open and Close All Tags and Collapse
-  Section. The (i) beside the icon explains tags in one tooltip (hover it, or focus it with Tab);
-  tags and group headings have no tooltips of their own. A tag shows its style count only while
+  Section. The icon shows "Tags" as its tooltip; tags and group headings show their names, so
+  they have no tooltips. A tag shows its style count only while
   it's hovered, focused or being viewed; screen readers always hear it.
 - **My tags and Built-in.** Tags come in two groups, each under a small heading in the sidebar
   that opens and closes it (click it, or Right and Left with it focused) and shows how many tags
@@ -66,7 +65,7 @@ Code: `src-tauri/src/tags/` (storage, imports, exports) and `src/tags/` (interfa
 - **Built-in tags are read-only.** They're a copy of what those apps made, and only imports add
   to them. You can view them, turn them on and off, and export them. You can't rename, recolor,
   move or delete them, put tags inside them, drag them, or add fonts to them or take fonts off
-  them by hand: those menu items are greyed out with a tooltip saying why, Add to tag and Remove
+  them by hand: those menu items are greyed out (a built-in tag's menu starts with "Built-in tag, read-only"), Add to tag and Remove
   from tag list only your own tags, the tag search shows them with a lock, and the back end
   refuses the same changes (`tags::check_edit`). To change one, choose **Make it my tag** in its
   menu: it moves to My tags (on a nested tag, its whole top-level tag moves, and the item says
@@ -461,7 +460,7 @@ before, imports still filling them, and everything open again once it's yours.
 `npm run test:ui` covers the rest in `src/tagActions.test.ts`: a tag's set (a parent includes
 its nested tags' fonts, a nested tag only its own subtree, each font once), the on/off plan (off
 fonts only, one copy each, every copy to turn off, whole files in about ten requests), the result
-and its words, the menu items' states and tooltips, and the read-only rules.
+and its words, the menu items' states and labels, and the read-only rules.
 
 `cargo test tags::` also covers reading named styles from `fvar` (single files and collections),
 matching them and tidied names, Typeface format 5, and moving a folder with `Locate…`: fonts on

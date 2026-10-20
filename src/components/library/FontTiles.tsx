@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagDots } from "@/tags/TagChips";
+import { CutShort } from "../Tip";
 import { StateControl, useStateWording } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
 import { PREVIEW_BAR_SPACE } from "../PreviewBar";
@@ -250,9 +251,9 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
       )}
     >
       <div className="flex h-7 shrink-0 items-center gap-2">
-        <span className="min-w-0 truncate text-sm font-semibold" title={family.name}>
-          {family.name}
-        </span>
+        <CutShort tip={family.name} handle={actions.tips}>
+          <span className="min-w-0 truncate text-sm font-semibold">{family.name}</span>
+        </CutShort>
         {!single && <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{count}</span>}
         <span className="flex-1" />
         {/* No tag button on a card (there's no room): tag from the right-click menu (Shift-F10),
@@ -275,8 +276,8 @@ function Tile({ row, actions, id, column, height, previewText, size, busy, locat
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">
-        <LocationDots copies={copies} locations={locations} srId={`${id}-places`} />
-        <TagDots faces={family.faces} index={actions.index} srId={`${id}-tags`} />
+        <LocationDots copies={copies} locations={locations} srId={`${id}-places`} tipHandle={actions.tips} />
+        <TagDots faces={family.faces} index={actions.index} srId={`${id}-tags`} tipHandle={actions.tips} />
         <span className="flex-1" />
         {/* On a narrow card the date is cut short first, before the badges. */}
         {added && (

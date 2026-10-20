@@ -95,7 +95,7 @@ import { FontPickerContext, FontPickerDialog, type PickRequest } from "@/compone
 import { ComparePage, type FaceRef } from "@/components/ComparePage";
 import { PairPage } from "@/components/PairPage";
 import { RemoveFontsDialog, type RemovalRequest } from "@/components/RemoveFontsDialog";
-import { SKIPPED_DETAILS_TIP, SkippedFilesDialog, type SkippedRequest } from "@/components/SkippedFilesDialog";
+import { SkippedFilesDialog, type SkippedRequest } from "@/components/SkippedFilesDialog";
 import { skippedSummary } from "@/skippedFiles";
 import { newPurchaseCount } from "@/purchaseWatch";
 import { REVEAL_LABEL } from "@/components/fontPage/InfoTab";
@@ -147,11 +147,9 @@ const BROWSE_ID = "browse-service";
 /** Toasts stack above the footer rail and the preview bar (bottom right, where the bar's Paper
  *  and Reset and the rail's source line are), so an Undo never covers them. */
 const TOAST_OFFSET = { bottom: FOOTER_RAIL_HEIGHT + PREVIEW_BAR_SPACE };
-/** The layouts the Google Fonts view can't show yet, and why (the toolbar greys them out). */
-const GOOGLE_LAYOUTS = {
-  tiles: "Google Fonts shows as rows. Tiles aren't available here yet.",
-  table: "Google Fonts shows as rows. The table isn't available here yet.",
-} as const;
+/** The layouts the Google Fonts view can't show yet: it shows as rows (the toolbar greys the
+ *  others out). */
+const GOOGLE_LAYOUTS = ["tiles", "table"] as const;
 
 /** Unix seconds now, to the hour: Recently Added's 30 days move on while Fontface stays open. */
 function useHourNow(): number {
@@ -529,19 +527,17 @@ export default function App() {
                   </>
                 ),
                 action: (
-                  <Tip tip={SKIPPED_DETAILS_TIP}>
-                    <Button
-                      variant="outline"
-                      size="xs"
-                      className="shrink-0 self-center"
-                      onClick={() => {
-                        toast.dismiss(toastId);
-                        showSkipped(name, r.skipped);
-                      }}
-                    >
-                      Details
-                    </Button>
-                  </Tip>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    className="shrink-0 self-center"
+                    onClick={() => {
+                      toast.dismiss(toastId);
+                      showSkipped(name, r.skipped);
+                    }}
+                  >
+                    Details
+                  </Button>
                 ),
               }
             : { description: text };
@@ -1389,7 +1385,6 @@ export default function App() {
   );
   const googleShows = CATALOG_SHOWS.map((o) => ({
     value: o.value,
-    tip: o.tip,
     // How many have an update, so it's seen without picking the filter.
     label:
       o.value === "updates" && google.counts.updates > 0 ? (
@@ -1491,7 +1486,6 @@ export default function App() {
             title: `Compare ${name} with…`,
             multiple: true,
             confirm: "Compare",
-            confirmTip: "Opens Compare with the fonts you picked",
             // Picking its own family again would only show it once.
             exclude: first.face.key === first.family.representative.key ? [first.family.id] : [],
             onPick: (families) => {
@@ -2027,17 +2021,15 @@ export default function App() {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <Tip tip="Turns off its fonts and takes the folder out of your library. Files stay on disk.">
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={() => {
-                    if (pendingRemoval) removeFolder(pendingRemoval);
-                    setPendingRemoval(null);
-                  }}
-                >
-                  Remove
-                </AlertDialogAction>
-              </Tip>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  if (pendingRemoval) removeFolder(pendingRemoval);
+                  setPendingRemoval(null);
+                }}
+              >
+                Remove
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -2057,11 +2049,24 @@ export default function App() {
 }
 
 /** Browse, on Purchases: opens its own page (new downloads and imports) over the list, with
- *  Back. It shows how many downloads are new. */
+ *  Back. It shows how many downloads are new. In a narrow toolbar it drops the word "Browse",
+ *  and then, an icon only, it shows its name as a tooltip. */
 function BrowseButton({ newPurchases, onBrowse }: { newPurchases: number; onBrowse: () => void }) {
   const fresh = newPurchases > 0;
+  const wordRef = useRef<HTMLSpanElement>(null);
+  const [iconOnly, setIconOnly] = useState(false);
+  useEffect(() => {
+    const word = wordRef.current;
+    if (!word) return;
+    // A word hidden by the toolbar's width has no box; the observer hears it go and come back.
+    const check = () => setIconOnly(word.getClientRects().length === 0);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(word);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <Tip tip="Review new downloads, import fonts you bought, and manage watched folders">
+    <Tip tip="Browse purchases" hide={!iconOnly}>
       <Button
         id={BROWSE_ID}
         variant="outline"
@@ -2071,7 +2076,9 @@ function BrowseButton({ newPurchases, onBrowse }: { newPurchases: number; onBrow
         onClick={onBrowse}
       >
         <Icon name="storefront" size={16} />
-        <span className="@max-[1000px]/toolbar:hidden">Browse</span>
+        <span ref={wordRef} className="@max-[1000px]/toolbar:hidden">
+          Browse
+        </span>
         {fresh && (
           <span aria-hidden className="rounded-full bg-primary px-1.5 font-mono text-[11px] text-primary-foreground tabular-nums">
             {newPurchases.toLocaleString()}
@@ -2109,12 +2116,10 @@ function EmptyPlace({
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
         <p className="text-sm text-muted-foreground">No fonts in this folder.</p>
         <p className="max-w-sm text-sm text-muted-foreground">{skippedLine}</p>
-        <Tip tip={SKIPPED_DETAILS_TIP}>
-          <Button variant="outline" size="sm" onClick={() => onShowSkipped(folder.label, skipped)}>
-            <Icon name="visibility_off" size={16} />
-            Show Skipped Files…
-          </Button>
-        </Tip>
+        <Button variant="outline" size="sm" onClick={() => onShowSkipped(folder.label, skipped)}>
+          <Icon name="visibility_off" size={16} />
+          Show Skipped Files…
+        </Button>
       </div>
     );
   }
@@ -2127,12 +2132,10 @@ function EmptyPlace({
         <p className="max-w-sm text-sm text-muted-foreground">
           Browse your purchases to add fonts you bought, from your downloads or from a zip or folder.
         </p>
-        <Tip tip="Opens Purchases, to add fonts you bought">
-          <Button onClick={() => onBrowse("purchases")}>
-            <Icon name="storefront" size={16} />
-            Browse Purchases
-          </Button>
-        </Tip>
+        <Button onClick={() => onBrowse("purchases")}>
+          <Icon name="storefront" size={16} />
+          Browse Purchases
+        </Button>
       </div>
     );
   }
@@ -2157,12 +2160,10 @@ function EmptyPlace({
       <Icon name="font_download" size={40} weight={300} className="text-muted-foreground" />
       <h2 className="text-lg font-semibold">{view.kind === "yours" && !libraryEmpty ? "No fonts of your own yet" : "No fonts here yet"}</h2>
       <p className="max-w-sm text-sm text-muted-foreground">Add a folder of fonts. Fontface reads them where they are. Nothing is copied or moved.</p>
-      <Tip tip="Picks a folder of fonts to add to your library">
-        <Button onClick={onAddFolder}>
-          <Icon name="create_new_folder" size={16} />
-          Add Folder…
-        </Button>
-      </Tip>
+      <Button onClick={onAddFolder}>
+        <Icon name="create_new_folder" size={16} />
+        Add Folder…
+      </Button>
     </div>
   );
 }

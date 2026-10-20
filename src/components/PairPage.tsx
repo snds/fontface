@@ -7,7 +7,7 @@ import { usePreviewProfile } from "@/previewProfiles";
 import { useFontPicker } from "./FontPicker";
 import { FaceSample, SizeSlider, StylePicker, type FaceRef } from "./ComparePage";
 import { MissingHint } from "./FacePreview";
-import { BackButton } from "./fontPage/PageHeader";
+import { BackButton, useNarrowerThan } from "./fontPage/PageHeader";
 import { dragRegion, useTitleBar } from "./TitleBar";
 import { Tip } from "./Tip";
 
@@ -34,6 +34,9 @@ type Role = keyof typeof ROLES;
  */
 export function PairPage({ page, faceOf, placeName, previewText, onBack, onChange, announce }: Props) {
   const titleBar = useTitleBar();
+  const headerRef = useRef<HTMLElement>(null);
+  // Below 480px Swap is an icon only.
+  const narrow = useNarrowerThan(headerRef, 480);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const pick = useFontPicker();
   const [headingSize, setHeadingSize] = useState(48);
@@ -63,7 +66,7 @@ export function PairPage({ page, faceOf, placeName, previewText, onBack, onChang
 
   return (
     <>
-      <header className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
+      <header ref={headerRef} className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
         <BackButton placeName={placeName} onBack={onBack} />
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h1 ref={headingRef} tabIndex={-1} className="truncate text-base font-semibold outline-none">
@@ -73,13 +76,9 @@ export function PairPage({ page, faceOf, placeName, previewText, onBack, onChang
             {heading?.family.name ?? "…"} and {body?.family.name ?? "…"}
           </span>
         </div>
-        {/* With both fonts here, the tooltip names them (and says so to screen readers too); else
-            its words are the button's name. */}
-        <Tip
-          tip={heading && body ? `Makes ${body.family.name} the heading and ${heading.family.name} the body` : "Swaps the heading and body fonts"}
-          describe={!!(heading && body)}
-        >
-          <Button variant="outline" size="sm" onClick={swap} aria-label="Swap the heading and body fonts">
+        {/* A tooltip, its name, only while its word is hidden. */}
+        <Tip tip="Swap heading and body" hide={!narrow}>
+          <Button variant="outline" size="sm" onClick={swap} aria-label="Swap heading and body">
             <Icon name="swap_vert" size={16} />
             <span className="@max-[480px]/pagehead:sr-only">Swap</span>
           </Button>
@@ -87,13 +86,12 @@ export function PairPage({ page, faceOf, placeName, previewText, onBack, onChang
       </header>
       <div className="flex shrink-0 flex-col gap-2 border-b px-6 py-2.5">
         <FontControls role="heading" face={heading} typed={previewText} onChoose={() => choose("heading")} onStyle={(key) => onChange({ heading: key })}>
-          <SizeSlider label="Size" tip="Sets the size of the heading and the line under it" value={headingSize} min={16} max={128} onChange={setHeadingSize} />
+          <SizeSlider label="Size" value={headingSize} min={16} max={128} onChange={setHeadingSize} />
         </FontControls>
         <FontControls role="body" face={body} onChoose={() => choose("body")} onStyle={(key) => onChange({ body: key })}>
-          <SizeSlider label="Size" tip="Sets the size of the body text" value={bodySize} min={10} max={32} onChange={setBodySize} />
+          <SizeSlider label="Size" value={bodySize} min={10} max={32} onChange={setBodySize} />
           <SizeSlider
             label="Line height"
-            tip="Sets the space between the body text's lines"
             value={leading}
             min={1}
             max={2.2}
@@ -146,13 +144,12 @@ function FontControls({
   return (
     <div role="group" aria-label={`${ROLES[role]} font`} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
       <span className="w-14 shrink-0 text-xs font-medium text-muted-foreground">{ROLES[role]}</span>
-      <Tip tip={face ? `Picks another ${role} font from your library` : `Picks a ${role} font from your library`}>
-        <Button variant="outline" size="sm" className="max-w-56" onClick={onChoose} aria-label={`${ROLES[role]} font: ${face?.family.name ?? "none"}. Choose another`}>
-          <span className="truncate">{face?.family.name ?? "Choose…"}</span>
-          <Icon name="unfold_more" size={14} className="text-muted-foreground" />
-        </Button>
-      </Tip>
-      {face && <StylePicker face={face} label={`${ROLES[role]} style`} tip={`Picks which style of ${face.family.name} the ${role} uses`} onChange={onStyle} />}
+      {/* Shows the font, after the row's label: no tooltip. */}
+      <Button variant="outline" size="sm" className="max-w-56" onClick={onChoose} aria-label={`${ROLES[role]} font: ${face?.family.name ?? "none"}. Choose another`}>
+        <span className="truncate">{face?.family.name ?? "Choose…"}</span>
+        <Icon name="unfold_more" size={14} className="text-muted-foreground" />
+      </Button>
+      {face && <StylePicker face={face} label={`${ROLES[role]} style`} onChange={onStyle} />}
       {face && typed && <MissingHint text={typed} profile={profile} />}
       {children}
     </div>
@@ -163,12 +160,9 @@ function Missing({ role, onChoose }: { role: Role; onChoose: () => void }) {
   return (
     <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
       The {role} font isn't in your library anymore.
-      {/* Its name says the same as the tooltip. */}
-      <Tip tip={`Picks a ${role} font from your library`} describe={false}>
-        <Button variant="outline" size="sm" onClick={onChoose}>
-          Choose a {role} font…
-        </Button>
-      </Tip>
+      <Button variant="outline" size="sm" onClick={onChoose}>
+        Choose a {role} font…
+      </Button>
     </p>
   );
 }

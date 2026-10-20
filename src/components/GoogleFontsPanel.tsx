@@ -19,13 +19,11 @@ import {
   turnOnFaces,
   switchIds,
   uninstallWords,
-  yoursFirstTip,
   type Holding,
   type RowPlan,
 } from "@/googleCatalog";
 import {
   describesRowFile,
-  failNote,
   fileStatus,
   KEEPS_TRYING,
   matchLibrary,
@@ -33,7 +31,6 @@ import {
   outsideAlphabet,
   rowSource,
   wantsAlphabet,
-  yourCopyNote,
   type LibraryMatch,
 } from "@/googlePreviews";
 import {
@@ -66,14 +63,13 @@ import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { StateControl } from "./ActivationSwitch";
 import { ChoiceGroup } from "./ChoiceGroup";
 import { MissingHint, SampleBadge } from "./FacePreview";
 import { FontActionItems } from "./FontActions";
 import type { GoogleView } from "./google/useGoogleView";
-import { Tip } from "./Tip";
+import { CutShort, Tip } from "./Tip";
 import { activeInSight, ROW_CONTROLS, type ListHandle, type OpenRequest } from "./library/LibraryPane";
 import { useSelection } from "./library/useSelection";
 import { PREVIEW_BAR_SPACE } from "./PreviewBar";
@@ -117,14 +113,12 @@ const ONLINE_WAIT_MS = 1000;
 /** A local font in one of these states can't be previewed (online-only, too large, broken). */
 const LOCAL_FAILED = new Set<FaceState>(["error", "cloud", "too-large"]);
 
-const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
-const COMPUTER = IS_MAC ? "Mac" : "computer";
 /** A family's row key: its catalog id, so the selection and Back find it whatever the order. */
 const rowKeyOf = (id: string) => `g:${id}`;
 
 /** What a row's preview shows: the name in the interface font, or text in a page font. */
 type Shown =
-  | { kind: "plain"; note?: string; hidden?: boolean }
+  | { kind: "plain"; hidden?: boolean }
   | { kind: "font"; face: string; text: string; ready: boolean; profile?: PreviewInfo; ownText: boolean; typed: boolean; sample: boolean };
 
 /** A ready online file whose font wouldn't load (the cache may have let it go): ask once more. */
@@ -136,60 +130,42 @@ function useRetry(request: PreviewRequest | undefined, path: string | undefined,
   }, [path, state]);
 }
 
-/** The name in the interface font, the same height as a preview. `note`: why it isn't in its own
- *  font, on hover and for screen readers. `hidden`: kept invisible while a preview loads. */
-function PlainName({ family, height, note, hidden }: { family: GoogleFamily; height: number; note?: string; hidden?: boolean }) {
-  const name = (
+/** The name in the interface font, the same height as a preview: no preview came (offline, or
+ *  Google has none). `hidden`: kept invisible while a preview loads. */
+function PlainName({ family, height, hidden }: { family: GoogleFamily; height: number; hidden?: boolean }) {
+  return (
     <div className={cn("truncate text-lg font-medium transition-opacity", hidden && "preview-loading")} style={{ height, lineHeight: `${height}px` }}>
       {family.family}
-      {note && <span className="sr-only">. {note}</span>}
     </div>
   );
-  return note ? (
-    <Tip tip={note} describe={false} align="start" contentClassName="max-w-xs">
-      {name}
-    </Tip>
-  ) : (
-    name
-  );
 }
 
-/** "Your copy": the preview is drawn from a copy of the family elsewhere in your library. The
- *  explanation is on hover, and in words for screen readers (the trigger can't take focus). */
-function YourCopy({ font }: { font: FontSummary }) {
-  const note = yourCopyNote(fileName(font.path));
+/** "Your copy": the preview is drawn from a copy of the family elsewhere in your library. */
+function YourCopy() {
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="shrink-0" />}>
-        <Badge variant="outline" className="text-muted-foreground">
-          Your copy
-        </Badge>
-        <span className="sr-only">. {note}</span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">{note}</TooltipContent>
-    </Tooltip>
+    <Badge variant="outline" className="shrink-0 text-muted-foreground">
+      Your copy
+    </Badge>
   );
 }
 
-/** Typed characters an online preview can't show: its file holds only a fixed set of letters,
- *  so what you type never leaves your Mac. The family itself may well have them. */
+/** Typed characters an online preview can't show: its file holds only basic Latin letters, so
+ *  what you type never leaves the computer. The family itself may well have them. An icon with
+ *  no words beside it: its tooltip is its label, with the characters, and screen readers hear
+ *  the same. */
 function AlphabetHint({ text }: { text: string }) {
   const { options } = usePreviewStyle();
   // The text as previews draw it: in the preview bar's case.
   const outside = outsideAlphabet(applyCase(text, options.case));
   if (!outside.length) return null;
-  const list = outside.join(" ");
+  const label = `Not in online preview: ${outside.join(" ")}`;
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex shrink-0 items-center text-muted-foreground" />}>
+    <Tip tip={label}>
+      <span className="inline-flex shrink-0 items-center text-muted-foreground">
         <Icon name="privacy_tip" size={14} />
-        <span className="sr-only">Can't preview here: {list}.</span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
-        Can't preview {list} here. Online previews only hold basic Latin letters, so the text you type never leaves your{" "}
-        {COMPUTER}. Download the family to see everything it has.
-      </TooltipContent>
-    </Tooltip>
+        <span className="sr-only">{label}</span>
+      </span>
+    </Tip>
   );
 }
 
@@ -278,7 +254,7 @@ function FamilyInfo({
     // While its font loads it's hidden (and fades in), so nothing draws in the fallback font.
     shown = rowShown;
   } else if (source === "online" && choice.draw === "plain") {
-    shown = { kind: "plain", note: failNote(choice.why) };
+    shown = { kind: "plain" };
   } else if (source === "online") {
     // Waiting for an answer: hidden for a moment, then the name until the preview comes.
     shown = { kind: "plain", hidden: !onlineWaited };
@@ -307,7 +283,7 @@ function FamilyInfo({
           sample={f.sample}
         />
       ) : (
-        <PlainName family={family} height={height} note={shown.kind === "plain" ? shown.note : undefined} hidden={shown.kind === "plain" && shown.hidden} />
+        <PlainName family={family} height={height} hidden={shown.kind === "plain" && shown.hidden} />
       )}
       {/* One line, always as tall as a badge: what it holds can change (a badge arrives with a
           preview), its height can't, so the row never moves the rows below it. */}
@@ -327,7 +303,7 @@ function FamilyInfo({
             Downloaded
           </Badge>
         )}
-        {facts && source === "library" && font && <YourCopy font={font} />}
+        {facts && source === "library" && font && <YourCopy />}
         {facts && facts.sample && !icons && (
           <span className={cn("contents", !f && "[&>*]:invisible")}>
             <SampleBadge profile={facts.profile} row="family" />
@@ -402,25 +378,23 @@ function RowControls({
             );
           case "update":
             return (
-              <Tip key={extra} tip={`Downloads the newest version of ${name} from Google. What's on stays on.`}>
-                <Button size="sm" variant="outline" tabIndex={tab} aria-label={`Update ${name}`} onClick={() => commands.update(fam)}>
-                  <Icon name="update" size={16} />
-                  Update
-                </Button>
-              </Tip>
+              <Button key={extra} size="sm" variant="outline" tabIndex={tab} aria-label={`Update ${name}`} onClick={() => commands.update(fam)}>
+                <Icon name="update" size={16} />
+                Update
+              </Button>
             );
         }
       })}
       {plan.hover === "uninstall" && (
-        <Tip tip={`Uninstalls ${name}: turns it off and removes the files Fontface downloaded. Asks first, and you can undo it.`}>
+        <Tip tip="Uninstall">
           <Button size="icon-sm" variant="ghost" tabIndex={tab} aria-label={`Uninstall ${name}`} className={HOVER_ONLY} onClick={() => commands.uninstall(fam)}>
             <Icon name="delete" size={16} />
           </Button>
         </Tip>
       )}
       {plan.hover === "getCopy" && (
-        <Tip tip={`Downloads Google's version of ${name} and turns it on. Your own copy stays as it is.`}>
-          <Button size="icon-sm" variant="ghost" tabIndex={tab} aria-label={`Get Google's ${name}`} className={HOVER_ONLY} onClick={() => commands.get(fam, true)}>
+        <Tip tip="Get Google's version">
+          <Button size="icon-sm" variant="ghost" tabIndex={tab} aria-label={`Get Google's version of ${name}`} className={HOVER_ONLY} onClick={() => commands.get(fam, true)}>
             <Icon name="download" size={16} />
           </Button>
         </Tip>
@@ -439,28 +413,19 @@ function RowControls({
         />
       )}
       {plan.main === "get" && (
-        <Tip tip={`Downloads ${name} from Google and turns it on`}>
-          <Button size="sm" variant="outline" tabIndex={tab} aria-label={`Get ${name}`} onClick={() => commands.get(fam, false)}>
-            <Icon name="download" size={16} />
-            Get
-          </Button>
-        </Tip>
+        <Button size="sm" variant="outline" tabIndex={tab} aria-label={`Get ${name}`} onClick={() => commands.get(fam, false)}>
+          <Icon name="download" size={16} />
+          Get
+        </Button>
       )}
       {plan.main === "working" && (
-        <Tip tip="" disabledReason={`Downloading ${name}. It turns on when it's in your library.`}>
-          <Button size="sm" variant="outline" disabled focusableWhenDisabled tabIndex={tab} className="aria-disabled:opacity-50" aria-label={`Working on ${name}`}>
-            <Icon name="progress_activity" size={16} className="animate-spin" />
-            Working…
-          </Button>
-        </Tip>
+        <Button size="sm" variant="outline" disabled focusableWhenDisabled tabIndex={tab} className="aria-disabled:opacity-50" aria-label={`Working on ${name}`}>
+          <Icon name="progress_activity" size={16} className="animate-spin" />
+          Working…
+        </Button>
       )}
-      {plan.main === "unavailable" && (
-        <Tip tip={fam.unavailable ?? ""}>
-          <span tabIndex={tab} className="rounded-sm text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
-            Not downloadable here
-          </span>
-        </Tip>
-      )}
+      {/* The row's name says so too ("can't be downloaded here"). */}
+      {plan.main === "unavailable" && <span className="text-xs text-muted-foreground">Not downloadable here</span>}
     </div>
   );
 }
@@ -525,7 +490,6 @@ export function GoogleFontsPanel({
 }: Props) {
   const { catalog, loading, error, reload, category, setCategory, holdings, visible } = view;
   const listId = useId();
-  const yoursFirstHintId = useId();
   const tagIndex = useTagIndex();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -783,44 +747,33 @@ export function GoogleFontsPanel({
           look="chips"
           label="Category"
           value={category}
-          options={CATEGORIES.map((c) => ({ value: c.value, label: c.label, tip: c.tip }))}
+          options={[...CATEGORIES]}
           onChange={setCategory}
         />
         <span className="min-w-2 flex-1" />
-        {/* The whole label shows the tooltip (keyboard focus on the switch too). Its words, which
-            change with the switch, are the switch's description; its name is only "Installed". */}
-        <Tip tip={yoursFirstTip(yoursFirst)} describe={false} contentClassName="max-w-xs">
-          <label className="flex cursor-default items-center gap-2 text-xs text-muted-foreground has-[[role=switch]:focus-visible]:text-foreground">
-            <Switch checked={yoursFirst} onCheckedChange={(on) => onYoursFirst(on)} aria-label="Installed" aria-describedby={yoursFirstHintId} />
-            Installed
-            <span id={yoursFirstHintId} hidden>
-              {yoursFirstTip(yoursFirst)}
-            </span>
-          </label>
-        </Tip>
+        {/* On: installed families come first. */}
+        <label className="flex cursor-default items-center gap-2 text-xs text-muted-foreground has-[[role=switch]:focus-visible]:text-foreground">
+          <Switch checked={yoursFirst} onCheckedChange={(on) => onYoursFirst(on)} aria-label="Installed" />
+          Installed
+        </label>
         {updates.length > 0 && (
-          <Tip
-            tip={`Downloads the newest version of ${updates.length === 1 ? "the family" : `all ${updates.length.toLocaleString()} families`} with an update. What's on stays on.`}
-            disabledReason={updatingAll && "Updating now. Each family turns back on as it was."}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => !updatingAll && void onUpdateAll(updates)}
+            disabled={updatingAll}
+            focusableWhenDisabled
+            className="aria-disabled:opacity-50"
           >
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => !updatingAll && void onUpdateAll(updates)}
-              disabled={updatingAll}
-              focusableWhenDisabled
-              className="aria-disabled:opacity-50"
-            >
-              <Icon name="update" size={16} className={cn(updatingAll && "animate-spin")} />
-              {updatingAll ? "Updating…" : `Update all · ${updates.length.toLocaleString()}`}
-            </Button>
-          </Tip>
+            <Icon name="update" size={16} className={cn(updatingAll && "animate-spin")} />
+            {updatingAll ? "Updating…" : `Update all · ${updates.length.toLocaleString()}`}
+          </Button>
         )}
-        <Tip tip="Checks Google Fonts for new families and updates" disabledReason={loading && "Checking now…"}>
+        <Tip tip="Refresh catalog">
           <Button
             size="icon-sm"
             variant="ghost"
-            aria-label="Check for new families and updates"
+            aria-label="Refresh catalog"
             onClick={() => !loading && reload(true)}
             disabled={loading}
             focusableWhenDisabled
@@ -840,9 +793,7 @@ export function GoogleFontsPanel({
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <Icon name="cloud_off" size={36} weight={300} className="text-muted-foreground" />
           <p className="max-w-sm text-sm text-muted-foreground">Couldn't load the Google Fonts catalog. {error}</p>
-          <Tip tip="Asks Google Fonts for its catalog again">
-            <Button onClick={() => reload(true)}>Try again</Button>
-          </Tip>
+          <Button onClick={() => reload(true)}>Try again</Button>
         </div>
       ) : !catalog ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -959,19 +910,17 @@ export function GoogleFontsPanel({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <Tip tip={`Turns off ${removingShown?.family ?? "the family"} and removes the files Fontface downloaded. You can undo it for 10 seconds.`}>
-              <AlertDialogAction
-                variant="destructive"
-                onClick={() => {
-                  const fam = removing;
-                  removeConfirmed.current = true;
-                  setRemoving(null);
-                  if (fam) void run(fam, () => onRemove(fam));
-                }}
-              >
-                Uninstall
-              </AlertDialogAction>
-            </Tip>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const fam = removing;
+                removeConfirmed.current = true;
+                setRemoving(null);
+                if (fam) void run(fam, () => onRemove(fam));
+              }}
+            >
+              Uninstall
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -985,7 +934,7 @@ export const GOOGLE_SOURCE = "Catalog by Fontsource · files from Google";
 /**
  * The footer rail's note on the Google Fonts view, only while something's wrong: Google can't be
  * reached for online previews, or the catalog shown is the last saved copy. Short, on one line;
- * the whole of it is on hover and for screen readers.
+ * while it's cut short, all of it is on hover. Screen readers have all of it anyway.
  */
 export function GoogleFooterNote({ onlinePreviews, stale }: { onlinePreviews: boolean; stale: boolean }) {
   const offline = useGoogleOffline() && onlinePreviews;
@@ -994,11 +943,11 @@ export function GoogleFooterNote({ onlinePreviews, stale }: { onlinePreviews: bo
     .join(" ");
   if (!words) return null;
   return (
-    <Tip tip={words} describe={false} align="start" contentClassName="max-w-sm whitespace-normal">
-      <span className="flex min-w-0 items-center gap-1">
-        <Icon name="cloud_off" size={13} className="shrink-0" />
+    <span className="flex min-w-0 items-center gap-1">
+      <Icon name="cloud_off" size={13} className="shrink-0" />
+      <CutShort tip={words} contentClassName="max-w-sm whitespace-normal">
         <span className="truncate">{words}</span>
-      </span>
-    </Tip>
+      </CutShort>
+    </span>
   );
 }

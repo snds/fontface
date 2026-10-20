@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { IS_MAC } from "@/components/TitleBar";
-import { Tip } from "@/components/Tip";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { ConfirmButton, describe, SECTION_LIST, TextSetting, type GroupDef, type SectionDef } from "@/settings/parts";
@@ -63,20 +62,19 @@ export function useSyncSection(): SectionDef {
                 : "Sync is starting…",
               keywords: "sync folder cloud icloud dropbox onedrive google drive syncthing nextcloud other computers devices",
               control: (ids) => (
-                <Tip tip="Picks a folder to sync through and turns sync on" disabledReason={!status && "Wait: sync is still starting"}>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!status}
-                    focusableWhenDisabled
-                    className="aria-disabled:opacity-50"
-                    aria-describedby={ids.description}
-                    onClick={() => chooseFolder("Choose a folder to sync through")}
-                  >
-                    <Icon name="folder_open" size={16} />
-                    Choose Folder…
-                  </Button>
-                </Tip>
+                // While sync starts, the row's description says so.
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!status}
+                  focusableWhenDisabled
+                  className="aria-disabled:opacity-50"
+                  aria-describedby={ids.description}
+                  onClick={() => chooseFolder("Choose a folder to sync through")}
+                >
+                  <Icon name="folder_open" size={16} />
+                  Choose Folder…
+                </Button>
               ),
             },
           ],
@@ -117,12 +115,11 @@ export function useSyncSection(): SectionDef {
           description: describeStatus(status),
           keywords: "sync now status last synced",
           control: (ids) => (
-            <Tip tip={`Shares this ${COMPUTER}'s changes and picks up the others' now`} disabledReason={busy && "Wait: Fontface is syncing now"}>
-              <Button size="sm" variant="outline" disabled={busy} focusableWhenDisabled className="aria-disabled:opacity-50" aria-describedby={ids.description} onClick={syncNow}>
-                <Icon name="sync" size={16} className={busy || status.syncing ? "animate-spin" : undefined} />
-                Sync Now
-              </Button>
-            </Tip>
+            // While it syncs, the row's label says "Syncing…".
+            <Button size="sm" variant="outline" disabled={busy} focusableWhenDisabled className="aria-disabled:opacity-50" aria-describedby={ids.description} onClick={syncNow}>
+              <Icon name="sync" size={16} className={busy || status.syncing ? "animate-spin" : undefined} />
+              Sync Now
+            </Button>
           ),
         },
         {
@@ -132,16 +129,12 @@ export function useSyncSection(): SectionDef {
           keywords: `sync folder change move turn off stop ${FILE_BROWSER}`,
           control: (ids) => (
             <>
-              <Tip tip="Picks another folder to sync through">
-                <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={() => chooseFolder("Choose another folder to sync through")}>
-                  Change…
-                </Button>
-              </Tip>
+              <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={() => chooseFolder("Choose another folder to sync through")}>
+                Change…
+              </Button>
               <ConfirmButton
                 variant="destructive"
                 label="Turn Off Sync…"
-                tip={`Stops sharing changes from this ${COMPUTER}, after asking`}
-                confirmTip={`Stops sharing changes from this ${COMPUTER}`}
                 aria-describedby={ids.description}
                 title="Turn off sync?"
                 description={`This ${COMPUTER} stops sharing changes. Your tags and fonts here stay as they are, and so do the files in the sync folder, so your other computers keep what they have.`}

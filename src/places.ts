@@ -22,21 +22,16 @@ export interface SmartEntry {
   label: string;
   /** Material Symbols name. */
   icon: string;
-  /** The row's tooltip. */
-  hint: string;
   /** Its Settings › Sidebar switch. All Fonts has none: it always shows. */
   setting?: "yours" | "recent" | "active" | "untagged";
 }
 
-/** The OS's name, for plain words ("apart from the ones macOS always keeps on"). */
-const OS = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent) ? "Windows" : "macOS";
-
 export const SMART_ENTRIES: readonly SmartEntry[] = [
-  { kind: "all", label: "All Fonts", icon: "font_download", hint: "Every font Fontface knows about" },
-  { kind: "yours", label: "Your Fonts", icon: "person", hint: "Fonts you added: in your folders, Google Fonts or Purchases", setting: "yours" },
-  { kind: "recent", label: "Recently Added", icon: "schedule", hint: "Fonts added in the last 30 days, newest first", setting: "recent" },
-  { kind: "active", label: "Active", icon: "toggle_on", hint: `Fonts that are on right now, apart from the ones ${OS} always keeps on`, setting: "active" },
-  { kind: "untagged", label: "Not Tagged", icon: "label_off", hint: "Fonts with none of your own tags (built-in tags don't count)", setting: "untagged" },
+  { kind: "all", label: "All Fonts", icon: "font_download" },
+  { kind: "yours", label: "Your Fonts", icon: "person", setting: "yours" },
+  { kind: "recent", label: "Recently Added", icon: "schedule", setting: "recent" },
+  { kind: "active", label: "Active", icon: "toggle_on", setting: "active" },
+  { kind: "untagged", label: "Not Tagged", icon: "label_off", setting: "untagged" },
 ];
 
 /** The smart entries the sidebar shows (Settings › Sidebar). All Fonts is always there. */

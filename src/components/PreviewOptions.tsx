@@ -1,13 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { PreviewOptions } from "@/api";
 import { contrastText, isColor, readableOn, type PreviewColors } from "@/previewStyle";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { Tip } from "./Tip";
 
 /*
- * Words and color choices for the preview bar (PreviewBar.tsx): what each alignment and case
- * does, the ready-made inks and papers, the swatches that pick one, and the contrast line.
+ * Color choices for the preview bar (PreviewBar.tsx): the ready-made inks and papers, the
+ * swatches that pick one, and the contrast line.
  */
 
 /** Ready-made inks and papers; the color well picks any other. */
@@ -26,21 +25,8 @@ export const PAPERS = [
   { value: "#000000", label: "Black" },
 ] as const;
 
-/** What picking each alignment and case does, for their tooltips. */
-export const ALIGN_TIPS: Record<PreviewOptions["align"], string> = {
-  left: "Lines previews up on the left",
-  center: "Centers previews",
-  right: "Lines previews up on the right",
-};
-export const CASE_TIPS: Record<PreviewOptions["case"], string> = {
-  asTyped: "Shows previews as typed",
-  upper: "Shows previews in capitals",
-  lower: "Shows previews in small letters",
-  title: "Starts each word in previews with a capital",
-};
-
-/** A color's name for screen readers and tooltips: "the theme's", a ready-made one's ("cream"),
- *  or its code ("#1a2b3c"). */
+/** A color's name for screen readers: "the theme's", a ready-made one's ("cream"), or its code
+ *  ("#1a2b3c"). */
 export function colorName(value: string | null, presets: readonly { value: string; label: string }[]): string {
   if (!isColor(value)) return "the theme's";
   const preset = presets.find((p) => p.value === value.toLowerCase());
@@ -118,8 +104,6 @@ export function ColorChoice({
     refs.current[n]?.focus();
   };
   const custom = isColor(shown) && checked < 0;
-  /** "ink", "paper", in the tooltips' words. */
-  const kind = label.toLowerCase();
   return (
     <div className="flex flex-col gap-1.5">
       <span id={id} className="text-xs font-medium text-muted-foreground">
@@ -144,8 +128,10 @@ export function ColorChoice({
         >
           {choices.map((c, i) => {
             const on = i === checked;
+            // A swatch only: its tooltip is its name.
+            const name = c.value ? c.label : "Theme color";
             return (
-              <Tip key={c.label} tip={c.value ? `Uses ${c.label.toLowerCase()} ${kind}` : `Uses the theme's ${kind} color`}>
+              <Tip key={c.label} tip={name}>
                 <button
                   ref={(el) => {
                     refs.current[i] = el;
@@ -153,7 +139,7 @@ export function ColorChoice({
                   type="button"
                   role="radio"
                   aria-checked={on}
-                  aria-label={c.value ? c.label : "Theme's color"}
+                  aria-label={name}
                   // One Tab stop: the chosen color, or Theme while a color from the well is chosen.
                   tabIndex={on || (checked < 0 && i === 0) ? 0 : -1}
                   onClick={() => choose(c.value)}
@@ -191,10 +177,10 @@ export function ColorChoice({
             {!custom && <Icon name="add" size={12} className="text-white mix-blend-difference" />}
           </span>
           {/* The color well covers the whole circle, so it takes the pointer. */}
-          <Tip tip={`Picks any other ${kind} color`}>
+          <Tip tip="Custom color">
             <input
               type="color"
-              aria-label={`Another ${kind} color`}
+              aria-label="Custom color"
               className="absolute inset-0 size-full cursor-pointer opacity-0"
               value={isColor(shown) ? shown.toLowerCase() : theme}
               onChange={(e) => {

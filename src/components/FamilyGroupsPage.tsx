@@ -10,7 +10,7 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
-import { BackButton } from "@/components/fontPage/PageHeader";
+import { BackButton, useNarrowerThan } from "@/components/fontPage/PageHeader";
 import { createTipHandle, Tip, TipHost } from "@/components/Tip";
 import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
 import { keepSeparate, moveFaces, resetChoices, useFamilyChoices } from "@/families/store";
@@ -38,9 +38,6 @@ interface Props {
   announce: (text: string) => void;
 }
 
-/** Why a button is greyed out while a change is being saved. */
-const SAVING = "Wait: Fontface is still saving your change";
-
 /** Changed by you: a rule for its name or a choice for it decided its family. */
 const yours = (face: Face) => face.groupedBy === "rule" || face.groupedBy === "choice";
 /** Kept out of automatic groups by your rule on the family's own name (familyEdits.familyRuleKey). */
@@ -57,6 +54,9 @@ const namesIn = (family: Family) => new Set(family.faces.map((f) => f.name)).siz
  */
 export function FamilyGroupsPage({ page, library, grouping, placeName, locations, onBack, onFilter, onGroupByName, announce }: Props) {
   const titleBar = useTitleBar();
+  const headerRef = useRef<HTMLElement>(null);
+  // Below 640px Undo is an icon only.
+  const narrow = useNarrowerThan(headerRef, 640);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   const { undo: undoStack } = useFamilyChoices();
@@ -110,7 +110,7 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
   const count = library.auto.length;
   return (
     <>
-      <header className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
+      <header ref={headerRef} className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
         <BackButton placeName={placeName} onBack={onBack} />
         <h1 ref={headingRef} tabIndex={-1} className="min-w-0 flex-1 truncate text-base font-semibold outline-none">
           Family groups
@@ -120,13 +120,9 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
           value={filter}
           onChange={onFilter}
           options={[
-            { value: "all", label: "All", tip: "Shows every family, with its styles to check" },
-            {
-              value: "automatic",
-              label: grouping.byName ? `Automatic (${count.toLocaleString()})` : "Automatic",
-              tip: "Shows what was grouped automatically by name, and why",
-            },
-            { value: "changed", label: "Your changes", tip: "Shows only families you changed" },
+            { value: "all", label: "All" },
+            { value: "automatic", label: grouping.byName ? `Automatic (${count.toLocaleString()})` : "Automatic" },
+            { value: "changed", label: "Your changes" },
           ]}
         />
         <Input
@@ -138,12 +134,9 @@ export function FamilyGroupsPage({ page, library, grouping, placeName, locations
           aria-label="Search families"
           className="w-44 @max-[760px]/pagehead:w-28"
         />
-        {/* Its name already says what it undoes; greyed out, the tooltip's reason is its description. */}
-        <Tip
-          tip={last ? `Undoes your last change: ${last.label}` : "Undoes your last change"}
-          describe={!last}
-          disabledReason={!last && "Nothing to undo yet. Changes you make here can be undone."}
-        >
+        {/* A tooltip, its name, only while its word is hidden. For screen readers, its name also
+            says what it undoes. */}
+        <Tip tip="Undo" hide={!narrow}>
           <Button
             variant="ghost"
             size="sm"
@@ -196,9 +189,9 @@ type TreeRow =
   | { kind: "family"; key: string; family: Family; pos: number; size: number }
   | { kind: "face"; key: string; face: Face; family: Family; pos: number; size: number };
 
-/** A check box drawn, not a control (the row is the control): checked, partly or not. Other
- *  props (a tooltip's) go on the box. */
-function Mark({ state, className, ...props }: { state: boolean | "mixed" } & React.ComponentProps<"span">) {
+/** A check box drawn, not a control (the row is the control, named by its text): checked,
+ *  partly or not. */
+function Mark({ state, className }: { state: boolean | "mixed"; className?: string }) {
   return (
     <span
       aria-hidden
@@ -207,7 +200,6 @@ function Mark({ state, className, ...props }: { state: boolean | "mixed" } & Rea
         state !== false && "border-primary bg-primary text-primary-foreground",
         className,
       )}
-      {...props}
     >
       {state === true && <Icon name="check" size={13} weight={600} />}
       {state === "mixed" && <Icon name="remove" size={13} weight={600} />}
@@ -237,7 +229,7 @@ interface TreeProps {
 function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecked, locations, familyRules }: TreeProps) {
   const base = useId();
   const helpId = `${base}-help`;
-  // One tooltip shared by the rows' check boxes and open buttons (rows are drawn as they scroll by).
+  // One tooltip shared by the rows' open buttons, which are icons (rows are drawn as they scroll by).
   const [tips] = useState(createTipHandle);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -452,7 +444,7 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
                   aria-label={`${row.family.name}, ${stylesText(row.family.faces.length)}${names > 1 ? `, grouped from ${names} names` : ""}${kept ? ", kept separate by you" : changed ? ", changed by you" : ""}`}
                   className={cn(common.className, "pl-2")}
                 >
-                  <Tip handle={tips} tip={open ? "Hides this family's styles" : "Shows this family's styles"} describe={false}>
+                  <Tip handle={tips} tip={open ? "Hide styles" : "Show styles"}>
                     <span
                       aria-hidden
                       onClick={(e) => {
@@ -465,13 +457,7 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
                       <Icon name={open ? "expand_more" : "chevron_right"} size={18} />
                     </span>
                   </Tip>
-                  <Tip
-                    handle={tips}
-                    tip={state === true ? "Unchecks every style in this family" : "Checks every style in this family, to group them or keep them apart"}
-                    describe={false}
-                  >
-                    <Mark state={state} />
-                  </Tip>
+                  <Mark state={state} />
                   <span className="min-w-0 truncate font-semibold">{row.family.name}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">{stylesText(row.family.faces.length)}</span>
                   {names > 1 && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">· grouped from {names.toLocaleString()} names</span>}
@@ -494,9 +480,7 @@ function FamilyTree({ treeRef, families, filter, query, focus, checked, onChecke
                 aria-label={[face.style, face.primary.postscriptName, from ? `from “${from}”` : "", kept ? "kept under its own name by you" : how].filter(Boolean).join(", ")}
                 className={cn(common.className, "pl-10")}
               >
-                <Tip handle={tips} tip={state === true ? "Unchecks this style" : "Checks this style, to group it or keep it apart"} describe={false}>
-                  <Mark state={state} />
-                </Tip>
+                <Mark state={state} />
                 <span className="min-w-0 truncate">{face.style}</span>
                 <span className="hidden min-w-0 shrink truncate font-mono text-[11px] text-muted-foreground md:inline">{face.primary.postscriptName}</span>
                 <span className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
@@ -601,34 +585,23 @@ function SelectionBar({
             </AutocompleteList>
           </AutocompleteContent>
         </Autocomplete>
-        <Tip
-          tip="Groups the checked styles into the family you typed"
-          disabledReason={busy ? SAVING : !target.trim() && "Type or pick a family name first"}
-        >
-          <Button type="submit" size="sm" disabled={!target.trim() || busy} focusableWhenDisabled className="aria-disabled:opacity-50">
-            Apply
-          </Button>
-        </Tip>
+        <Button type="submit" size="sm" disabled={!target.trim() || busy} focusableWhenDisabled className="aria-disabled:opacity-50">
+          Apply
+        </Button>
       </form>
       <span aria-hidden className="mx-1 h-5 w-px bg-border" />
-      <Tip tip="Keeps these styles under the family names their fonts give" disabledReason={busy && SAVING}>
-        <Button size="sm" variant="outline" disabled={busy} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={keep}>
-          Keep separate
-        </Button>
-      </Tip>
+      <Button size="sm" variant="outline" disabled={busy} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={keep}>
+        Keep separate
+      </Button>
       {mine.faces.length + mine.nameKeys.length > 0 && (
-        <Tip tip="Forgets your choices for these styles, so grouping by name decides again" disabledReason={busy && SAVING}>
-          <Button size="sm" variant="ghost" disabled={busy} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={clearMine}>
-            Clear my choices
-          </Button>
-        </Tip>
+        <Button size="sm" variant="ghost" disabled={busy} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={clearMine}>
+          Clear my choices
+        </Button>
       )}
       <div className="flex-1" />
-      <Tip tip="Unchecks every style">
-        <Button size="sm" variant="ghost" onClick={onClear}>
-          Clear selection
-        </Button>
-      </Tip>
+      <Button size="sm" variant="ghost" onClick={onClear}>
+        Clear selection
+      </Button>
     </div>
   );
 }
@@ -658,18 +631,16 @@ function AutoList({ groups, on, query, onGroupByName, announce }: AutoListProps)
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground">
         <p>Grouping by name is off, so nothing is grouped automatically.</p>
-        <Tip tip="Turns on View options › Group families by name">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              onGroupByName(true);
-              after();
-            }}
-          >
-            Turn on grouping by name
-          </Button>
-        </Tip>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            onGroupByName(true);
+            after();
+          }}
+        >
+          Turn on grouping by name
+        </Button>
       </div>
     );
   }
@@ -691,11 +662,9 @@ function AutoList({ groups, on, query, onGroupByName, announce }: AutoListProps)
           <AutoCard key={g.id} group={g} announce={announce} onDone={after} />
         ))}
         {shown.length > limit && (
-          <Tip tip={`Shows ${Math.min(GROUPS_PAGE, shown.length - limit).toLocaleString()} more groups`}>
-            <Button variant="ghost" className="self-start" onClick={() => setLimit((n) => n + GROUPS_PAGE)}>
-              Show more ({(shown.length - limit).toLocaleString()})
-            </Button>
-          </Tip>
+          <Button variant="ghost" className="self-start" onClick={() => setLimit((n) => n + GROUPS_PAGE)}>
+            Show more ({(shown.length - limit).toLocaleString()})
+          </Button>
         )}
         {!shown.length && <p className="text-sm text-muted-foreground">No automatic groups match “{query}”.</p>}
       </div>
@@ -735,35 +704,31 @@ function AutoCard({ group: g, announce, onDone }: { group: AutoGroup<Family>; an
             <span className="text-muted-foreground">
               {stylesText(src.family.faces.length)} · {reasonText(src)}
             </span>
-            <Tip tip={`Takes “${src.family.name}” out of ${g.into}, back to its own family`} disabledReason={busy && SAVING}>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="ml-auto h-7 aria-disabled:opacity-50"
-                disabled={busy}
-                focusableWhenDisabled
-                onClick={() => void keep([src])}
-                aria-label={`Keep “${src.family.name}” separate from ${g.into}`}
-              >
-                Keep separate
-              </Button>
-            </Tip>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto h-7 aria-disabled:opacity-50"
+              disabled={busy}
+              focusableWhenDisabled
+              onClick={() => void keep([src])}
+              aria-label={`Keep “${src.family.name}” separate from ${g.into}`}
+            >
+              Keep separate
+            </Button>
           </li>
         ))}
       </ul>
       {g.sources.length > 1 && (
-        <Tip tip={`Takes all ${g.sources.length.toLocaleString()} families out of ${g.into}, back to their own names`} disabledReason={busy && SAVING}>
-          <Button
-            size="sm"
-            variant="outline"
-            className="self-start aria-disabled:opacity-50"
-            disabled={busy}
-            focusableWhenDisabled
-            onClick={() => void keep(g.sources)}
-          >
-            Keep all {g.sources.length.toLocaleString()} separate
-          </Button>
-        </Tip>
+        <Button
+          size="sm"
+          variant="outline"
+          className="self-start aria-disabled:opacity-50"
+          disabled={busy}
+          focusableWhenDisabled
+          onClick={() => void keep(g.sources)}
+        >
+          Keep all {g.sources.length.toLocaleString()} separate
+        </Button>
       )}
     </section>
   );

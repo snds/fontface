@@ -20,7 +20,6 @@ import {
   switchIds,
   turnOnFaces,
   uninstallWords,
-  yoursFirstTip,
   type CatalogFamily,
 } from "./googleCatalog.ts";
 import { activationIds, groupFamilies, type Face } from "./library.ts";
@@ -145,11 +144,6 @@ test("a downloaded style with a copy of yours too: Uninstall counts only the dow
   assert.deepEqual(switchIds(undefined, true), []);
 });
 
-test("the Installed switch's tooltip says what flipping it does", () => {
-  assert.equal(yoursFirstTip(true), "Lists every family A to Z");
-  assert.equal(yoursFirstTip(false), "Lists installed families first, downloaded here or already in your library");
-});
-
 test("Active: some style of the family is on, downloaded here or your own copy", () => {
   assert.ok(isActive(HOLDINGS.get("inter")));
   assert.ok(!isActive(HOLDINGS.get("roboto")));
@@ -164,8 +158,11 @@ test("the toolbar's filters: All, Downloaded, Active, Updates", () => {
   assert.deepEqual(ids("active"), ["inter", "roboto-mono"]);
   assert.deepEqual(ids("updates"), ["inter"]);
   assert.deepEqual(catalogCounts(CATALOG, HOLDINGS), { all: 5, downloaded: 1, active: 2, updates: 1 });
-  // Every filter has words for its tooltip.
-  for (const s of CATALOG_SHOWS) assert.ok(s.tip.length > 10);
+  // The filter's options, in the toolbar's order, each named in words (no tooltip).
+  assert.deepEqual(
+    CATALOG_SHOWS.map((s) => s.label),
+    ["All", "Downloaded", "Active", "Updates"],
+  );
 });
 
 test("search, category and Variable narrow the list, in the catalog's order", () => {

@@ -22,16 +22,11 @@ import type { PreviewAlign, PreviewCase, PreviewFeature, PreviewOptions } from "
 
 /** The features every preview can have, in the order the preview bar shows them. Must match
  *  PREVIEW_FEATURES in src-tauri/src/settings.rs. */
-export const PREVIEW_FEATURES: readonly { id: PreviewFeature; label: string; description: string; values: Readonly<Record<string, number>> }[] = [
-  {
-    id: "noLigatures",
-    label: "No ligatures",
-    description: "Letters such as f and i stay apart",
-    values: { liga: 0, clig: 0, dlig: 0, hlig: 0, calt: 0 },
-  },
-  { id: "smallCaps", label: "Small caps", description: "Lowercase letters as small capitals", values: { smcp: 1 } },
-  { id: "tabularFigures", label: "Tabular figures", description: "Figures of equal width, for columns", values: { tnum: 1 } },
-  { id: "caseForms", label: "Case forms", description: "Punctuation set for capitals", values: { case: 1 } },
+export const PREVIEW_FEATURES: readonly { id: PreviewFeature; label: string; values: Readonly<Record<string, number>> }[] = [
+  { id: "noLigatures", label: "No ligatures", values: { liga: 0, clig: 0, dlig: 0, hlig: 0, calt: 0 } },
+  { id: "smallCaps", label: "Small caps", values: { smcp: 1 } },
+  { id: "tabularFigures", label: "Tabular figures", values: { tnum: 1 } },
+  { id: "caseForms", label: "Case forms", values: { case: 1 } },
 ];
 
 /** The alignments and cases, in the order the preview bar shows them. Must match the choices

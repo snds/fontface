@@ -288,7 +288,7 @@ Most font stores have no API. Fontface instead notices font downloads, reads whe
 
 **User experience**
 
-- Set up: "Watch for new font purchases", on the Purchases page or in Settings > Purchases. It's off until the user turns it on, and the switch says why: on macOS, the first look at Downloads makes the system ask whether Fontface may see it. The default folder is `~/Downloads`.
+- Set up: "Watch for new font purchases", on the Purchases page or in Settings > Purchases. It's off until the user turns it on, and the words under the switch say why: on macOS, the first look at Downloads makes the system ask whether Fontface may see it. The default folder is `~/Downloads`.
 - While watching is off, Fontface doesn't look at any watched folder or at the downloads found in them: no listing, no file check, no watch, and nothing on focus. The Purchases page still opens and lists imported purchases (they live in Fontface's own folder), "Import zip or fonts…" and "Import folder…" still work (the system file picker grants access to what the user picks, without a question), and the sidebar shows no "n new" count.
 - Turning watching on reads each watched folder once, and macOS asks then. If the user says no, the read fails with a permission error (EPERM). If every folder was refused, watching stays off and the page says how to allow it in System Settings › Privacy & Security › Files and Folders, with a button that opens that page. If only some were refused, the others are watched and the refused ones show their problem.
 - A watching choice saved before this was opt-in (2026-10-20) is dropped once, so every install starts with watching off. Watched folders, finds and imports are kept.

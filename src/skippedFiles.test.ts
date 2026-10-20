@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SkippedFiles } from "./api.ts";
-import { countOf, SKIPPED_WORDS, skippedEntries, skippedMenuTip, skippedSummary, skippedTotal, sumSkipped } from "./skippedFiles.ts";
+import { countOf, SKIPPED_WORDS, skippedEntries, skippedSummary, skippedTotal, sumSkipped } from "./skippedFiles.ts";
 
 const none: SkippedFiles = {
   type1: 0,
@@ -94,9 +94,4 @@ test("every kind has words and a reason that ends in a full stop", () => {
 test("several folders add up, and uncounted folders don't count", () => {
   assert.equal(sumSkipped([undefined, null]), null);
   assert.deepEqual(sumSkipped([skipped({ type1: 1, woff: 2 }), undefined, skipped({ type1: 3, unreadable: 1 })]), skipped({ type1: 4, woff: 2, unreadable: 1 }));
-});
-
-test("the menu's tooltip counts every skipped file", () => {
-  assert.equal(skippedMenuTip(skipped({ type1: 1100, unreadable: 3 })), `Lists the ${n(1103)} files the last scan found here but didn't add, and why`);
-  assert.equal(skippedMenuTip(skipped({ eot: 1 })), "Lists the file the last scan found here but didn't add, and why");
 });

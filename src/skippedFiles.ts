@@ -143,9 +143,3 @@ export function sumSkipped(list: readonly (SkippedFiles | null | undefined)[]): 
   for (const s of counted) for (const kind of ORDER) sum[kind] += s[kind] ?? 0;
   return sum;
 }
-
-/** The tooltip of Show Skipped Files…, on a source's right-click menu. */
-export function skippedMenuTip(skipped: SkippedFiles): string {
-  const total = skippedTotal(skipped);
-  return `Lists the ${total === 1 ? "file" : `${n(total)} files`} the last scan found here but didn't add, and why`;
-}

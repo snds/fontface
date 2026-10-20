@@ -7,8 +7,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { shortcutAria } from "@/tips";
 import { FacePreview } from "./FacePreview";
-import { Tip } from "./Tip";
+import { IS_MAC } from "./TitleBar";
 
 /** Families listed before anything is typed, and at most while typing. */
 const SHOWN = 60;
@@ -21,8 +22,6 @@ export interface PickRequest {
   multiple: boolean;
   /** The button that confirms several: "Compare". */
   confirm?: string;
-  /** That button's tooltip, what it does: "Opens Compare with the fonts you picked". */
-  confirmTip?: string;
   /** Families shown as already chosen and not offered again (by Family.id). */
   exclude?: readonly string[];
   /** The picked families, in the order picked. True when picking opens a page, whose heading
@@ -155,14 +154,18 @@ function PickerBody({ request, families, onClose }: { request: PickRequest; fami
           Cancel
         </Button>
         {request.multiple && (
-          // Greyed out until something is picked, but still focusable, so its tooltip can say so.
-          // Cmd+Return in the search field does the same.
-          <Tip tip={request.confirmTip ?? "Uses the fonts you picked"} shortcut="Mod+Enter" disabledReason={!picked.length && "Pick at least one font first"}>
-            <Button disabled={!picked.length} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={() => finish(picked)}>
-              {request.confirm ?? "Done"}
-              {picked.length > 0 && ` (${picked.length})`}
-            </Button>
-          </Tip>
+          // Greyed out until something is picked, but still focusable. Cmd+Return in the search
+          // field does the same.
+          <Button
+            disabled={!picked.length}
+            focusableWhenDisabled
+            aria-keyshortcuts={shortcutAria("Mod+Enter", IS_MAC)}
+            className="aria-disabled:opacity-50"
+            onClick={() => finish(picked)}
+          >
+            {request.confirm ?? "Done"}
+            {picked.length > 0 && ` (${picked.length})`}
+          </Button>
         )}
       </DialogFooter>
     </DialogContent>

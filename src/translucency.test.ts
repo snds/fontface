@@ -8,8 +8,8 @@ import {
   platformOf,
   translucencyDescription,
   translucencyDisabledReason,
-  translucencyOptions,
   translucencyShown,
+  TRANSLUCENCY_OPTIONS,
   type Platform,
 } from "./translucency.ts";
 import { THEME_COLORS, luminance } from "./previewStyle.ts";
@@ -52,6 +52,13 @@ test("the system's reduce-transparency choice greys the choice out and says wher
   assert.match(translucencyDisabledReason("windows", t({ reduced: true })) || "", /Transparency effects are off/);
   assert.match(translucencyDisabledReason("linux", t({ reduced: true })) || "", /reduce transparency/);
   assert.match(translucencyDisabledReason("windows", t({ unsupported: true })) || "", /^Needs Windows 11/);
+  // Greyed out, the setting's description says why: there's no tooltip to say it.
+  for (const p of PLATFORMS) {
+    const why = translucencyDisabledReason(p, t({ reduced: true })) || "";
+    assert.match(why, /\.$/, `${p}: a whole sentence, as visible text`);
+    assert.ok(translucencyDescription(p, t({ reduced: true })).endsWith(` ${why}`), p);
+    assert.doesNotMatch(translucencyDescription(p, t()), /stays solid\.$/, `${p}: only while it's greyed out`);
+  }
 });
 
 test("the choice shows Off while the system rules it out", () => {
@@ -61,22 +68,16 @@ test("the choice shows Off while the system rules it out", () => {
   assert.equal(translucencyShown("sidebar", t({ unsupported: true })), "off");
 });
 
-test("three choices, each with a tooltip saying what it does", () => {
-  for (const p of PLATFORMS) {
-    const options = translucencyOptions(p);
-    assert.deepEqual(
-      options.map((o) => [o.value, o.label]),
-      [
-        ["off", "Off"],
-        ["sidebar", "Sidebar"],
-        ["window", "Whole window"],
-      ],
-    );
-    assert.equal(options[0].tip, "Keeps the window solid");
-    assert.match(options[1].tip, /through the sidebar only$/);
-    assert.match(options[2].tip, /faintly behind font lists and pages$/);
-  }
-  assert.doesNotMatch(translucencyOptions("linux")[2].tip, /softly/, "nothing softens it on Linux");
+test("three choices, whose words say what they do, so no tooltips", () => {
+  assert.deepEqual(
+    TRANSLUCENCY_OPTIONS.map((o) => [o.value, o.label]),
+    [
+      ["off", "Off"],
+      ["sidebar", "Sidebar"],
+      ["window", "Whole window"],
+    ],
+  );
+  assert.ok(TRANSLUCENCY_OPTIONS.every((o) => !("tip" in o)));
 });
 
 test("index.html and the page keep the same first-paint key and states", () => {

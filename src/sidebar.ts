@@ -5,17 +5,15 @@
  * The sidebar has three sections and no headings. Library (All Fonts and the smart entries) comes
  * first. A thin divider with a small icon starts Sources, and another starts Tags. A divider is a
  * button: a click (or Left and Right) collapses or expands its section, and a right-click (or
- * Shift-F10) opens the section's menu. The Tags divider also has an (i) that explains tags. The
- * "+" at the bottom of the sidebar makes a new tag, adds a folder, or imports fonts or tags.
+ * Shift-F10) opens the section's menu. The "+" at the bottom of the sidebar makes a new tag, adds
+ * a folder, or imports fonts or tags.
  */
 
 export type SidebarSection = "sources" | "tags";
 
 export interface SectionInfo {
-  /** Its name: what screen readers hear for its divider and its group of rows. */
+  /** Its name: what screen readers hear for its group of rows. */
   label: string;
-  /** "the sources": for the divider's tooltip. */
-  what: string;
   /** Material Symbols name, drawn outlined on the divider. */
   icon: string;
   /** Its open state's id in the sidebar's open-rows store (src/tags/expanded.ts). Sections start
@@ -24,8 +22,8 @@ export interface SectionInfo {
 }
 
 export const SECTIONS: Record<SidebarSection, SectionInfo> = {
-  sources: { label: "Sources", what: "the sources", icon: "input", openId: "section:sources" },
-  tags: { label: "Tags", what: "the tags", icon: "label", openId: "section:tags" },
+  sources: { label: "Sources", icon: "input", openId: "section:sources" },
+  tags: { label: "Tags", icon: "label", openId: "section:tags" },
 };
 
 /** Sections start open. */
@@ -40,18 +38,13 @@ export const SECTION_STARTS_OPEN = true;
  */
 export const sourceRevealed = (before: string | null, now: string | null): boolean => now !== null && now !== before;
 
-/** The divider's tooltip, which names the icon-only button: "Collapse Sources", or for a divider
- *  that doesn't collapse (Tags, whose click opens its menu), the section's name. */
-export function dividerTip(section: SidebarSection, { open, collapsible }: { open: boolean; collapsible: boolean }): string {
+/** The divider's icon-only button's name, which its tooltip shows too: "Collapse Sources", or for
+ *  a divider that doesn't collapse (Tags, whose click opens its menu), the section's name. */
+export function dividerLabel(section: SidebarSection, { open, collapsible }: { open: boolean; collapsible: boolean }): string {
   const { label } = SECTIONS[section];
   if (!collapsible) return label;
   return `${open ? "Collapse" : "Expand"} ${label}`;
 }
-
-/** What screen readers hear for a divider: its section's name (its state comes from
- *  aria-expanded). */
-export const dividerLabel = (section: SidebarSection) => SECTIONS[section].label;
-
 
 // ------------------------------------------------------------------------------------- counts
 
@@ -114,22 +107,15 @@ export interface MenuEntry {
   label: string;
   /** Material Symbols name. */
   icon: string;
-  /** Its tooltip: what it does or, when it's greyed out, why. */
-  tip: string;
   disabled?: boolean;
 }
 
 /** A menu: its entries in order, with "-" for a separator. */
 export type MenuLine = MenuEntry | "-";
 
-export const ADD_FOLDER_TIP = "Picks a folder of fonts to add to your library";
-export const NEW_TAG_TIP = "Makes a new tag. Then drag fonts onto it, or use a font's right-click menu.";
-export const IMPORT_TAGS_TIP = "Brings in tags from Finder, this Mac's font collections, another font manager's backup, or a Fontface tags file";
-export const IMPORT_PURCHASES_TIP = "Opens Purchases, where you can add a zip, font files or a folder of fonts you bought";
-
-const NEW_TAG: MenuEntry = { id: "newTag", label: "New Tag…", icon: "new_label", tip: NEW_TAG_TIP };
-const ADD_FOLDER: MenuEntry = { id: "addFolder", label: "Add Folder…", icon: "create_new_folder", tip: ADD_FOLDER_TIP };
-const IMPORT_TAGS: MenuEntry = { id: "importTags", label: "Import Tags…", icon: "download", tip: IMPORT_TAGS_TIP };
+const NEW_TAG: MenuEntry = { id: "newTag", label: "New Tag…", icon: "new_label" };
+const ADD_FOLDER: MenuEntry = { id: "addFolder", label: "Add Folder…", icon: "create_new_folder" };
+const IMPORT_TAGS: MenuEntry = { id: "importTags", label: "Import Tags…", icon: "download" };
 
 /** What the sidebar shows, as far as its menus care (Settings › Sidebar). */
 export interface MenuContext {
@@ -144,18 +130,17 @@ export interface MenuContext {
 export function addMenu({ purchases, tags }: MenuContext): MenuLine[] {
   const make: MenuEntry[] = [...(tags ? [NEW_TAG] : []), ADD_FOLDER];
   const imports: MenuEntry[] = [
-    ...(purchases ? [{ id: "importPurchases", label: "Import Purchased Fonts…", icon: "shopping_bag", tip: IMPORT_PURCHASES_TIP } as const] : []),
+    ...(purchases ? [{ id: "importPurchases", label: "Import Purchased Fonts…", icon: "shopping_bag" } as const] : []),
     ...(tags ? [IMPORT_TAGS] : []),
   ];
   return imports.length ? [...make, "-", ...imports] : make;
 }
 
 /** "Collapse Section" or "Expand Section", last in a divider's menu. */
-function toggleEntry(section: SidebarSection, open: boolean): MenuEntry {
-  const { what } = SECTIONS[section];
+function toggleEntry(open: boolean): MenuEntry {
   return open
-    ? { id: "toggleSection", label: "Collapse Section", icon: "collapse_content", tip: `Hides ${what} until you expand them again. A click on the divider does the same.` }
-    : { id: "toggleSection", label: "Expand Section", icon: "expand_content", tip: `Shows ${what} again` };
+    ? { id: "toggleSection", label: "Collapse Section", icon: "collapse_content" }
+    : { id: "toggleSection", label: "Expand Section", icon: "expand_content" };
 }
 
 export interface DividerMenuContext {
@@ -170,23 +155,17 @@ export interface DividerMenuContext {
 /** A divider's menu. Sources: Add Folder…, then Collapse (or Expand) Section. Tags, which is
  *  always shown: New Tag…, Import Tags…, Export Tags…, then Open and Close All Tags. */
 export function dividerMenu(section: SidebarSection, ctx: DividerMenuContext): MenuLine[] {
-  if (section === "sources") return [ADD_FOLDER, "-", toggleEntry(section, ctx.open)];
+  if (section === "sources") return [ADD_FOLDER, "-", toggleEntry(ctx.open)];
   const out: MenuLine[] = [
     NEW_TAG,
     IMPORT_TAGS,
-    {
-      id: "exportTags",
-      label: "Export Tags…",
-      icon: "ios_share",
-      tip: ctx.anyTags ? "Saves all your tags to a file, to Finder tags, or to this Mac's font collections" : "There are no tags to export yet. Make one first.",
-      disabled: !ctx.anyTags,
-    },
+    { id: "exportTags", label: "Export Tags…", icon: "ios_share", disabled: !ctx.anyTags },
   ];
   if (ctx.anyNested) {
     out.push(
       "-",
-      { id: "openAllTags", label: "Open All Tags", icon: "unfold_more", tip: "Shows the tags inside every tag" },
-      { id: "closeAllTags", label: "Close All Tags", icon: "unfold_less", tip: "Hides the tags inside other tags" },
+      { id: "openAllTags", label: "Open All Tags", icon: "unfold_more" },
+      { id: "closeAllTags", label: "Close All Tags", icon: "unfold_less" },
     );
   }
   return out;

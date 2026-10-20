@@ -2,7 +2,7 @@ import { toast } from "sonner";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { useStateWording } from "@/components/ActivationSwitch";
-import { CONTEXT, TipItem, type Kit } from "@/components/Tip";
+import { CONTEXT, type Kit } from "@/components/Tip";
 import type { ActivationMode } from "@/api";
 import { otherMode } from "@/fontActions";
 import type { Face } from "@/library";
@@ -15,50 +15,51 @@ import { parentOf, useTagIndex } from "./model";
 import { recolorTag, setLocationColor } from "./store";
 import { switchTag } from "./switching";
 
+/*
+ * Menu items show their words, so none of them has a tooltip (components/Tip.tsx). A greyed-out
+ * item doesn't say why there either: a built-in tag's menu starts with "Built-in tag, read-only".
+ */
+
 /** A menu item for one of a tag's actions (tagActions.ts says if it can run, and its words). */
 function ActionItem({ kit, state, icon, onClick, variant }: { kit: Kit; state: TagActionState; icon: string; onClick: (e: React.MouseEvent) => void; variant?: "destructive" }) {
+  const { Item } = kit;
   return (
-    <TipItem kit={kit} tip={state.tip} disabled={!state.enabled} variant={variant} onClick={onClick}>
+    <Item disabled={!state.enabled} variant={variant} onClick={onClick}>
       <Icon name={icon} size={16} />
       {state.label}
-    </TipItem>
+    </Item>
   );
 }
 
-/** A "Color" submenu with the palette as radio items. `tip`: the trigger's tooltip (with
- *  `disabled`, why it's greyed out); `pickTip`: each color's. */
+/** A "Color" submenu with the palette as radio items. */
 function ColorSub({
   kit,
   value,
   defaultColor,
   onPick,
-  tip,
-  pickTip,
   disabled,
 }: {
   kit: Kit;
   value: TagColor;
   defaultColor?: TagColor;
   onPick: (c: TagColor) => void;
-  tip: string;
-  pickTip: (c: TagColor) => string;
   disabled?: boolean;
 }) {
-  const { Sub, SubContent, RadioGroup } = kit;
+  const { Sub, SubTrigger, SubContent, RadioGroup, RadioItem } = kit;
   return (
     <Sub>
-      <TipItem kit={kit} as="SubTrigger" tip={tip} disabled={disabled}>
+      <SubTrigger disabled={disabled}>
         <span className="size-3 rounded-full" style={{ background: colorVar(value) }} aria-hidden />
         Color
-      </TipItem>
+      </SubTrigger>
       <SubContent className="min-w-40">
         <RadioGroup value={value} onValueChange={(c: TagColor) => onPick(c)}>
           {PALETTE.map((c) => (
-            <TipItem kit={kit} as="RadioItem" key={c} value={c} tip={pickTip(c)}>
+            <RadioItem key={c} value={c}>
               <span className="size-3 rounded-full" style={{ background: colorVar(c) }} aria-hidden />
               {COLOR_NAMES[c]}
               {c === defaultColor && <span className="text-muted-foreground">(default)</span>}
-            </TipItem>
+            </RadioItem>
           ))}
         </RadioGroup>
       </SubContent>
@@ -94,10 +95,10 @@ export function useBuiltinHidden(): boolean {
 
 /**
  * "Move to": the top level, or any of your tags that isn't this one, inside it, or its parent
- * already (tagActions.canNestIn). Greyed out on a built-in tag, with why (`state`).
+ * already (tagActions.canNestIn). Greyed out on a built-in tag (`state`).
  */
 function MoveSub({ kit, tag, state }: { kit: Kit; tag: Tag; state: TagActionState }) {
-  const { Sub, SubContent, Separator } = kit;
+  const { Item, Sub, SubTrigger, SubContent, Separator } = kit;
   const index = useTagIndex();
   const builtinHidden = useBuiltinHidden();
   const parent = parentOf(tag.name);
@@ -105,31 +106,25 @@ function MoveSub({ kit, tag, state }: { kit: Kit; tag: Tag; state: TagActionStat
   if (state.enabled && !parent && !places.length) return null;
   return (
     <Sub>
-      <TipItem kit={kit} as="SubTrigger" tip={state.tip} disabled={!state.enabled}>
+      <SubTrigger disabled={!state.enabled}>
         <Icon name="drive_file_move" size={16} />
         {state.label}
-      </TipItem>
+      </SubTrigger>
       <SubContent className="max-h-[min(26rem,var(--available-height))] min-w-48 overflow-y-auto">
         {parent && (
           <>
-            <TipItem kit={kit} tip={`Takes it out of “${parent}”, to the top level`} onClick={() => moveTag(tag, null, { builtinHidden, follow: true })}>
+            <Item onClick={() => moveTag(tag, null, { builtinHidden, follow: true })}>
               <Icon name="vertical_align_top" size={16} />
               Top level
-            </TipItem>
+            </Item>
             {places.length > 0 && <Separator />}
           </>
         )}
         {places.map((n) => (
-          <TipItem
-            kit={kit}
-            key={n.tag.id}
-            tip={`Puts it inside “${n.tag.name}”`}
-            style={{ paddingLeft: 6 + n.depth * 14 }}
-            onClick={() => moveTag(tag, n.tag, { builtinHidden, follow: true })}
-          >
+          <Item key={n.tag.id} style={{ paddingLeft: 6 + n.depth * 14 }} onClick={() => moveTag(tag, n.tag, { builtinHidden, follow: true })}>
             <Icon name="label" size={16} filled style={{ color: colorVar(n.tag.color) }} />
             <span className="truncate">{n.label}</span>
-          </TipItem>
+          </Item>
         ))}
       </SubContent>
     </Sub>
@@ -139,8 +134,8 @@ function MoveSub({ kit, tag, state }: { kit: Kit; tag: Tag; state: TagActionStat
 /**
  * The tag menu, for its right-click menu and its "…" menu. `set`: the fonts it covers (its own
  * and the tags' inside it, tagActions.facesByTag), which Turn on and Turn off work on. A
- * built-in tag shows the same items, with the ones that would change it greyed out (each
- * tooltip says why), plus "Make it my tag".
+ * built-in tag shows the same items, with the ones that would change it greyed out, under
+ * "Built-in tag, read-only", plus "Make it my tag".
  */
 /** Turning on until logout has the clock the font list's mark uses; turning on to stay, a switch. */
 const modeIcon = (mode: ActivationMode) => (mode === "temporary" ? "timer" : "toggle_on");
@@ -150,10 +145,9 @@ export function TagMenuItems({ kit, tag, set }: { kit: Kit; tag: Tag; set: reado
   const index = useTagIndex();
   const builtinHidden = useBuiltinHidden();
   const { mode = "persistent", untilQuit = false } = useStateWording();
-  const nested = (index.subtree.get(tag.id)?.size ?? 1) > 1;
   const top = index.topTag(tag.id) ?? tag;
-  const edit = tagEditStates(tag, top, { nested });
-  const turn = tagSwitchStates(tag.name, set, { mode, untilQuit, nested });
+  const edit = tagEditStates(tag, top);
+  const turn = tagSwitchStates(set, { mode, untilQuit });
   const locked = !edit.rename.enabled;
   const wording = { mode, untilQuit };
   return (
@@ -177,14 +171,7 @@ export function TagMenuItems({ kit, tag, set }: { kit: Kit; tag: Tag; set: reado
         </>
       )}
       <ActionItem kit={kit} state={edit.rename} icon="edit" onClick={() => openTagDialog({ kind: "rename", tag })} />
-      <ColorSub
-        kit={kit}
-        value={tag.color}
-        tip={edit.color.tip}
-        pickTip={(c) => (c === tag.color ? `“${tag.name}” is ${COLOR_NAMES[c]} now` : `Changes “${tag.name}” to ${COLOR_NAMES[c]}`)}
-        disabled={!edit.color.enabled}
-        onPick={(c) => recolorTag(tag.id, c).catch(failed("change the color"))}
-      />
+      <ColorSub kit={kit} value={tag.color} disabled={!edit.color.enabled} onPick={(c) => recolorTag(tag.id, c).catch(failed("change the color"))} />
       <ActionItem kit={kit} state={edit.newInside} icon="new_label" onClick={() => openTagDialog({ kind: "create", parent: tag })} />
       <MoveSub kit={kit} tag={tag} state={edit.moveTo} />
       <ActionItem kit={kit} state={edit.export} icon="ios_share" onClick={() => openTagDialog({ kind: "export", tag })} />
@@ -194,21 +181,20 @@ export function TagMenuItems({ kit, tag, set }: { kit: Kit; tag: Tag; set: reado
   );
 }
 
-/** What a source's color is for: the dots that mark where each font in a list lives. (Its sidebar
- *  icon is an outline in the text color.) */
-const LOCATION_COLOR_TIP = "Changes the color of the dots that mark its fonts in lists";
-
 /** "Locate…", for a folder that can't be found. */
 function LocateItem({ onLocate }: { onLocate: () => void }) {
+  const { Item } = CONTEXT;
   return (
-    <TipItem kit={CONTEXT} tip="Points Fontface at where the folder moved, then rescans it" onClick={onLocate}>
+    <Item onClick={onLocate}>
       <Icon name="folder_open" size={16} />
       Locate…
-    </TipItem>
+    </Item>
   );
 }
 
-/** The color items for one location: the palette, and a way back to the default. */
+/** The color items for one location: the palette (the color of the dots that mark where each font
+ *  in a list lives; its sidebar icon is an outline in the text color), and a way back to the
+ *  default. */
 function LocationItems({
   location,
   color,
@@ -220,11 +206,9 @@ function LocationItems({
   defaultColor: TagColor;
   onLocate?: () => void;
 }) {
-  const { Separator } = CONTEXT;
+  const { Item, Separator } = CONTEXT;
   // Picking the default goes back to following it, rather than fixing that color in place.
   const pick = (c: TagColor) => setLocationColor(location, c === defaultColor ? null : c).catch(failed("change the color"));
-  const pickTip = (c: TagColor) =>
-    c === color ? `Its dots are ${COLOR_NAMES[c]} now` : c === defaultColor ? `Goes back to its default color, ${COLOR_NAMES[c]}` : `Changes its dots to ${COLOR_NAMES[c]}`;
   return (
     <>
       {onLocate && (
@@ -233,14 +217,14 @@ function LocationItems({
           <Separator />
         </>
       )}
-      <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={pick} tip={LOCATION_COLOR_TIP} pickTip={pickTip} />
+      <ColorSub kit={CONTEXT} value={color} defaultColor={defaultColor} onPick={pick} />
       {color !== defaultColor && (
         <>
           <Separator />
-          <TipItem kit={CONTEXT} tip={`Goes back to its default color, ${COLOR_NAMES[defaultColor]}`} onClick={() => setLocationColor(location, null).catch(failed("reset the color"))}>
+          <Item onClick={() => setLocationColor(location, null).catch(failed("reset the color"))}>
             <Icon name="restart_alt" size={16} />
             Use default color ({COLOR_NAMES[defaultColor]})
-          </TipItem>
+          </Item>
         </>
       )}
     </>
@@ -251,8 +235,6 @@ function LocationItems({
 export interface MenuAction {
   icon: string;
   label: string;
-  /** Its tooltip: what it does. */
-  tip: string;
   onClick: () => void;
   destructive?: boolean;
 }
@@ -285,12 +267,12 @@ export function LocationMenu({
   children: React.ReactNode;
 }) {
   if (disabled && !before.length && !after.length && !onLocate) return <>{children}</>;
-  const { Separator } = CONTEXT;
+  const { Item, Separator } = CONTEXT;
   const action = (a: MenuAction) => (
-    <TipItem kit={CONTEXT} key={a.label} tip={a.tip} variant={a.destructive ? "destructive" : undefined} onClick={a.onClick}>
+    <Item key={a.label} variant={a.destructive ? "destructive" : undefined} onClick={a.onClick}>
       <Icon name={a.icon} size={16} />
       {a.label}
-    </TipItem>
+    </Item>
   );
   return (
     <ContextMenu>

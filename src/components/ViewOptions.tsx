@@ -15,28 +15,22 @@ import { Tip } from "./Tip";
 
 const CMD = IS_MAC ? "⌘" : "Ctrl+";
 
-/** What picking each layout does, for its tooltip (the toolbar's switch and View options). */
-const LAYOUT_TIPS: Record<LibraryLayout, string> = {
-  tiles: "Shows fonts as a grid of cards",
-  rows: "Shows one font per line, with a large preview",
-  table: "Shows fonts in a table you can sort by any column",
-};
-
 /**
  * The toolbar's layout switch: Tiles, Rows, Table (Cmd+1, Cmd+2, Cmd+3). A radio group, so it's
- * one Tab stop and the arrow keys move the choice. `unavailable`: layouts the view can't show,
- * each with why; they're greyed out, say why on hover, and the arrow keys pass over them.
+ * one Tab stop and the arrow keys move the choice. Icons only, so each has its name and shortcut
+ * as a tooltip. `unavailable`: layouts the view can't show; they're greyed out and the arrow keys
+ * pass over them.
  */
 export function LayoutSwitch({
   value,
   onChange,
   className,
-  unavailable = {},
+  unavailable = [],
 }: {
   value: LibraryLayout;
   onChange: (layout: LibraryLayout) => void;
   className?: string;
-  unavailable?: Partial<Record<LibraryLayout, string>>;
+  unavailable?: readonly LibraryLayout[];
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const current = Math.max(0, LAYOUTS.findIndex((l) => l.id === value));
@@ -44,7 +38,7 @@ export function LayoutSwitch({
     // The next one along that the view can show (none: stay).
     for (let n = 0; n < LAYOUTS.length; n++) {
       const i = (((to + n * step) % LAYOUTS.length) + LAYOUTS.length) % LAYOUTS.length;
-      if (unavailable[LAYOUTS[i].id]) continue;
+      if (unavailable.includes(LAYOUTS[i].id)) continue;
       onChange(LAYOUTS[i].id);
       refs.current[i]?.focus();
       return;
@@ -68,11 +62,11 @@ export function LayoutSwitch({
     >
       {LAYOUTS.map((l, i) => {
         const checked = i === current;
-        const why = unavailable[l.id];
+        const off = unavailable.includes(l.id);
         return (
           // Cmd+1, Cmd+2, Cmd+3 (Ctrl on Windows), and View › Tiles, Rows, Table. A layout the view
-          // can't show is greyed out but keeps the pointer and focus, so its tooltip can say why.
-          <Tip key={l.id} tip={LAYOUT_TIPS[l.id]} shortcut={`Mod+${l.digit}`} disabledReason={why}>
+          // can't show is greyed out but keeps the pointer and focus, so its name still shows.
+          <Tip key={l.id} tip={l.label} shortcut={`Mod+${l.digit}`}>
             <button
               ref={(el) => {
                 refs.current[i] = el;
@@ -81,13 +75,13 @@ export function LayoutSwitch({
               role="radio"
               aria-checked={checked}
               aria-label={l.label}
-              aria-disabled={why ? true : undefined}
+              aria-disabled={off || undefined}
               tabIndex={checked ? 0 : -1}
-              onClick={() => !why && onChange(l.id)}
+              onClick={() => !off && onChange(l.id)}
               className={cn(
                 "flex h-6 w-7 items-center justify-center rounded-md",
                 checked ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:text-foreground",
-                why && "opacity-40 hover:text-muted-foreground",
+                off && "opacity-40 hover:text-muted-foreground",
               )}
             >
               <Icon name={l.icon} size={16} filled={checked} />
@@ -130,12 +124,13 @@ export function ViewOptions(props: Props) {
   const info = sortInfo(sort.key);
   // The main sorts, plus the current one if it came from a Table header (Format, Source…).
   const keys = SORTS.filter((s) => s.main || s.key === sort.key);
-  // With the Preview column, rows are tall enough for it whichever height is picked.
+  // With the Preview column, rows are tall enough for it whichever height is picked (a short
+  // note under Row height says so).
   const previewColumn = resolveColumns(columns).some((c) => c.def.id === "preview" && c.shown);
   const other = info.directions[sort.desc ? 0 : 1];
   return (
     <Popover>
-      <Tip tip="Changes the layout, grouping and sort">
+      <Tip tip="View options">
         <PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="View options" />}>
           <Icon name="tune" size={18} />
         </PopoverTrigger>
@@ -155,7 +150,6 @@ export function ViewOptions(props: Props) {
                   {l.label}
                 </span>
               ),
-              tip: LAYOUT_TIPS[l.id],
               shortcut: `Mod+${l.digit}`,
             }))}
           />
@@ -170,15 +164,13 @@ export function ViewOptions(props: Props) {
               Off: every style is listed on its own.
             </span>
           </span>
-          <Tip tip={groupStyles ? "Lists every style on its own" : "Groups styles under their family"}>
-            <Switch
-              checked={groupStyles}
-              onCheckedChange={(on) => onGroupStyles(on)}
-              aria-labelledby={`${id}-group`}
-              aria-describedby={`${id}-group-desc`}
-              className="mt-0.5"
-            />
-          </Tip>
+          <Switch
+            checked={groupStyles}
+            onCheckedChange={(on) => onGroupStyles(on)}
+            aria-labelledby={`${id}-group`}
+            aria-describedby={`${id}-group-desc`}
+            className="mt-0.5"
+          />
         </label>
         <label className="flex items-start justify-between gap-3">
           <span className="flex flex-col gap-0.5">
@@ -189,26 +181,22 @@ export function ViewOptions(props: Props) {
               Joins fonts whose names differ only by a style word, like “AmintaBold” or “Arial Narrow”. Off: each font keeps its own family name.
             </span>
           </span>
-          <Tip tip={groupByName ? "Keeps each font's own family name" : "Joins families whose names differ only by a style word"}>
-            <Switch
-              checked={groupByName}
-              onCheckedChange={(on) => onGroupByName(on)}
-              aria-labelledby={`${id}-byname`}
-              aria-describedby={`${id}-byname-desc`}
-              className="mt-0.5"
-            />
-          </Tip>
+          <Switch
+            checked={groupByName}
+            onCheckedChange={(on) => onGroupByName(on)}
+            aria-labelledby={`${id}-byname`}
+            aria-describedby={`${id}-byname-desc`}
+            className="mt-0.5"
+          />
         </label>
-        <Tip tip="Opens Family groups, to see and change how styles are grouped">
-          <PopoverClose
-            render={<Button variant="outline" size="sm" className="self-start" />}
-            onClick={onFamilyGroups}
-            aria-describedby={`${id}-families-desc`}
-          >
-            <Icon name="account_tree" size={16} />
-            Family groups…
-          </PopoverClose>
-        </Tip>
+        <PopoverClose
+          render={<Button variant="outline" size="sm" className="self-start" />}
+          onClick={onFamilyGroups}
+          aria-describedby={`${id}-families-desc`}
+        >
+          <Icon name="account_tree" size={16} />
+          Family groups…
+        </PopoverClose>
         <span id={`${id}-families-desc`} className="-mt-2 text-xs text-muted-foreground">
           See what was grouped and why, and keep any family separate.
         </span>
@@ -220,11 +208,9 @@ export function ViewOptions(props: Props) {
               onValueChange={(key) => typeof key === "string" && onSort({ key: key as SortKey, desc: sortInfo(key as SortKey).desc })}
               items={keys.map((s) => ({ value: s.key, label: s.label }))}
             >
-              <Tip tip="Chooses what the fonts are sorted by">
-                <SelectTrigger size="sm" className="min-w-0 flex-1" aria-labelledby={`${id}-sort`}>
-                  <SelectValue />
-                </SelectTrigger>
-              </Tip>
+              <SelectTrigger size="sm" className="min-w-0 flex-1" aria-labelledby={`${id}-sort`}>
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 {keys.map((s) => (
                   <SelectItem key={s.key} value={s.key}>
@@ -233,18 +219,15 @@ export function ViewOptions(props: Props) {
                 ))}
               </SelectContent>
             </Select>
-            {/* Its name already says what a click does. */}
-            <Tip tip={`Reverses the order: ${other}`} describe={false}>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onSort({ ...sort, desc: !sort.desc })}
-                aria-label={`Order: ${directionWords(sort)}. Change to ${other}`}
-              >
-                <Icon name={sort.desc ? "arrow_downward" : "arrow_upward"} size={14} />
-                {directionWords(sort)}
-              </Button>
-            </Tip>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onSort({ ...sort, desc: !sort.desc })}
+              aria-label={`Order: ${directionWords(sort)}. Change to ${other}`}
+            >
+              <Icon name={sort.desc ? "arrow_downward" : "arrow_upward"} size={14} />
+              {directionWords(sort)}
+            </Button>
           </div>
         </Section>
 
@@ -253,17 +236,19 @@ export function ViewOptions(props: Props) {
             <Section label="Row height" id={`${id}-density`}>
               <ChoiceGroup
                 labelledBy={`${id}-density`}
+                describedBy={previewColumn ? `${id}-density-desc` : undefined}
                 value={density}
                 onChange={onDensity}
                 options={[
-                  {
-                    value: "compact",
-                    label: "Compact",
-                    tip: previewColumn ? "Makes rows shorter once the Preview column is hidden" : "Makes rows shorter, so more fit on screen",
-                  },
-                  { value: "regular", label: "Regular", tip: "Gives each row a little more room" },
+                  { value: "compact", label: "Compact" },
+                  { value: "regular", label: "Regular" },
                 ]}
               />
+              {previewColumn && (
+                <span id={`${id}-density-desc`} className="text-xs text-muted-foreground">
+                  Rows stay tall while the Preview column shows.
+                </span>
+              )}
             </Section>
             <Section label="Columns" id={`${id}-columns`}>
               <div role="group" aria-labelledby={`${id}-columns`} className="grid grid-cols-2 gap-x-3 gap-y-1.5">
@@ -271,9 +256,7 @@ export function ViewOptions(props: Props) {
                   .filter((c) => !c.def.pinned)
                   .map((c) => (
                     <label key={c.def.id} className="flex items-center gap-2 text-sm">
-                      <Tip tip={c.shown ? `Hides the ${c.def.label} column` : `Shows the ${c.def.label} column`}>
-                        <Checkbox checked={c.shown} onCheckedChange={(on) => onColumns(setShown(columns, c.def.id, on))} />
-                      </Tip>
+                      <Checkbox checked={c.shown} onCheckedChange={(on) => onColumns(setShown(columns, c.def.id, on))} />
                       {c.def.label}
                     </label>
                   ))}

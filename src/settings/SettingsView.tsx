@@ -3,7 +3,6 @@ import { PageHeader } from "@/components/TitleBar";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
-import { Tip } from "@/components/Tip";
 import { keyHandled } from "@/tips";
 import { SECTION_LIST, SettingGroup, SettingRow, type RowDef, type SectionDef, type SectionId } from "./parts";
 import { useSections, type SectionProps } from "./sections";
@@ -122,11 +121,9 @@ export function SettingsScreen({ section, onSection, onClose, ...props }: Props)
                 {error ? (
                   <>
                     <p>Couldn't load the settings. {error}</p>
-                    <Tip tip="Tries reading the settings again">
-                      <Button size="sm" variant="outline" onClick={reload}>
-                        Try again
-                      </Button>
-                    </Tip>
+                    <Button size="sm" variant="outline" onClick={reload}>
+                      Try again
+                    </Button>
                   </>
                 ) : (
                   <p className="flex items-center gap-2">

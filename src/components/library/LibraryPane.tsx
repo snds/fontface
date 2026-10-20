@@ -13,6 +13,7 @@ import { isMenuKey, openMenuFromKeyboard } from "@/tags/menus";
 import type { Locations } from "@/tags/locations";
 import { uniqueFaces, useTagIndex, type TagIndex } from "@/tags/model";
 import { TagPicker } from "@/tags/TagPicker";
+import { shortcutAria } from "@/tips";
 import { FontActionItems, useFontActions } from "../FontActions";
 import { FontList } from "../FontList";
 import { createTipHandle, Tip, TipHost, type TipHandle } from "../Tip";
@@ -528,31 +529,25 @@ function BulkBar({ faces, rows, target, onClear }: { faces: Face[]; rows: number
         {rows.toLocaleString()} selected · {faces.length.toLocaleString()} {faces.length === 1 ? "style" : "styles"}
       </span>
       {actions && target && (
-        <Tip tip="Shows the selected fonts side by side">
-          <Button id={COMPARE_BUTTON_ID} variant="outline" size="sm" onClick={() => actions.run("compare", target, { returnTo: COMPARE_BUTTON_ID })}>
-            <Icon name="compare" size={16} />
-            Compare
-          </Button>
-        </Tip>
+        <Button id={COMPARE_BUTTON_ID} variant="outline" size="sm" onClick={() => actions.run("compare", target, { returnTo: COMPARE_BUTTON_ID })}>
+          <Icon name="compare" size={16} />
+          Compare
+        </Button>
       )}
       <Popover>
         {/* ⌘T opens the same tag picker for the selection (as a dialog). */}
-        <Tip tip="Adds or removes tags on the selected fonts" shortcut="Mod+T">
-          <PopoverTrigger render={<Button variant="outline" size="sm" />}>
-            <Icon name="sell" size={16} />
-            Tags…
-          </PopoverTrigger>
-        </Tip>
+        <PopoverTrigger render={<Button variant="outline" size="sm" aria-keyshortcuts={shortcutAria("Mod+T", IS_MAC)} />}>
+          <Icon name="sell" size={16} />
+          Tags…
+        </PopoverTrigger>
         <PopoverContent align="end" className="w-80">
           <TagPicker faces={faces} />
         </PopoverContent>
       </Popover>
       {/* Esc in the list clears it too. */}
-      <Tip tip="Clears the selection" shortcut="Esc">
-        <Button variant="ghost" size="sm" onClick={onClear}>
-          Clear
-        </Button>
-      </Tip>
+      <Button variant="ghost" size="sm" aria-keyshortcuts={shortcutAria("Esc", IS_MAC)} onClick={onClear}>
+        Clear
+      </Button>
     </div>
   );
 }
@@ -561,11 +556,10 @@ function BulkBar({ faces, rows, target, onClear }: { faces: Face[]; rows: number
 export function RowTagButton({ rowKey: key, actions, label, tabIndex }: { rowKey: string; actions: RowActions; label: string; tabIndex: number }) {
   const [open, setOpen] = useState(false);
   const faces = open ? actions.targetsFor(key) : [];
-  // Like the button itself: the selection, if this row is one of several selected.
-  const several = actions.selection.keys.size > 1 && actions.selection.keys.has(key);
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <Tip handle={actions.tips} tip={several ? "Adds or removes tags on the selected fonts" : "Adds or removes tags on this font"} hide={open}>
+      {/* An icon only: its name is its tooltip. */}
+      <Tip handle={actions.tips} tip="Tags" hide={open}>
         <PopoverTrigger
           render={
             <Button

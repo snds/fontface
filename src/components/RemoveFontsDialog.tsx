@@ -10,7 +10,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Tip } from "./Tip";
 import { IS_MAC } from "./TitleBar";
 
 /** What Remove from Library… asks about: the fonts in words ("Inter", "12 styles") and the plan. */
@@ -44,11 +43,9 @@ export function RemoveFontsDialog({ request, onConfirm, onCancel }: { request: R
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <Tip tip="Turns these files off and stops listing them. Nothing is deleted.">
-            <AlertDialogAction variant="destructive" onClick={() => request && onConfirm(request)}>
-              Remove
-            </AlertDialogAction>
-          </Tip>
+          <AlertDialogAction variant="destructive" onClick={() => request && onConfirm(request)}>
+            Remove
+          </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

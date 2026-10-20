@@ -6,18 +6,18 @@ import { api, type AppSettings, type FontSummary, type PurchasesStatus, type Rem
 import { previewCacheButton } from "@/googlePreviews";
 import { refreshGooglePreviews, useGooglePreviewAnswers } from "@/googlePreviewStore";
 import { INSTALLED_LABEL } from "@/library";
-import { PRIVACY_SETTINGS_LABEL, PRIVACY_SETTINGS_TIP, PRIVACY_SETTINGS_URL, WATCH_LABEL, watchExplainer, watchNotice, watchSwitchTip } from "@/purchaseWatch";
+import { PRIVACY_SETTINGS_LABEL, PRIVACY_SETTINGS_URL, WATCH_LABEL, watchExplainer, watchNotice } from "@/purchaseWatch";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
 import { IS_MAC } from "@/components/TitleBar";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { createTipHandle, ROW_TIP_DELAY, Tip, TipHost } from "@/components/Tip";
+import { createTipHandle, CutShort, TipHost } from "@/components/Tip";
 import { cn } from "@/lib/utils";
 import { openTagDialog } from "@/tags/dialogs";
 import { useSyncSection } from "@/sync/SyncSection";
-import { PLATFORM, TRANSLUCENCY_LABEL, translucencyDescription, translucencyDisabledReason, translucencyOptions, translucencyShown } from "@/translucency";
+import { PLATFORM, TRANSLUCENCY_LABEL, TRANSLUCENCY_OPTIONS, translucencyDescription, translucencyDisabledReason, translucencyShown } from "@/translucency";
 import { ConfirmButton, describe, NumberField, SECTION_LIST, TextSetting, type RowDef, type RowIds, type SectionDef, type SectionId } from "./parts";
 import { useTranslucency } from "./translucent";
 import { useSettings } from "./useSettings";
@@ -33,16 +33,6 @@ const meta = (id: SectionId) => SECTION_LIST.find((s) => s.id === id)!;
 const when = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 type Flag = { [K in keyof AppSettings]: AppSettings[K] extends boolean ? K : never }[keyof AppSettings];
-
-/** A switch's tooltip, saying what a click does: `on` while it's off, `off` while it's on. */
-interface SwitchTips {
-  on: string;
-  off: string;
-}
-const switchTip = (checked: boolean, tips: SwitchTips) => (checked ? tips.off : tips.on);
-
-/** Says why a button is greyed out while Fontface is busy with it. */
-const WAIT = (doing: string) => `Wait: Fontface is still ${doing}`;
 
 /** "12 font files are on, and 3 more are set to come back on." `waiting`: files Fontface keeps
  *  on that macOS doesn't have on right now (e.g. on a drive that isn't connected). */
@@ -266,8 +256,6 @@ const SIDEBAR_GROUPS: { id: string; title: string; rows: { key: SidebarKey; labe
 
 /** Rows that only matter while another row is on: Built-in tags sit inside Tags. */
 const SIDEBAR_NEEDS: Partial<Record<SidebarKey, SidebarKey>> = { builtinTags: "tags" };
-/** Each row's name, for a greyed-out row's tooltip ("Turn on Tags first"). */
-const SIDEBAR_LABELS = Object.fromEntries(SIDEBAR_GROUPS.flatMap((g) => g.rows.map((r) => [r.key, r.label]))) as Record<SidebarKey, string>;
 
 /** Every settings section, in order, with its rows and their controls. */
 export function useSections(props: SectionProps): SectionDef[] | null {
@@ -289,10 +277,9 @@ export function useSections(props: SectionProps): SectionDef[] | null {
   const fontsWaiting = fontsWanted - fontsOn;
   if (!s) return null;
 
-  const flag = (key: Flag, ids: RowIds, tips: SwitchTips) => (
-    <Tip tip={switchTip(s[key], tips)}>
-      <Switch id={ids.control} {...describe(ids)} checked={s[key]} onCheckedChange={(on) => update({ [key]: on })} />
-    </Tip>
+  // A row's switch: the row's label names it, so it has no tooltip.
+  const flag = (key: Flag, ids: RowIds) => (
+    <Switch id={ids.control} {...describe(ids)} checked={s[key]} onCheckedChange={(on) => update({ [key]: on })} />
   );
 
   const turnOffAll = async () => {
@@ -334,9 +321,9 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 value={s.theme}
                 onChange={(theme) => update({ theme })}
                 options={[
-                  { value: "system", label: "System", tip: `Matches your ${COMPUTER}'s light or dark appearance` },
-                  { value: "light", label: "Light", tip: "Always uses the light appearance" },
-                  { value: "dark", label: "Dark", tip: "Always uses the dark appearance" },
+                  { value: "system", label: "System" },
+                  { value: "light", label: "Light" },
+                  { value: "dark", label: "Dark" },
                 ]}
               />
             ),
@@ -352,8 +339,9 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 describedBy={ids.description}
                 value={translucencyShown(s.translucency, translucency)}
                 onChange={(translucency) => update({ translucency })}
-                disabledReason={translucencyDisabledReason(PLATFORM, translucency)}
-                options={translucencyOptions(PLATFORM)}
+                // Greyed out while the system rules it out; the description says why.
+                disabled={!!translucencyDisabledReason(PLATFORM, translucency)}
+                options={TRANSLUCENCY_OPTIONS}
               />
             ),
           },
@@ -394,11 +382,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             description: "Reopen the last view, with its All, Active, Inactive and Variable filters.",
             keywords: "restore remember last view filters launch startup",
             labelsControl: true,
-            control: (ids) =>
-              flag("restoreLastView", ids, {
-                on: "Reopens your last view and filters when Fontface opens",
-                off: "Stops reopening your last view: Fontface opens on All Fonts",
-              }),
+            control: (ids) => flag("restoreLastView", ids),
           },
           ...(IS_MAC
             ? ([
@@ -410,8 +394,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                     : "Start Fontface when you log in to your Mac.",
                   keywords: "launch startup login item",
                   labelsControl: true,
-                  control: (ids) =>
-                    flag("launchAtLogin", ids, { on: "Starts Fontface when you log in to your Mac", off: "Stops Fontface starting when you log in" }),
+                  control: (ids) => flag("launchAtLogin", ids),
                 },
               ] satisfies RowDef[])
             : []),
@@ -421,21 +404,17 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             description: "Its menu opens Fontface and turns off fonts that are on until logout. While it's there, closing the window keeps Fontface running.",
             keywords: "menu bar tray status icon notification area system tray background close window quit",
             labelsControl: true,
-            control: (ids) =>
-              flag("showInMenuBar", ids, {
-                on: `Puts Fontface's icon in the ${TRAY_PLACE}`,
-                off: IS_MAC
-                  ? "Takes Fontface's icon out of the menu bar. Closing the window then follows “Keep running when the window is closed”."
-                  : "Takes Fontface's icon out of the notification area. Closing the window then quits Fontface.",
-              }),
+            control: (ids) => flag("showInMenuBar", ids),
           },
           ...(IS_MAC
             ? ([
                 {
                   id: "dockIcon",
                   label: "Show in the Dock",
-                  description:
-                    "With the window closed, Fontface can stay in the menu bar alone. To bring the window back, use its menu bar icon, or open Fontface again from Spotlight or Applications.",
+                  // Greyed out without the menu bar icon: the words say so.
+                  description: s.showInMenuBar
+                    ? "With the window closed, Fontface can stay in the menu bar alone. To bring the window back, use its menu bar icon, or open Fontface again from Spotlight or Applications."
+                    : "With the window closed, Fontface can stay in the menu bar alone. Turn on “Show Fontface in the menu bar” to choose.",
                   keywords: "dock icon hide menu bar only background accessory spotlight",
                   control: (ids) => (
                     <ChoiceGroup
@@ -443,14 +422,12 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                       describedBy={ids.description}
                       value={s.showInMenuBar ? s.dockIcon : "always"}
                       onChange={(dockIcon) => update({ dockIcon })}
-                      disabledReason={!s.showInMenuBar && "Turn on “Show Fontface in the menu bar” first: without it, the Dock icon is the way back to Fontface"}
+                      // Greyed out without the menu bar icon (the Dock icon is then the way back); the
+                      // description says so.
+                      disabled={!s.showInMenuBar}
                       options={[
-                        { value: "always", label: "Always", tip: "Keeps Fontface in the Dock, even with its window closed" },
-                        {
-                          value: "whileOpen",
-                          label: "Only while open",
-                          tip: "Takes Fontface out of the Dock when you close its window. Its menu bar icon brings the window back.",
-                        },
+                        { value: "always", label: "Always" },
+                        { value: "whileOpen", label: "Only while open" },
                       ]}
                     />
                   ),
@@ -463,25 +440,16 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                     : "Fontface keeps watching for font purchases. Click its Dock icon to bring the window back.",
                   keywords: "background close window dock quit",
                   labelsControl: true,
+                  // Greyed out while Fontface is in the menu bar: the description says why.
                   control: (ids) => (
-                    <Tip
-                      tip={switchTip(s.keepRunningInBackground, {
-                        on: "Keeps Fontface running after you close its window",
-                        off: "Quits Fontface when you close its window",
-                      })}
-                      disabledReason={
-                        s.showInMenuBar && "Fontface always keeps running while it's in the menu bar. To choose here, turn off “Show Fontface in the menu bar” first."
-                      }
-                    >
-                      <Switch
-                        id={ids.control}
-                        {...describe(ids)}
-                        checked={s.keepRunningInBackground || s.showInMenuBar}
-                        disabled={s.showInMenuBar}
-                        focusableWhenDisabled
-                        onCheckedChange={(on) => update({ keepRunningInBackground: on })}
-                      />
-                    </Tip>
+                    <Switch
+                      id={ids.control}
+                      {...describe(ids)}
+                      checked={s.keepRunningInBackground || s.showInMenuBar}
+                      disabled={s.showInMenuBar}
+                      focusableWhenDisabled
+                      onCheckedChange={(on) => update({ keepRunningInBackground: on })}
+                    />
                   ),
                 },
               ] satisfies RowDef[])
@@ -499,11 +467,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
               "Fontface downloads a tiny file with each family's name from fonts.googleapis.com and fonts.gstatic.com. Google sees your IP address and which families you view. Text you type is never sent.",
             keywords: "google fonts preview previews online internet network privacy catalog browse ip address download",
             labelsControl: true,
-            control: (ids) =>
-              flag("googlePreviews", ids, {
-                on: "Lets Fontface download small preview files from Google",
-                off: "Stops online previews: families you haven't downloaded show their names",
-              }),
+            control: (ids) => flag("googlePreviews", ids),
           },
           {
             id: "googlePreviewCache",
@@ -513,20 +477,18 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             control: (ids) => {
               const button = previewCacheButton(outside.previewCache, outside.clearingCache);
               return (
-                <Tip tip="Deletes the saved preview files. Fonts you downloaded stay." disabledReason={button.disabled && WAIT("clearing the cache")}>
-                  {/* Stays focusable while it's busy clearing. */}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-describedby={ids.description}
-                    disabled={button.disabled}
-                    focusableWhenDisabled
-                    onClick={outside.clearPreviewCache}
-                  >
-                    <Icon name={outside.clearingCache ? "progress_activity" : "delete_sweep"} size={16} className={cn(outside.clearingCache && "animate-spin")} />
-                    {button.label}
-                  </Button>
-                </Tip>
+                // Stays focusable while it's busy clearing.
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-describedby={ids.description}
+                  disabled={button.disabled}
+                  focusableWhenDisabled
+                  onClick={outside.clearPreviewCache}
+                >
+                  <Icon name={outside.clearingCache ? "progress_activity" : "delete_sweep"} size={16} className={cn(outside.clearingCache && "animate-spin")} />
+                  {button.label}
+                </Button>
               );
             },
           },
@@ -551,12 +513,10 @@ export function useSections(props: SectionProps): SectionDef[] | null {
               " Fontface reads fonts where they are; nothing is copied or moved.",
             keywords: "add folder library locations",
             control: (ids) => (
-              <Tip tip="Picks a folder of fonts to add to your library">
-                <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={props.onAddFolder}>
-                  <Icon name="create_new_folder" size={16} />
-                  Add Folder…
-                </Button>
-              </Tip>
+              <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={props.onAddFolder}>
+                <Icon name="create_new_folder" size={16} />
+                Add Folder…
+              </Button>
             ),
           },
           {
@@ -565,11 +525,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             description: "Finds fonts added, changed or removed while it was closed. When off, use Rescan on a folder in the sidebar.",
             keywords: "scan rescan launch startup",
             labelsControl: true,
-            control: (ids) =>
-              flag("scanAtLaunch", ids, {
-                on: "Checks your folders for changes each time Fontface opens",
-                off: "Stops checking folders at launch: use Rescan instead",
-              }),
+            control: (ids) => flag("scanAtLaunch", ids),
           },
         ],
       },
@@ -583,12 +539,10 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             description: "See how styles are grouped into families, and change it. To turn grouping by name on or off, use View options in the library.",
             keywords: "family families group groups by name merge keep separate move styles automatic weight bold italic combine split typeface",
             control: (ids) => (
-              <Tip tip="Opens Family groups, to see and change how styles are grouped">
-                <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={props.onReviewFamilyGroups}>
-                  <Icon name="account_tree" size={16} />
-                  Family groups…
-                </Button>
-              </Tip>
+              <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={props.onReviewFamilyGroups}>
+                <Icon name="account_tree" size={16} />
+                Family groups…
+              </Button>
             ),
           },
         ],
@@ -606,19 +560,17 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             keywords: "removed remove from library hidden excluded put back restore undo",
             control: (ids) =>
               removed.files && removed.files.length > 1 ? (
-                <Tip tip={`Lists all ${n(removed.files.length)} removed files in the library again`} disabledReason={removed.busy && WAIT("putting fonts back")}>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-describedby={ids.description}
-                    disabled={removed.busy}
-                    focusableWhenDisabled
-                    onClick={() => removed.putBack(removed.files!.map((f) => f.path))}
-                  >
-                    <Icon name="undo" size={16} />
-                    Put All Back
-                  </Button>
-                </Tip>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-describedby={ids.description}
+                  disabled={removed.busy}
+                  focusableWhenDisabled
+                  onClick={() => removed.putBack(removed.files!.map((f) => f.path))}
+                >
+                  <Icon name="undo" size={16} />
+                  Put All Back
+                </Button>
               ) : null,
             below: () =>
               !removed.files?.length ? null : (
@@ -631,25 +583,21 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                         <span className="flex min-w-0 flex-1 flex-col">
                           <span className="truncate text-sm">{fileName(f.path)}</span>
                           {/* The whole path, when it doesn't fit. Screen readers read it all already. */}
-                          <Tip handle={removed.tips} tip={f.path} describe={false} delay={ROW_TIP_DELAY} contentClassName="max-w-sm break-all">
+                          <CutShort handle={removed.tips} tip={f.path} contentClassName="max-w-sm break-all">
                             <span className="truncate font-mono text-[11px] text-muted-foreground">{f.path}</span>
-                          </Tip>
+                          </CutShort>
                         </span>
                         <span className="shrink-0 text-xs text-muted-foreground">{when(f.removedAt * 1000)}</span>
-                        <Tip handle={removed.tips} tip="Lists this file in the library again" disabledReason={removed.busy && WAIT("putting fonts back")}>
-                          <Button size="xs" variant="ghost" disabled={removed.busy} focusableWhenDisabled aria-label={`Put back ${fileName(f.path)}`} onClick={() => removed.putBack([f.path])}>
-                            Put Back
-                          </Button>
-                        </Tip>
+                        <Button size="xs" variant="ghost" disabled={removed.busy} focusableWhenDisabled aria-label={`Put back ${fileName(f.path)}`} onClick={() => removed.putBack([f.path])}>
+                          Put Back
+                        </Button>
                       </li>
                     ))}
                   </ul>
                   {!removed.all && removed.files.length > REMOVED_SHOWN && (
-                    <Tip tip={`Lists the other ${n(removed.files.length - REMOVED_SHOWN)} removed files here`}>
-                      <Button size="xs" variant="ghost" className="self-start" onClick={removed.showAll}>
-                        Show all {n(removed.files.length)}
-                      </Button>
-                    </Tip>
+                    <Button size="xs" variant="ghost" className="self-start" onClick={removed.showAll}>
+                      Show all {n(removed.files.length)}
+                    </Button>
                   )}
                 </>
               ),
@@ -666,11 +614,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             description: `When off, All Fonts leaves out fonts that are only in ${OS}'s font folders, including ones you installed yourself. ${INSTALLED_LABEL} still lists them.`,
             keywords: `system installed all fonts hide ${OS} folders library fonts`,
             labelsControl: true,
-            control: (ids) =>
-              flag("showInstalledInAll", ids, {
-                on: `Lists fonts that are only in ${INSTALLED_LABEL} in All Fonts too`,
-                off: `Leaves fonts that are only in ${INSTALLED_LABEL} out of All Fonts`,
-              }),
+            control: (ids) => flag("showInstalledInAll", ids),
           },
         ],
       },
@@ -692,20 +636,16 @@ export function useSections(props: SectionProps): SectionDef[] | null {
           description: off ? `${r.description} Shown only while Tags is on.` : r.description,
           keywords: `sidebar show hide ${r.keywords ?? ""}`,
           labelsControl: true,
+          // Greyed out while the row it sits inside is off: the description says so.
           control: (ids: RowIds) => (
-            <Tip
-              tip={switchTip(s.sidebar[r.key], { on: `Shows ${r.label} in the sidebar`, off: `Hides ${r.label} from the sidebar` })}
-              disabledReason={off && `Turn on ${SIDEBAR_LABELS[needs!]} first: ${r.label} show inside it`}
-            >
-              <Switch
-                id={ids.control}
-                {...describe(ids)}
-                checked={s.sidebar[r.key]}
-                disabled={off}
-                focusableWhenDisabled
-                onCheckedChange={(on) => update({ sidebar: { [r.key]: on } })}
-              />
-            </Tip>
+            <Switch
+              id={ids.control}
+              {...describe(ids)}
+              checked={s.sidebar[r.key]}
+              disabled={off}
+              focusableWhenDisabled
+              onCheckedChange={(on) => update({ sidebar: { [r.key]: on } })}
+            />
           ),
         };
       }),
@@ -736,13 +676,11 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                     value: "persistent",
                     label: "Until you turn them off",
                     description: `They stay on after you quit Fontface or restart your ${COMPUTER}.`,
-                    tip: "Fonts you turn on stay on until you turn them off",
                   },
                   {
                     value: "temporary",
                     label: "Until you log out or restart",
                     description: "Handy for a single job. Logging out or restarting turns them off.",
-                    tip: "Fonts you turn on go off when you log out or restart",
                   },
                 ]}
               />
@@ -757,11 +695,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 : "Only affects fonts turned on with “Until you log out or restart”, including ones still on from before.",
             keywords: "quit temporary clear session",
             labelsControl: true,
-            control: (ids) =>
-              flag("clearTemporaryOnQuit", ids, {
-                on: "Turns temporary fonts off as soon as you quit Fontface",
-                off: "Leaves temporary fonts on after you quit, until you log out",
-              }),
+            control: (ids) => flag("clearTemporaryOnQuit", ids),
           },
         ],
       },
@@ -782,9 +716,9 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 value={s.restoreOnLaunch}
                 onChange={(restoreOnLaunch) => update({ restoreOnLaunch })}
                 options={[
-                  { value: "always", label: "Turn them back on", description: "Without asking.", tip: "Turns those fonts back on, without asking, when Fontface opens" },
-                  { value: "ask", label: "Ask me", description: "Fontface lists them and asks once.", tip: "Lists those fonts when Fontface opens, and asks you once" },
-                  { value: "never", label: "Leave them off", description: "They're shown as off in Fontface too.", tip: "Leaves those fonts off, and shows them as off here too" },
+                  { value: "always", label: "Turn them back on", description: "Without asking." },
+                  { value: "ask", label: "Ask me", description: "Fontface lists them and asks once." },
+                  { value: "never", label: "Leave them off", description: "They're shown as off in Fontface too." },
                 ]}
               />
             ),
@@ -810,9 +744,6 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 // Stays focusable when it disables itself after turning everything off.
                 focusableWhenDisabled
                 className="aria-disabled:opacity-50"
-                tip="Turns off every font Fontface turned on, after asking"
-                confirmTip="Turns off every font Fontface turned on"
-                disabledReason="Nothing to turn off: Fontface has no fonts turned on"
                 title="Turn off all fonts Fontface turned on?"
                 description={`${
                   fontsOn > 0 ? `${n(fontsOn)} font ${fontsOn === 1 ? "file" : "files"} will be turned off, and apps will stop showing them. ` : ""
@@ -846,34 +777,23 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 <div role="status" className="flex flex-col items-start gap-2 text-xs text-pretty">
                   <p>{outside.watchNote}</p>
                   {IS_MAC && (
-                    <Tip tip={PRIVACY_SETTINGS_TIP}>
-                      <Button size="sm" variant="outline" onClick={() => openUrl(PRIVACY_SETTINGS_URL).catch((e) => toast.error(String(e)))}>
-                        {PRIVACY_SETTINGS_LABEL}
-                      </Button>
-                    </Tip>
+                    <Button size="sm" variant="outline" onClick={() => openUrl(PRIVACY_SETTINGS_URL).catch((e) => toast.error(String(e)))}>
+                      {PRIVACY_SETTINGS_LABEL}
+                    </Button>
                   )}
                 </div>
               ),
+            // Greyed out until Fontface knows whether it's watching (Watched folders, below, says
+            // if it couldn't), and while a change saves.
             control: (ids) => (
-              <Tip
-                tip={watchSwitchTip(purchases?.watching ?? false, IS_MAC)}
-                disabledReason={
-                  !purchases
-                    ? outside.purchasesError
-                      ? "Couldn't read whether Fontface is watching. Close and reopen Settings to try again."
-                      : WAIT("checking whether it's watching")
-                    : outside.watchBusy && WAIT("changing this")
-                }
-              >
-                <Switch
-                  id={ids.control}
-                  {...describe(ids)}
-                  checked={purchases?.watching ?? false}
-                  disabled={!purchases || outside.watchBusy}
-                  focusableWhenDisabled
-                  onCheckedChange={outside.setWatching}
-                />
-              </Tip>
+              <Switch
+                id={ids.control}
+                {...describe(ids)}
+                checked={purchases?.watching ?? false}
+                disabled={!purchases || outside.watchBusy}
+                focusableWhenDisabled
+                onCheckedChange={outside.setWatching}
+              />
             ),
           },
           {
@@ -908,12 +828,10 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             description: "Review new downloads, import fonts you bought earlier, and manage watched folders.",
             keywords: "open purchases import",
             control: (ids) => (
-              <Tip tip="Closes Settings and opens the Purchases page">
-                <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={props.onOpenPurchases}>
-                  Open Purchases
-                  <Icon name="arrow_forward" size={16} />
-                </Button>
-              </Tip>
+              <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={props.onOpenPurchases}>
+                Open Purchases
+                <Icon name="arrow_forward" size={16} />
+              </Button>
             ),
           },
         ],
@@ -934,11 +852,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             description: "Once a day, when Fontface opens, if you have tags.",
             keywords: "backup automatic daily tags",
             labelsControl: true,
-            control: (ids) =>
-              flag("tagBackups", ids, {
-                on: "Backs up your tags once a day, when Fontface opens",
-                off: "Stops the daily backup: Back up now still works",
-              }),
+            control: (ids) => flag("tagBackups", ids),
           },
           {
             id: "tagBackupKeep",
@@ -970,19 +884,15 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             keywords: `restore saved backups list import back up now show reveal ${FILE_BROWSER} folder`,
             control: (ids) => (
               <>
-                <Tip tip={`Opens the backups folder in ${FILE_BROWSER}`}>
-                  <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={() => api.backupsReveal().catch((e) => toast.error(String(e)))}>
-                    <Icon name="folder_open" size={16} />
-                    Show in {FILE_BROWSER}
-                  </Button>
-                </Tip>
-                <Tip tip="Saves a backup of your tags now" disabledReason={outside.backingUp && WAIT("backing up your tags")}>
-                  {/* Stays focusable while it's busy, so keyboard focus isn't lost. */}
-                  <Button size="sm" variant="outline" disabled={outside.backingUp} focusableWhenDisabled onClick={outside.backUpNow}>
-                    <Icon name={outside.backingUp ? "progress_activity" : "backup"} size={16} className={cn(outside.backingUp && "animate-spin")} />
-                    {outside.backingUp ? "Backing up…" : "Back up now"}
-                  </Button>
-                </Tip>
+                <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={() => api.backupsReveal().catch((e) => toast.error(String(e)))}>
+                  <Icon name="folder_open" size={16} />
+                  Show in {FILE_BROWSER}
+                </Button>
+                {/* Stays focusable while it's busy, so keyboard focus isn't lost. */}
+                <Button size="sm" variant="outline" disabled={outside.backingUp} focusableWhenDisabled onClick={outside.backUpNow}>
+                  <Icon name={outside.backingUp ? "progress_activity" : "backup"} size={16} className={cn(outside.backingUp && "animate-spin")} />
+                  {outside.backingUp ? "Backing up…" : "Back up now"}
+                </Button>
               </>
             ),
             below: () =>
@@ -997,18 +907,14 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                       <span className="font-mono text-xs text-muted-foreground tabular-nums">
                         {n(b.tags)} {b.tags === 1 ? "tag" : "tags"}
                       </span>
-                      <Tip tip="Brings back tags from this backup, once you choose how">
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          aria-label={`Restore tags from the backup made on ${when(b.createdAt)}`}
-                          onClick={() =>
-                            openTagDialog({ kind: "import", source: { kind: "fontface", path: b.path }, backupMadeAt: b.createdAt })
-                          }
-                        >
-                          Restore…
-                        </Button>
-                      </Tip>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        aria-label={`Restore tags from the backup made on ${when(b.createdAt)}`}
+                        onClick={() => openTagDialog({ kind: "import", source: { kind: "fontface", path: b.path }, backupMadeAt: b.createdAt })}
+                      >
+                        Restore…
+                      </Button>
                     </li>
                   ))}
                 </ul>
@@ -1037,12 +943,10 @@ export function useSections(props: SectionProps): SectionDef[] | null {
             description: "Your library list, tags, Google Fonts downloads, purchases and backups.",
             keywords: `data folder database application support show reveal ${FILE_BROWSER}`,
             control: (ids) => (
-              <Tip tip={`Opens Fontface's data folder in ${FILE_BROWSER}`}>
-                <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={() => api.appDataReveal().catch((e) => toast.error(String(e)))}>
-                  <Icon name="folder_open" size={16} />
-                  Show app data folder
-                </Button>
-              </Tip>
+              <Button size="sm" variant="outline" aria-describedby={ids.description} onClick={() => api.appDataReveal().catch((e) => toast.error(String(e)))}>
+                <Icon name="folder_open" size={16} />
+                Show app data folder
+              </Button>
             ),
           },
           {
@@ -1055,8 +959,6 @@ export function useSections(props: SectionProps): SectionDef[] | null {
                 variant="destructive"
                 label="Reset to defaults…"
                 aria-describedby={ids.description}
-                tip="Puts every setting back the way it started, after asking"
-                confirmTip="Puts every setting back the way it started"
                 title="Reset all settings?"
                 description={`Every setting on these pages goes back to how it started${IS_MAC ? ", and Fontface stops opening at login" : ""}. Sync and watching for font purchases stay as they are. Your fonts, folders, tags and purchased fonts aren't touched.`}
                 confirm="Reset"
@@ -1080,23 +982,21 @@ function PreviewSize({ ids, value, onCommit }: { ids: RowIds; value: number; onC
   const shown = draft ?? value;
   return (
     <>
-      <Tip tip="Sets the preview size Fontface opens with">
-        <Slider
-          className="w-40"
-          min={10}
-          max={128}
-          value={[shown]}
-          onValueChange={(v) => setDraft(Array.isArray(v) ? v[0] : v)}
-          onValueCommitted={(v) => {
-            const size = Array.isArray(v) ? v[0] : v;
-            setDraft(null);
-            if (size !== value) onCommit(size);
-          }}
-          // The thumb takes its name from the root's label.
-          aria-labelledby={ids.label}
-          aria-describedby={ids.description}
-        />
-      </Tip>
+      <Slider
+        className="w-40"
+        min={10}
+        max={128}
+        value={[shown]}
+        onValueChange={(v) => setDraft(Array.isArray(v) ? v[0] : v)}
+        onValueCommitted={(v) => {
+          const size = Array.isArray(v) ? v[0] : v;
+          setDraft(null);
+          if (size !== value) onCommit(size);
+        }}
+        // The thumb takes its name from the root's label.
+        aria-labelledby={ids.label}
+        aria-describedby={ids.description}
+      />
       <span className="w-12 text-right font-mono text-xs text-muted-foreground tabular-nums" aria-hidden>
         {shown}px
       </span>

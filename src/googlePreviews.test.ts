@@ -4,12 +4,12 @@ import assert from "node:assert/strict";
 import {
   answerKey,
   describesRowFile,
-  failNote,
   familyKey,
   fileStatus,
   inAlphabet,
   irregularity,
   keepAnswerUntil,
+  KEEPS_TRYING,
   matchLibrary,
   onlineChoice,
   outsideAlphabet,
@@ -21,7 +21,6 @@ import {
   RETRY_OFFLINE_MS,
   rowSource,
   wantsAlphabet,
-  yourCopyNote,
   type CatalogRef,
   type MatchFont,
 } from "./googlePreviews.ts";
@@ -211,9 +210,9 @@ test("what an online row draws, and never two fonts at once", () => {
   assert.deepEqual(onlineChoice(offline, offline), { draw: "plain", why: "offline" });
 });
 
-test("every failure has a plain explanation", () => {
-  for (const why of ["offline", "unavailable", "tooLarge", "error"] as const) assert.ok(failNote(why).endsWith("."));
-  assert.ok(!/minutes|minute/.test(failNote("offline")), "no promise about when: the wait grows while Google stays out of reach");
+test("the footer's offline note makes no promise about when", () => {
+  assert.ok(!/minutes|minute/.test(KEEPS_TRYING), "the wait grows while Google stays out of reach");
+  assert.ok(KEEPS_TRYING.endsWith("."));
 });
 
 test("the line under an online row follows its file, not whether the font has loaded", () => {
@@ -225,12 +224,6 @@ test("the line under an online row follows its file, not whether the font has lo
   // A ready answer's file: the same whether its font is loading or loaded.
   const ready = { state: "ready" as const, path: "google/inter/2024/name" };
   assert.equal(describesRowFile(fileStatus(ready, "loading")), describesRowFile(fileStatus(ready, "ready")));
-});
-
-test("'Your copy' explains itself in words, for hover and screen readers alike", () => {
-  const note = yourCopyNote("Inter-Regular.otf");
-  assert.ok(note.includes("Inter-Regular.otf") && note.includes("your library") && note.includes("different version"));
-  assert.ok(note.endsWith("."));
 });
 
 test("the cache's size never disables Clear: only clearing does", () => {

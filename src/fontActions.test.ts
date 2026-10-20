@@ -14,12 +14,12 @@ import {
   fontShortcut,
   GROUP_ITEM,
   LAYOUT_ITEMS,
+  markName,
   MENU_IDS,
   menuCommand,
   menuStateKey,
   nativeMenuState,
   newTagsAsk,
-  optionClickHint,
   pageTarget,
   postScriptNames,
   removalPlan,
@@ -31,9 +31,8 @@ import {
   SORT_ASC_ITEM,
   SORT_DESC_ITEM,
   SORT_ITEMS,
+  SWITCH_TIP,
   switchScope,
-  switchTip,
-  actionTip,
   turnOnLabel,
   viewCommands,
   type ActionContext,
@@ -170,14 +169,11 @@ test("Option-click turns on the other way; turning off is the same either way", 
   assert.equal(switchScope(true, true, "persistent"), "temporary");
   assert.equal(switchScope(true, true, "temporary"), "persistent");
   assert.equal(switchScope(false, true, "persistent"), null);
-  assert.equal(optionClickHint("persistent", true), "Option-click to turn on until you log out.");
-  assert.equal(optionClickHint("temporary", false), "Alt-click to turn on until you turn it off.");
 });
 
 test("when quitting Fontface turns temporary fonts off, the words say so", () => {
   // Settings › Activation › "Turn temporary fonts off when Fontface quits".
-  assert.equal(optionClickHint("persistent", true, true), "Option-click to turn on until you quit Fontface.");
-  assert.equal(optionClickHint("temporary", true, true), "Option-click to turn on until you turn it off.", "the other way is unchanged");
+  assert.equal(markName("temporary", { lock: null, total: 1, on: 1, wanted: 1, temporary: 1, waiting: 0, elsewhere: 0, locked: 0, macos: 0 }, true), "On until Fontface quits");
   assert.equal(turnOnLabel("temporary"), "Turn On Until Logout");
   assert.equal(turnOnLabel("temporary", true), "Turn On Until Fontface Quits");
   assert.equal(turnOnLabel("persistent", true), "Turn On");
@@ -370,48 +366,17 @@ test("view commands: the size wherever the preview bar's size applies, the layou
   assert.ok(!menus.enabled.some((id) => id.startsWith("sort.")));
 });
 
-test("a font switch's tooltip says what a click does now", () => {
+test("a switch and the marks beside it have short names for their tooltips, not sentences", () => {
   const off = { lock: null, total: 12, on: 0, wanted: 0, temporary: 0, waiting: 0, elsewhere: 0, locked: 0, macos: 0 };
-  const ctx = { mode: "persistent" as const, mac: true };
-  assert.equal(switchTip(off, false, ctx), "Turns on all 12 styles. Option-click to turn on until you log out.");
-  assert.equal(switchTip({ ...off, on: 3, wanted: 3 }, false, ctx), "Turns on the other 9 styles. Option-click to turn on until you log out.");
-  assert.equal(switchTip({ ...off, on: 11, wanted: 11 }, false, ctx), "Turns on the other style. Option-click to turn on until you log out.");
-  assert.equal(switchTip({ ...off, on: 12, wanted: 12 }, false, ctx), "Turns off all 12 styles");
-  assert.equal(switchTip({ ...off, wanted: 12, waiting: 12 }, false, ctx), "Turns off all 12 styles", "set to turn on counts as on");
-  const one = { ...off, total: 1 };
-  assert.equal(switchTip(one, true, { mode: "temporary", mac: false }), "Turns on this style. Alt-click to turn on until you turn it off.");
-  assert.equal(switchTip({ ...one, on: 1, wanted: 1 }, true, ctx), "Turns off this style");
-  assert.equal(switchTip({ ...one, locked: 3 }, false, ctx), "Turns on its 1 style. Option-click to turn on until you log out.", "a family with one style that isn't always on");
-  assert.equal(switchTip(off, false, { ...ctx, untilQuit: true }), "Turns on all 12 styles. Option-click to turn on until you quit Fontface.");
-});
-
-test("each font action's tooltip says what it does, or why it's greyed out", () => {
-  const tip = (id: Parameters<typeof actionTip>[0], target: FontTarget, mac = true) =>
-    actionTip(id, fontActionStates(target, ctx)[id].enabled, target, { mode: "persistent", mac });
-  const inter = listTarget("Inter");
-  assert.equal(tip("open", inter), "Opens this font's page");
-  assert.equal(tip("turnOn", inter), "Turns this family on until you turn it off");
-  assert.equal(tip("turnOnOther", inter), "Turns this family on until you log out");
-  assert.equal(tip("turnOff", listTarget("Lora")), "It's already off");
-  assert.equal(tip("turnOn", listTarget("Helvetica")), "Always on: it's in macOS Fonts");
-  assert.equal(tip("reveal", listTarget("Inter/Bold"), false), "Shows its font file in Explorer");
-  assert.equal(tip("remove", listTarget("Roboto")), "Only fonts in your own folders can be removed from the library");
-  assert.equal(tip("remove", inter), "Stops listing this family and turns it off, after asking. Nothing is deleted.");
-
-  const two = listTarget("Inter", "Lora");
-  assert.equal(tip("open", two), "Select just one font to open its page");
-  assert.equal(tip("turnOn", two), "Turns the selected fonts on until you turn them off");
-  assert.equal(tip("compare", two), "Shows the selected fonts side by side");
-  assert.equal(tip("pair", two), "Pairs them: the first as heading, the second as body text");
-
-  const page = pageTarget(fam("Inter"), fam("Inter").representative);
-  assert.equal(tip("open", page), "This font's page is already open");
-  assert.equal(tip("info", page), "Shows this font's details on the Info tab");
-  // One sentence has no closing period; two or more end each with one.
-  for (const id of ACTION_ORDER.map((a) => a.id)) {
-    for (const t of [inter, two, page]) {
-      const words = tip(id, t);
-      assert.equal(words.endsWith("."), /\. [A-Z]/.test(words), `${id}: ${words}`);
-    }
+  assert.equal(SWITCH_TIP, "Activate", "as the switch's name starts: Activate Inter");
+  assert.equal(markName("macos", { ...off, lock: "macos" }), "Part of macOS");
+  assert.equal(markName("installed", { ...off, lock: "installed" }), "Installed");
+  assert.equal(markName("temporary", { ...off, on: 12, wanted: 12, temporary: 12 }), "On until logout");
+  assert.equal(markName("waiting", { ...off, wanted: 12, waiting: 12 }), "Not on yet");
+  assert.equal(markName("elsewhere", { ...off, on: 12, wanted: 12, elsewhere: 12 }), "Turned on by another app");
+  assert.equal(markName("partial", { ...off, on: 3, wanted: 3 }), "3 of 12 on");
+  for (const mark of ["macos", "installed", "temporary", "waiting", "elsewhere", "partial"] as const) {
+    const name = markName(mark, { ...off, on: 3, wanted: 3 });
+    assert.ok(!name.endsWith(".") && name.split(" ").length <= 5, `${mark}: ${name}`);
   }
 });

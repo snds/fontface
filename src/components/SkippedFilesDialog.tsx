@@ -3,7 +3,6 @@ import type { SkippedFiles } from "@/api";
 import { skippedEntries } from "@/skippedFiles";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Tip } from "./Tip";
 
 /** What Show Skipped Files… shows: a source's name and its latest scan's counts. */
 export interface SkippedRequest {
@@ -12,9 +11,6 @@ export interface SkippedRequest {
   /** What takes focus when it closes (it opens from code: focusReturn.ts). */
   returnFocus?: () => HTMLElement | null;
 }
-
-/** The tooltip of the buttons that open it: from a finished scan's message, and an empty folder. */
-export const SKIPPED_DETAILS_TIP = "Lists each kind of file the scan skipped, and why";
 
 /**
  * The files a source's latest scan found but didn't add, one row per kind: how many, what they
@@ -45,9 +41,7 @@ export function SkippedFilesDialog({ request, onClose }: { request: SkippedReque
           ))}
         </ul>
         <DialogFooter>
-          <Tip tip="Closes this list" describe={false}>
-            <Button onClick={onClose}>Done</Button>
-          </Tip>
+          <Button onClick={onClose}>Done</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

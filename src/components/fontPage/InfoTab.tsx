@@ -18,11 +18,9 @@ import type { Locations } from "@/tags/locations";
 import { keepSeparate, resetChoices, useFamilyChoices, useOpenFamilyGroups } from "@/families/store";
 import { nameRef, runChange } from "@/families/feedback";
 import { reasonText, squash } from "@/familyGroups";
-import { checkAgainTip, factsOf, formatBytes, SectionTitle, type FactsState } from "./parts";
+import { factsOf, formatBytes, SectionTitle, type FactsState } from "./parts";
 
 export const REVEAL_LABEL = IS_MAC ? "Show in Finder" : "Show in Explorer";
-/** The reveal button's tooltip: what it opens, and that the file is picked out there. */
-const REVEAL_TIP = IS_MAC ? "Opens its folder in Finder, with the file selected" : "Opens its folder in Explorer, with the file selected";
 
 interface Props {
   face: Face;
@@ -46,8 +44,9 @@ const FIRST_LANGUAGES = 24;
 
 /**
  * A web address from the font: the address as text (select it and copy it like any other row),
- * with a button beside it that opens it in the browser, over https (the button's name, and its
- * tooltip, say the address it opens). Just the text if it isn't a web address.
+ * with an icon button beside it that opens it in the browser, over https (its tooltip is its
+ * name; for screen readers, the name also says the address). Just the text if it isn't a web
+ * address.
  */
 function WebLink({ raw }: { raw: string }) {
   const { text, href } = webAddress(raw);
@@ -55,13 +54,12 @@ function WebLink({ raw }: { raw: string }) {
   return (
     <span className="inline-flex max-w-full items-start gap-1">
       <span className="min-w-0 break-all">{text}</span>
-      {/* Its name says the same as the tooltip. A long address wraps anywhere. */}
-      <Tip tip={`Opens ${href} in your browser`} describe={false} contentClassName="wrap-anywhere">
+      <Tip tip="Open in browser">
         <Button
           variant="ghost"
           size="icon-xs"
           className="-my-0.5 text-muted-foreground"
-          aria-label={`Open ${href} in your browser`}
+          aria-label={`Open in browser: ${href}`}
           onClick={() => openUrl(href).catch((e) => toast.error("Couldn't open that address", { description: String(e) }))}
         >
           <Icon name="open_in_new" size={14} />
@@ -85,11 +83,9 @@ function Languages({ codes }: { codes: string[] }) {
       {more && (
         <>
           {all ? ". " : "… "}
-          <Tip tip={all ? `Lists only the first ${FIRST_LANGUAGES} languages` : "Lists every language this font supports"}>
-            <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setAll(!all)}>
-              {all ? "Show fewer" : `Show all ${names.length.toLocaleString()}`}
-            </Button>
-          </Tip>
+          <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setAll(!all)}>
+            {all ? "Show fewer" : `Show all ${names.length.toLocaleString()}`}
+          </Button>
         </>
       )}
     </span>
@@ -163,11 +159,9 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
           <Icon name={answer?.unread === "cloud" ? "cloud_download" : "info"} size={16} className="mt-0.5 text-muted-foreground" />
           <span>
             <span className="font-medium">{unread.title}.</span> {unread.text}{" "}
-            <Tip tip={checkAgainTip(answer?.unread === "cloud")}>
-              <Button variant="link" size="sm" className="h-auto p-0" onClick={retry}>
-                Check again
-              </Button>
-            </Tip>
+            <Button variant="link" size="sm" className="h-auto p-0" onClick={retry}>
+              Check again
+            </Button>
           </span>
         </span>
       ),
@@ -220,12 +214,10 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
                   {c.faceIndex > 0 ? ` (face ${c.faceIndex})` : ""}
                 </div>
               </div>
-              <Tip tip={REVEAL_TIP}>
-                <Button variant="outline" size="sm" onClick={() => onReveal(c.id)} aria-label={face.copies.length > 1 ? `${REVEAL_LABEL}: ${c.path}` : undefined}>
-                  <Icon name="folder_open" size={16} />
-                  {REVEAL_LABEL}
-                </Button>
-              </Tip>
+              <Button variant="outline" size="sm" onClick={() => onReveal(c.id)} aria-label={face.copies.length > 1 ? `${REVEAL_LABEL}: ${c.path}` : undefined}>
+                <Icon name="folder_open" size={16} />
+                {REVEAL_LABEL}
+              </Button>
             </li>
           ))}
         </ul>
@@ -233,9 +225,6 @@ export function InfoTab({ face, detail, characters, profile, locations, onReveal
     </div>
   );
 }
-
-/** The Family groups link's tooltip (the page opens with this family picked). */
-const FAMILY_GROUPS_TIP = "Opens Family groups, to change how this family is grouped";
 
 /**
  * How this style got its family, when it isn't simply its own name: grouped by name or by an
@@ -253,8 +242,8 @@ function FamilyGroupNote({ face }: { face: Face }) {
   const familyKept = face.ruleKey !== familyKey && rules.get(familyKey)?.decision === "separate";
   if (face.groupedBy === "own" && !familyKept) return null;
   let text: string | null = null;
-  // `tip`: the action's tooltip, what it changes (each change has Undo).
-  let action: { label: string; tip: string; run: () => void } | null = null;
+  // Each change has Undo.
+  let action: { label: string; run: () => void } | null = null;
   if (face.groupedBy === "name" && face.auto) {
     // A whole family joined this one: Keep separate is for that family.
     const { from } = face.auto;
@@ -262,14 +251,12 @@ function FamilyGroupNote({ face }: { face: Face }) {
     text = `Grouped into ${face.family} automatically, from “${from}” (${why.charAt(0).toLowerCase()}${why.slice(1)}).`;
     action = {
       label: `Keep “${from}” separate`,
-      tip: `Stops grouping “${from}” into ${face.family} automatically`,
       run: () => void runChange(() => keepSeparate(`Kept “${from}” separate from ${face.family}`, [nameRef(from)]), "Couldn't keep it separate"),
     };
   } else if (face.groupedBy === "name") {
     text = `Grouped by name into ${face.family}, from “${raw}”.`;
     action = {
       label: `Keep “${raw}” separate`,
-      tip: `Stops grouping “${raw}” into ${face.family} by name`,
       run: () => void runChange(() => keepSeparate(`Kept “${raw}” separate`, [nameRef(raw)]), "Couldn't keep it separate"),
     };
   } else if (face.groupedBy === "rule") {
@@ -277,7 +264,6 @@ function FamilyGroupNote({ face }: { face: Face }) {
     text = face.kept ? `You chose to keep “${face.family}” separate.` : `Merged into ${face.family} by you, from “${raw}”.`;
     action = {
       label: face.kept ? "Allow grouping by name" : "Undo this merge",
-      tip: face.kept ? `Lets “${face.family}” be grouped by name again` : `Takes “${raw}” back out of ${face.family}`,
       run: () =>
         void runChange(
           () => resetChoices(face.kept ? `Allowed grouping “${face.family}” by name` : `Took “${raw}” out of ${face.family}`, [], [ruleKey]),
@@ -289,7 +275,6 @@ function FamilyGroupNote({ face }: { face: Face }) {
     action = {
       // Forgets the move: grouping by name (or the font's own name) decides again.
       label: face.kept ? "Allow grouping by name" : "Undo my move",
-      tip: face.kept ? `Lets ${face.style} be grouped by name again` : `Takes ${face.style} back out of ${face.family}`,
       run: () =>
         void runChange(() => resetChoices(face.kept ? `Allowed grouping ${face.style} by name` : `Took ${face.style} out of ${face.family}`, [face.key], []), "Couldn't change it"),
     };
@@ -301,39 +286,32 @@ function FamilyGroupNote({ face }: { face: Face }) {
           <Icon name="account_tree" size={16} className="text-muted-foreground" />
           <span className="min-w-0 flex-1">{text}</span>
           {action && (
-            <Tip tip={action.tip}>
-              <Button variant="link" size="sm" className="h-auto p-0" onClick={action.run}>
-                {action.label}
-              </Button>
-            </Tip>
-          )}
-          <Tip tip={FAMILY_GROUPS_TIP}>
-            <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>
-              Family groups…
+            <Button variant="link" size="sm" className="h-auto p-0" onClick={action.run}>
+              {action.label}
             </Button>
-          </Tip>
+          )}
+          {/* Opens with this family picked. */}
+          <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>
+            Family groups…
+          </Button>
         </div>
       )}
       {familyKept && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Icon name="account_tree" size={16} className="text-muted-foreground" />
           <span className="min-w-0 flex-1">You chose to keep {face.family} separate: it isn't grouped into another family automatically.</span>
-          <Tip tip={`Lets ${face.family} be grouped into another family automatically`}>
-            <Button
-              variant="link"
-              size="sm"
-              className="h-auto p-0"
-              onClick={() => void runChange(() => resetChoices(`Allowed grouping ${face.family} automatically`, [], [familyKey]), "Couldn't change it")}
-            >
-              Allow grouping
-            </Button>
-          </Tip>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0"
+            onClick={() => void runChange(() => resetChoices(`Allowed grouping ${face.family} automatically`, [], [familyKey]), "Couldn't change it")}
+          >
+            Allow grouping
+          </Button>
           {!text && (
-            <Tip tip={FAMILY_GROUPS_TIP}>
-              <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>
-                Family groups…
-              </Button>
-            </Tip>
+            <Button variant="link" size="sm" className="h-auto p-0" onClick={() => openFamilyGroups([face])}>
+              Family groups…
+            </Button>
           )}
         </div>
       )}

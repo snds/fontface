@@ -1,7 +1,23 @@
 import { useId, useRef } from "react";
 import { cn } from "@/lib/utils";
-import type { ShortcutSpec } from "@/tips";
+import { shortcutAria, type ShortcutSpec } from "@/tips";
 import { Tip } from "./Tip";
+import { IS_MAC } from "./TitleBar";
+
+/** One choice. */
+export interface ChoiceOption<T extends string> {
+  value: T;
+  /** What it shows: words, an icon with words, or an icon alone (then give `tip`). */
+  label: React.ReactNode;
+  /** Shows only with the "cards" look, under the label. */
+  description?: React.ReactNode;
+  /** Only for an option that shows no words (an icon alone): its name, a few words ("Align
+   *  left"). It's the option's tooltip and its name for screen readers. An option with words
+   *  has no tooltip (components/Tip.tsx). */
+  tip?: string;
+  /** The key that picks it from anywhere ("Mod+1"): on aria-keyshortcuts, and after the tip. */
+  shortcut?: ShortcutSpec;
+}
 
 interface Props<T extends string> {
   /** The group's name for screen readers. Leave it out when `labelledBy` names it. */
@@ -11,29 +27,25 @@ interface Props<T extends string> {
   /** Id of an element that describes the group. */
   describedBy?: string;
   value: T;
-  /** `description` shows only with the "cards" look. `tip`: the option's tooltip, what picking
-   *  it does ("Shows fonts as a grid of cards"); also its description for screen readers.
-   *  `shortcut`: the key that picks it from anywhere ("Mod+1"), shown after the tip. */
-  options: { value: T; label: React.ReactNode; description?: React.ReactNode; tip: string; shortcut?: ShortcutSpec }[];
+  options: readonly ChoiceOption<T>[];
   onChange: (value: T) => void;
   /** "segments": joined buttons in a frame. "chips": separate rounded pills. "cards": one
    *  full-width row per choice, with a radio dot and a description. */
   look?: "segments" | "chips" | "cards";
-  /** Set while the choice can't be changed: why, and what would make it work. Every option is
-   *  greyed out but still takes the pointer and focus, so its tooltip says this instead. */
-  disabledReason?: string | false | null;
+  /** While the choice can't be changed: every option is greyed out, but keeps focus. If why
+   *  matters, say it in the visible text beside it (a settings row's description). */
+  disabled?: boolean;
 }
 
 /**
  * A single-choice control (WAI-ARIA radio group): one tab stop, arrow keys move the choice,
- * Home/End jump to the ends. Each option has a design-system tooltip (components/Tip).
+ * Home/End jump to the ends. Only an option with no words of its own (`tip`) has a tooltip.
  */
-export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, value, options, onChange, look = "segments", disabledReason }: Props<T>) {
+export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, value, options, onChange, look = "segments", disabled = false }: Props<T>) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const current = Math.max(0, options.findIndex((o) => o.value === value));
   const base = useId();
 
-  const disabled = !!disabledReason;
   const move = (to: number) => {
     if (disabled) return;
     const i = (to + options.length) % options.length;
@@ -77,12 +89,17 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
         const ref = (el: HTMLButtonElement | null) => {
           refs.current[i] = el;
         };
-        // The option in its tooltip (the button itself is unchanged).
-        const tipped = (button: React.ReactElement) => (
-          <Tip key={o.value} tip={o.tip} shortcut={o.shortcut} disabledReason={disabledReason}>
-            {button}
-          </Tip>
-        );
+        // An icon-only option in its tooltip, its name (the button itself is unchanged). An option
+        // with words has none; its shortcut still goes on aria-keyshortcuts.
+        const tipped = (button: React.ReactElement) =>
+          o.tip ? (
+            <Tip key={o.value} tip={o.tip} shortcut={o.shortcut}>
+              {button}
+            </Tip>
+          ) : (
+            button
+          );
+        const keyshortcuts = o.shortcut === undefined ? undefined : shortcutAria(o.shortcut, IS_MAC);
         if (look === "cards") {
           const id = `${base}-${i}`;
           return tipped(
@@ -93,6 +110,7 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
               aria-checked={checked}
               aria-labelledby={`${id}-label`}
               aria-describedby={o.description ? `${id}-desc` : undefined}
+              aria-keyshortcuts={keyshortcuts}
               tabIndex={checked ? 0 : -1}
               aria-disabled={disabled || undefined}
               onClick={() => !disabled && onChange(o.value)}
@@ -130,6 +148,8 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
             ref={ref}
             role="radio"
             aria-checked={checked}
+            aria-label={o.tip}
+            aria-keyshortcuts={keyshortcuts}
             tabIndex={checked ? 0 : -1}
             aria-disabled={disabled || undefined}
             onClick={() => !disabled && onChange(o.value)}

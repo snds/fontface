@@ -119,11 +119,6 @@ export function rowSource(o: { match: { downloaded: boolean } | undefined; local
  *  font (those keep their icons). */
 export const wantsAlphabet = (typed: string, icons: boolean) => typed !== "" && !icons;
 
-/** What "Your copy" says, on hover and to screen readers: the preview is drawn from `file`, a
- *  copy of the family already in your library, not from Google's files. */
-export const yourCopyNote = (file: string) =>
-  `This preview uses the copy already in your library (${file}). It may be a different version from Google's.`;
-
 // ----------------------------------------------------------------------- the cached files
 
 export const PREVIEW_FILE_KINDS = ["name", "icons", "script", "alphabet"] as const;
@@ -246,20 +241,6 @@ export function onlineChoice(row: FileStatus, alphabet?: FileStatus): OnlineChoi
  * put meanwhile.
  */
 export const describesRowFile = (row: FileStatus) => row.kind === "loading" || row.kind === "ready";
-
-/** The quiet explanation of a row showing its name in the interface font. */
-export function failNote(why: FailReason): string {
-  switch (why) {
-    case "offline":
-      return `Couldn't reach Google Fonts for a preview. ${KEEPS_TRYING}`;
-    case "unavailable":
-      return "Google Fonts has no preview of this family.";
-    case "tooLarge":
-      return "This family's preview file is too large to download.";
-    default:
-      return "This family's preview couldn't be shown.";
-  }
-}
 
 // ------------------------------------------------------------------------- the cache's size
 

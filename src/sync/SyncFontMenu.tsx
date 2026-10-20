@@ -1,14 +1,19 @@
 import { toast } from "sonner";
 import type { Face } from "@/library";
 import { IS_MAC } from "@/components/TitleBar";
-import { CONTEXT, TipItem } from "@/components/Tip";
-import { ContextMenuRadioGroup, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent } from "@/components/ui/context-menu";
+import {
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+} from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import type { Exception } from "./api";
 import { setException, useSync } from "./store";
 
 const HERE = IS_MAC ? "On this Mac" : "On this computer";
-const THIS = IS_MAC ? "this Mac" : "this computer";
 
 /** Only fonts with a PostScript name sync (a `file:` key names a path on this computer). */
 const syncable = (faces: Face[]) => [...new Set(faces.map((f) => f.key).filter((k) => k.startsWith("ps:")))];
@@ -25,33 +30,20 @@ export function SyncFontMenuItems({ faces }: { faces: Face[] }) {
   const current = values.size === 1 ? [...values][0] : "";
   const choose = (value: Exception) =>
     setException(keys, value).catch((e) => toast.error("Couldn't change that", { description: String(e) }));
-  const these = faces.length === 1 ? "this font" : "these fonts";
-  const it = faces.length === 1 ? "it" : "them";
   return (
     <>
       <ContextMenuSeparator />
       <ContextMenuSub>
-        {/* Greyed out, it still takes the pointer, so its tooltip says why. */}
-        <TipItem
-          kit={CONTEXT}
-          as="SubTrigger"
-          disabled={!keys.length}
-          tip={keys.length ? `Chooses whether ${these} follow sync on ${THIS}` : `Can't sync: ${faces.length === 1 ? "it has" : "they have"} no PostScript name`}
-        >
+        {/* Greyed out for fonts with no PostScript name, which can't sync. */}
+        <ContextMenuSubTrigger disabled={!keys.length} className="data-disabled:opacity-50">
           <Icon name="sync" size={16} />
           {HERE}
-        </TipItem>
+        </ContextMenuSubTrigger>
         <ContextMenuSubContent className="min-w-52 shadow-lg">
           <ContextMenuRadioGroup value={current} onValueChange={(v) => choose(v as Exception)}>
-            <TipItem kit={CONTEXT} as="RadioItem" value="follow" tip={`Turns ${it} on or off here as your synced computers do`}>
-              Follow sync
-            </TipItem>
-            <TipItem kit={CONTEXT} as="RadioItem" value="on" tip={`Keeps ${it} on here, whatever sync says`}>
-              Always on here
-            </TipItem>
-            <TipItem kit={CONTEXT} as="RadioItem" value="off" tip={`Keeps ${it} off here, whatever sync says`}>
-              Never on here
-            </TipItem>
+            <ContextMenuRadioItem value="follow">Follow sync</ContextMenuRadioItem>
+            <ContextMenuRadioItem value="on">Always on here</ContextMenuRadioItem>
+            <ContextMenuRadioItem value="off">Never on here</ContextMenuRadioItem>
           </ContextMenuRadioGroup>
         </ContextMenuSubContent>
       </ContextMenuSub>

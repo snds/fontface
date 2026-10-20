@@ -8,8 +8,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { Icon } from "@/components/ui/icon";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useFontCharacters } from "@/components/CharacterGrid";
-import { dragRegion, useTitleBar } from "@/components/TitleBar";
-import { Tip } from "@/components/Tip";
+import { dragRegion, IS_MAC, useTitleBar } from "@/components/TitleBar";
 import { FontActionItems } from "@/components/FontActions";
 import { pageTarget } from "@/fontActions";
 import type { Locations } from "@/tags/locations";
@@ -19,6 +18,7 @@ import { variationAt } from "@/axisField";
 import type { CssStyle } from "@/cssExport";
 import { featureSlack, pageFeatureValues, setToggle, type Toggles } from "@/openType";
 import { featureSettings } from "@/previewStyle";
+import { shortcutAria } from "@/tips";
 import { usePreviewStyle } from "@/components/PreviewStyle";
 import { AxesTab } from "./AxesTab";
 import { CharactersTab } from "./CharactersTab";
@@ -78,13 +78,11 @@ function GonePage({ placeName, onBack, headingRef }: { placeName: string; onBack
         <Icon name="font_download_off" size={40} weight={300} className="text-muted-foreground" />
         <p className="text-sm font-medium">This font isn't in your library anymore.</p>
         <p className="max-w-sm text-sm text-muted-foreground">Its file may have been moved or deleted, or its folder removed from the library.</p>
-        {/* Its name says the same as the tooltip (the shortcut goes on aria-keyshortcuts). */}
-        <Tip tip={`Goes back to ${placeName}`} shortcut={BACK_SHORTCUT} describe={false}>
-          <Button variant="outline" onClick={onBack}>
-            <Icon name="arrow_back" size={16} />
-            Back to {placeName}
-          </Button>
-        </Tip>
+        {/* Its words are its name, so it has no tooltip; its shortcut is on aria-keyshortcuts. */}
+        <Button variant="outline" onClick={onBack} aria-keyshortcuts={shortcutAria(BACK_SHORTCUT, IS_MAC)}>
+          <Icon name="arrow_back" size={16} />
+          Back to {placeName}
+        </Button>
       </div>
     </>
   );
@@ -95,14 +93,8 @@ const NO_VALUES: Record<string, number> = {};
 
 const TAB_LABELS: Record<FontPageTab, string> = { specimen: "Specimen", characters: "Characters", opentype: "OpenType", axes: "Axes", info: "Info" };
 
-/** Each tab's tooltip: what it shows, for the chosen style. Cmd+I (Show Info) opens Info. */
-const TAB_TIPS: Record<FontPageTab, { tip: string; shortcut?: string }> = {
-  specimen: { tip: "Shows a waterfall of sizes, a paragraph and every style" },
-  characters: { tip: "Shows every character in this style; click one to copy it" },
-  opentype: { tip: "Shows this style's OpenType features, with switches to try them" },
-  axes: { tip: "Adjusts this variable style's axes, such as weight or width" },
-  info: { tip: "Shows this style's names, details and files", shortcut: "Mod+I" },
-};
+/** Cmd+I (Show Info) opens Info: on its tab's aria-keyshortcuts. */
+const INFO_SHORTCUT = "Mod+I";
 
 function FamilyPage({ page, family, placeName, previewText, busy, locations, onBack, onChange, onActivate, onReveal, tagsAsk, headingRef }: Props & { family: Family; headingRef: React.RefObject<HTMLHeadingElement | null> }) {
   const face: Face =
@@ -138,7 +130,7 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
   const slack = featureSlack(featureValues);
   const factsData = factsOf(facts.state);
   // Copy as CSS waits for the style's features, so it says the same whenever it's used.
-  const copyWait = facts.state.status === "loading" && "Wait: Fontface is still reading this style's features";
+  const copyWait = facts.state.status === "loading";
   const onCopyCss = () => {
     const style: CssStyle = {
       family: font.family,
@@ -171,10 +163,11 @@ function FamilyPage({ page, family, placeName, previewText, busy, locations, onB
       <Tabs value={tab} onValueChange={(v) => onChange({ tab: v as FontPageTab })} className="min-h-0 flex-1 gap-0">
         <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-6 py-2.5">
           <TabsList aria-label="Font page" activateOnFocus>
+            {/* Each tab's word is its name: no tooltips. */}
             {tabs.map((t) => (
-              <Tip key={t} tip={TAB_TIPS[t].tip} shortcut={TAB_TIPS[t].shortcut}>
-                <TabsTrigger value={t}>{TAB_LABELS[t]}</TabsTrigger>
-              </Tip>
+              <TabsTrigger key={t} value={t} aria-keyshortcuts={t === "info" ? shortcutAria(INFO_SHORTCUT, IS_MAC) : undefined}>
+                {TAB_LABELS[t]}
+              </TabsTrigger>
             ))}
           </TabsList>
           <TagChipsRow faces={family.faces} />

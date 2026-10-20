@@ -87,7 +87,8 @@ export function OpenTypeTab(props: Props) {
               <span className="flex-1" />
               <div className="flex w-40 items-center gap-2">
                 <Icon name="format_size" size={16} className="text-muted-foreground" />
-                <Tip tip="Sets the size of the test text">
+                {/* Only an icon beside it, so its tooltip is its name. */}
+                <Tip tip="Test text size">
                   <Slider
                     min={16}
                     max={96}
@@ -104,8 +105,9 @@ export function OpenTypeTab(props: Props) {
                   onValueChange={(v) => typeof v === "string" && onLang(v === NO_LANGUAGE ? undefined : v)}
                   items={[{ value: NO_LANGUAGE, label: "Default forms" }, ...languages.map((l) => ({ value: l.value, label: l.label }))]}
                 >
-                  <Tip tip="Sets the text's language, to show the font's forms for it">
-                    <SelectTrigger size="sm" aria-label="Language of the text" className="min-w-36">
+                  {/* It shows the language, not its own name, so its tooltip names it. */}
+                  <Tip tip="Language">
+                    <SelectTrigger size="sm" aria-label="Language" className="min-w-36">
                       <SelectValue />
                     </SelectTrigger>
                   </Tip>
@@ -120,17 +122,12 @@ export function OpenTypeTab(props: Props) {
                   </SelectContent>
                 </Select>
               )}
-              <CopyCssButton onCopy={onCopyCss} variable={font.variable} />
+              <CopyCssButton onCopy={onCopyCss} />
               {/* Stays focusable once it has nothing left to undo, so focus doesn't fall out of the page. */}
-              <Tip
-                tip="Puts the switches and the language back as they started"
-                disabledReason={!changed && "Nothing to reset yet: no switch or language has changed"}
-              >
-                <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={onReset}>
-                  <Icon name="restart_alt" size={16} />
-                  Reset
-                </Button>
-              </Tip>
+              <Button variant="outline" size="sm" disabled={!changed} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={onReset}>
+                <Icon name="restart_alt" size={16} />
+                Reset
+              </Button>
             </div>
             <textarea
               id={`${id}-text`}
@@ -233,21 +230,17 @@ function FeatureRow({
   return (
     <li className="flex min-h-11 items-center gap-3 border-b py-1.5 last:border-b-0">
       {/* The page's switch, for the test text and the Specimen (every style, while the page is
-          open). Vertical-text features can't show here, so their switch is greyed out (still
-          focusable, so its tooltip can say why from the keyboard too). */}
-      <Tip
-        tip={`${on ? "Turns off" : "Turns on"} ${feature.label} in the test text and Specimen`}
-        disabledReason={!feature.switchable && "Changes only vertical text, which these previews don't show"}
-      >
-        <Switch
-          checked={on}
-          disabled={!feature.switchable}
-          focusableWhenDisabled
-          onCheckedChange={(v) => onToggle(v)}
-          aria-labelledby={`${id}-label`}
-          aria-describedby={`${id}-detail`}
-        />
-      </Tip>
+          open), named by the feature's label beside it: no tooltip. Vertical-text features can't
+          show here, so their switch is greyed out (their group's note says why); it stays
+          focusable, so it's still found from the keyboard. */}
+      <Switch
+        checked={on}
+        disabled={!feature.switchable}
+        focusableWhenDisabled
+        onCheckedChange={(v) => onToggle(v)}
+        aria-labelledby={`${id}-label`}
+        aria-describedby={`${id}-detail`}
+      />
       <span className="flex min-w-0 flex-1 flex-col">
         <span id={`${id}-label`} className="truncate text-sm">
           {feature.label}

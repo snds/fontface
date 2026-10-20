@@ -2,27 +2,28 @@ import { useEffect, useState } from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
-import { CONTEXT, DROPDOWN, Tip, TipItem, type Kit } from "@/components/Tip";
-import { dividerLabel, dividerTip, SECTIONS, type MenuLine, type SidebarCommand, type SidebarSection } from "@/sidebar";
+import { CONTEXT, DROPDOWN, Tip, type Kit } from "@/components/Tip";
+import { dividerLabel, SECTIONS, type MenuLine, type SidebarCommand, type SidebarSection } from "@/sidebar";
 import { openMenuFromKeyboard } from "@/tags/menus";
 
 /** The divider's icon button: a square centred on the line, one size up from the rows' icons. */
 const ICON_BUTTON =
   "relative flex size-6 shrink-0 items-center justify-center rounded-md leading-none text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground";
 
-/** A menu's lines (sidebar.ts) as items of a dropdown or right-click menu, each with its tooltip. */
+/** A menu's lines (sidebar.ts) as items of a dropdown or right-click menu. Their words show, so
+ *  they have no tooltips. */
 export function MenuLines({ kit, lines, run }: { kit: Kit; lines: MenuLine[]; run: (id: SidebarCommand) => void }) {
-  const { Separator } = kit;
+  const { Item, Separator } = kit;
   return (
     <>
       {lines.map((line, i) =>
         line === "-" ? (
           <Separator key={`-${i}`} />
         ) : (
-          <TipItem kit={kit} key={line.id} tip={line.tip} disabled={line.disabled} onClick={() => run(line.id)}>
+          <Item key={line.id} disabled={line.disabled} onClick={() => run(line.id)}>
             <Icon name={line.icon} size={16} />
             {line.label}
-          </TipItem>
+          </Item>
         ),
       )}
     </>
@@ -80,6 +81,9 @@ export function SectionDivider({
     }
   };
 
+  // The icon-only button's name, which its tooltip shows too ("Collapse Sources", "Tags").
+  const label = dividerLabel(section, { open, collapsible });
+
   return (
     <ContextMenu>
       <ContextMenuTrigger
@@ -91,12 +95,12 @@ export function SectionDivider({
       >
         <span aria-hidden className="h-px flex-1 bg-sidebar-border" />
         {collapsible ? (
-          // Its name is the section's; aria-expanded says whether its rows show.
-          <Tip tip={dividerTip(section, { open, collapsible })} shortcut={open ? "Left" : "Right"} contentClassName="max-w-64">
+          // aria-expanded says whether its rows show.
+          <Tip tip={label} shortcut={open ? "Left" : "Right"}>
             <button
               type="button"
               className={ICON_BUTTON}
-              aria-label={dividerLabel(section)}
+              aria-label={label}
               aria-expanded={open}
               aria-controls={open ? contentId : undefined}
               onClick={() => onOpenChange(!open)}
@@ -109,8 +113,8 @@ export function SectionDivider({
           </Tip>
         ) : (
           <DropdownMenu>
-            <Tip tip={dividerTip(section, { open, collapsible })} contentClassName="max-w-64">
-              <DropdownMenuTrigger render={<button type="button" className={ICON_BUTTON} aria-label={`${dividerLabel(section)} menu`} />}>
+            <Tip tip={label}>
+              <DropdownMenuTrigger render={<button type="button" className={ICON_BUTTON} aria-label={label} />}>
                 <Icon name={SECTIONS[section].icon} size={18} />
               </DropdownMenuTrigger>
             </Tip>

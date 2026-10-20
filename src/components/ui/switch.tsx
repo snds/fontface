@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils"
 
 /**
  * `focusableWhenDisabled`: while `disabled`, it's greyed out and ignores presses but stays in the
- * Tab order and takes the pointer, so its tooltip can say why (components/Tip.tsx). Base UI's
+ * Tab order and takes the pointer, so focus doesn't drop when it greys out under it. Base UI's
  * Switch has no such option (a disabled one leaves the Tab order), so it's read-only then, and
  * says it's unavailable (aria-disabled).
  */

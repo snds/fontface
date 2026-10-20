@@ -19,16 +19,16 @@ import {
 import { stateWords, summarize, type StateSummary } from "@/fontState";
 import { activationIds, type Face } from "@/library";
 import { usePreviewProfile } from "@/previewProfiles";
-import { directionWords, nextSort, sortInfo } from "@/viewOptions";
+import { nextSort } from "@/viewOptions";
 import { Button } from "@/components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuLabel, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuGroup, ContextMenuLabel, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
 import { StateControl, useStateWording } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
 import { PREVIEW_BAR_SPACE } from "../PreviewBar";
-import { CONTEXT, Tip, TipItem } from "../Tip";
+import { CutShort, Tip, type TipHandle } from "../Tip";
 import {
   clampWidth,
   columnDef,
@@ -246,16 +246,6 @@ function widthWords(id: ColumnId, asked: number): string {
   return `${def.label || def.srLabel} column, ${width} pixels wide${end}`;
 }
 
-/** What clicking a sortable column's header does, in its tooltip: sorts by it the usual way
- *  ("Sorts by Date added, newest first", as the announcement says it), or, when it's the sort
- *  already, reverses the order. */
-function headerTip(key: SortKey, sort: TableOptions["sort"]): string {
-  const words = directionWords(nextSort(sort, key));
-  // "A to Z" keeps its capitals; "Newest first" reads on in lowercase.
-  const inSentence = /^[A-Z][a-z]/.test(words) ? words.charAt(0).toLowerCase() + words.slice(1) : words;
-  return sort.key === key ? `Reverses the order: ${inSentence}` : `Sorts by ${sortInfo(key).label}, ${inSentence}`;
-}
-
 /** The header row: sort buttons, resize edges, and a right-click menu to show or hide columns. */
 function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, onToggle, onDrag, onResized }: HeaderProps) {
   const shown = shownColumns(columns);
@@ -302,6 +292,27 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
         {shown.map((column) => {
           const { def } = column;
           const sorted = def.sort !== undefined && def.sort === sort.key;
+          const header = (
+            <button
+              type="button"
+              data-header
+              tabIndex={def.id === tabStop ? 0 : -1}
+              aria-describedby={def.sort ? `${hintId}-sorts` : `${hintId}-fixed`}
+              aria-label={def.label ? undefined : def.srLabel}
+              onFocus={() => setRoving(def.id)}
+              onClick={() => def.sort && onSort(def.sort)}
+              onKeyDown={(e) => onKeyDown(e, column)}
+              className={cn(
+                "flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset",
+                def.numeric && "justify-end text-right",
+                def.sort ? "hover:text-foreground" : "cursor-default",
+                sorted && "text-foreground",
+              )}
+            >
+              <span className="truncate">{def.label}</span>
+              {sorted && <Icon name={sort.desc ? "arrow_downward" : "arrow_upward"} size={14} />}
+            </button>
+          );
           return (
             <div
               key={def.id}
@@ -310,28 +321,14 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
               className={cn("relative flex min-w-0 items-center bg-background", def.numeric && "justify-end")}
               style={pinStyle(def.id)}
             >
-              {/* A column that doesn't sort says so; its description already does. */}
-              <Tip tip={def.sort ? headerTip(def.sort, sort) : "The list can't be sorted by this column"} describe={!!def.sort}>
-                <button
-                  type="button"
-                  data-header
-                  tabIndex={def.id === tabStop ? 0 : -1}
-                  aria-describedby={def.sort ? `${hintId}-sorts` : `${hintId}-fixed`}
-                  aria-label={def.label ? undefined : def.srLabel}
-                  onFocus={() => setRoving(def.id)}
-                  onClick={() => def.sort && onSort(def.sort)}
-                  onKeyDown={(e) => onKeyDown(e, column)}
-                  className={cn(
-                    "flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset",
-                    def.numeric && "justify-end text-right",
-                    def.sort ? "hover:text-foreground" : "cursor-default",
-                    sorted && "text-foreground",
-                  )}
-                >
-                  <span className="truncate">{def.label}</span>
-                  {sorted && <Icon name={sort.desc ? "arrow_downward" : "arrow_upward"} size={14} />}
-                </button>
-              </Tip>
+              {/* A header shows its column's name; one with none (On or off) has it as a tooltip. */}
+              {def.label ? (
+                header
+              ) : (
+                <Tip tip={def.srLabel}>
+                  {header}
+                </Tip>
+              )}
               <ResizeEdge column={column} onDrag={onDrag} onResized={onResized} />
             </div>
           );
@@ -343,16 +340,9 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
           {columns
             .filter((c) => !c.def.pinned)
             .map((c) => (
-              <TipItem
-                kit={CONTEXT}
-                as="CheckboxItem"
-                key={c.def.id}
-                tip={c.shown ? `Hides the ${c.def.label} column` : `Shows the ${c.def.label} column`}
-                checked={c.shown}
-                onCheckedChange={(on: boolean) => onToggle(c.def.id, on)}
-              >
+              <ContextMenuCheckboxItem key={c.def.id} checked={c.shown} onCheckedChange={(on: boolean) => onToggle(c.def.id, on)}>
                 {c.def.label}
-              </TipItem>
+              </ContextMenuCheckboxItem>
             ))}
         </ContextMenuGroup>
       </ContextMenuContent>
@@ -365,7 +355,7 @@ function HeaderRow({ hintId, columns, template, width, sort, pinStyle, onSort, o
 function ResizeEdge({ column, onDrag, onResized }: { column: Column; onDrag: HeaderProps["onDrag"]; onResized: HeaderProps["onResized"] }) {
   return (
     // Hidden from screen readers, like the edge itself: the header says how to resize.
-    <Tip tip="Changes this column's width as you drag it" describe={false}>
+    <Tip tip="Resize column">
       <div
         aria-hidden
         className="absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-ring/40"
@@ -499,15 +489,23 @@ function describedIds(id: string, columns: readonly Column[]): string {
 }
 
 /** A column's text, with its column's name for screen readers (read as part of the row's
- *  description: "Foundry: Rasmus Andersson."). Nothing when there's no text. */
-function Fact({ id, column, text, className, title }: { id: string; column: ColumnId; text: string; className?: string; title?: string }) {
+ *  description: "Foundry: Rasmus Andersson."). Nothing when there's no text. `full`: all of it,
+ *  as a tooltip while the cell cuts it short, or always when it's more than the text (a file's
+ *  path, a version's whole string). */
+function Fact({ id, column, text, className, full, handle }: { id: string; column: ColumnId; text: string; className?: string; full?: string; handle?: TipHandle }) {
   if (!text) return null;
-  return (
-    <span id={`${id}-${column}`} className={className} title={title}>
+  const fact = (
+    <span id={`${id}-${column}`} className={className}>
       <span className="sr-only">{columnDef(column)?.label}: </span>
       {text}
       <span className="sr-only">.</span>
     </span>
+  );
+  if (full === undefined) return fact;
+  return (
+    <CutShort tip={full} more={full !== text} handle={handle}>
+      {fact}
+    </CutShort>
   );
 }
 
@@ -517,7 +515,7 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
   const family = row.family;
   const tab = active ? 0 : -1;
   const muted = "truncate text-xs text-muted-foreground";
-  const fact = { id, column };
+  const fact = { id, column, handle: actions.tips };
   switch (column) {
     case "state": {
       const switchable = face ? (face.installed ? [] : [face]) : family.switchable;
@@ -540,7 +538,8 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
         // A style's name sits one step (the chevron and its gap) past its family's.
         <span className={cn("flex min-w-0 items-center gap-1", face && "pl-14")}>
           {expandable ? (
-            <Tip handle={actions.tips} tip={expanded.has(family.id) ? "Hides this family's styles" : "Lists this family's styles under it"}>
+            // An icon only: its name ("Expand", "Collapse") is its tooltip.
+            <Tip handle={actions.tips} tip={expanded.has(family.id) ? "Collapse" : "Expand"}>
               <Button
                 variant="ghost"
                 size="icon-xs"
@@ -558,9 +557,9 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
           ) : (
             !face && <span className="size-6 shrink-0" aria-hidden />
           )}
-          <span className={cn("truncate", face ? "font-medium" : "font-semibold")} title={face ? face.style : family.name}>
-            {face ? face.style : family.name}
-          </span>
+          <CutShort tip={face ? face.style : family.name} handle={actions.tips}>
+            <span className={cn("truncate", face ? "font-medium" : "font-semibold")}>{face ? face.style : family.name}</span>
+          </CutShort>
           {font.variable && face && <span className="shrink-0 text-xs text-muted-foreground">(Variable)</span>}
         </span>
       );
@@ -572,7 +571,7 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
       return <Fact {...fact} text={weightText(faces)} className="truncate font-mono text-xs" />;
     case "foundry": {
       const text = face ? (font.manufacturer ?? "") : foundryOf(family);
-      return <Fact {...fact} text={text} className={muted} title={text} />;
+      return <Fact {...fact} text={text} className={muted} full={text} />;
     }
     case "format":
       return <Fact {...fact} text={formatsOf(faces)} className={muted} />;
@@ -582,28 +581,31 @@ function Cell({ column, row, faces, face, font, expandable, active, state, actio
       const names = face ? sourcesOf([face], locations.sourceOf) : familySources(family, locations.sourceOf);
       return (
         <span className="flex min-w-0 items-center gap-1.5">
-          <LocationDots copies={copies} locations={locations} max={2} srId={`${id}-places`} />
-          <span className={muted} title={names.join(", ")}>
-            {names[0] ?? ""}
-            {names.length > 1 ? ` +${names.length - 1}` : ""}
-          </span>
+          <LocationDots copies={copies} locations={locations} max={2} srId={`${id}-places`} tipHandle={actions.tips} />
+          {/* Every place's name, when there's more than one or it's cut short. */}
+          <CutShort tip={names.join(", ")} more={names.length > 1} handle={actions.tips}>
+            <span className={muted}>
+              {names[0] ?? ""}
+              {names.length > 1 ? ` +${names.length - 1}` : ""}
+            </span>
+          </CutShort>
         </span>
       );
     }
     case "added":
       return <Fact {...fact} text={addedDateText(face ? faceAddedAt(face) : addedAt(family.faces))} className={muted} />;
     case "tags":
-      return <TagChips faces={faces} index={actions.index} max={2} srId={`${id}-tags`} />;
+      return <TagChips faces={faces} index={actions.index} max={2} srId={`${id}-tags`} tipHandle={actions.tips} />;
     case "version": {
       const full = font.version ?? "";
-      return <Fact {...fact} text={shortVersion(full)} className={cn(muted, "font-mono")} title={full} />;
+      return <Fact {...fact} text={shortVersion(full)} className={cn(muted, "font-mono")} full={full} />;
     }
     case "designer": {
       const text = face ? (font.designer ?? "") : designerOf(family);
-      return <Fact {...fact} text={text} className={muted} title={text} />;
+      return <Fact {...fact} text={text} className={muted} full={text} />;
     }
     case "file":
-      return <Fact {...fact} text={fileNameOf(font)} className={cn(muted, "font-mono")} title={font.path} />;
+      return <Fact {...fact} text={fileNameOf(font)} className={cn(muted, "font-mono")} full={font.path} />;
     case "size":
       return <Fact {...fact} text={formatBytes(fileSizeOf(faces))} />;
     case "glyphs":

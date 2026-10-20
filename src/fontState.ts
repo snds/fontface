@@ -167,8 +167,9 @@ const WAITING_WHY = {
 };
 
 /**
- * What a mark's tooltip says, and screen readers hear in the item's description: one sentence
- * per thing worth knowing. `single`: one style (else a family, which counts its styles).
+ * What screen readers hear in the item's description about its state, and the font page's Info
+ * tab shows: one sentence per thing worth knowing. A mark's tooltip is only its name (`markName`
+ * in fontActions.ts). `single`: one style (else a family, which counts its styles).
  * `count: false` leaves out the "n of N styles are on" sentence, for an item whose name already
  * says it (stateWords), so screen readers don't hear it twice.
  */

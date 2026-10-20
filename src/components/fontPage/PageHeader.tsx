@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ActivationMode } from "@/api";
 import { newTagsAsk, pageTarget, type FontActionId } from "@/fontActions";
 import { activationIds, type Face, type Family } from "@/library";
@@ -20,17 +20,34 @@ export const BACK_SHORTCUT = { mac: "Mod+[", other: "Alt+Left" };
 /** A style's name in its family (grouping by name may have worked it out), with "(Variable)". */
 export const styleLabel = (face: Face) => `${face.style}${face.primary.variable ? " (Variable)" : ""}`;
 
-/** The Back button at the left of a page's top row. */
+/** The Back button at the left of a page's top row: an icon, so its tooltip is its name. */
 export function BackButton({ placeName, onBack }: { placeName: string; onBack: () => void }) {
   return (
-    // Its name says the same as the tooltip, so the tooltip adds no description (the shortcut is
-    // on aria-keyshortcuts).
-    <Tip tip={`Goes back to ${placeName}`} shortcut={BACK_SHORTCUT} describe={false}>
+    // The shortcut goes on aria-keyshortcuts.
+    <Tip tip={`Back to ${placeName}`} shortcut={BACK_SHORTCUT}>
       <Button variant="ghost" size="icon-sm" aria-label={`Back to ${placeName}`} onClick={onBack}>
         <Icon name="arrow_back" size={20} />
       </Button>
     </Tip>
   );
+}
+
+/**
+ * Whether a page's top row (`ref`) is narrower than `px`: the width at which its container query
+ * (`@max-[px]/pagehead`) hides a button's words and leaves its icon. Such a button has a tooltip
+ * with its name only while its words are hidden.
+ */
+export function useNarrowerThan(ref: React.RefObject<HTMLElement | null>, px: number): boolean {
+  const [narrow, setNarrow] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // The content box, as container queries measure it.
+    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < px));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref, px]);
+  return narrow;
 }
 
 interface Props {
@@ -63,6 +80,9 @@ export const FONT_PAGE_MORE_ID = "font-page-more";
  */
 export function FontPageHeader({ family, face, placeName, headingRef, busy, onBack, onChoose, onActivate, tagsAsk }: Props) {
   const titleBar = useTitleBar();
+  const headerRef = useRef<HTMLElement>(null);
+  // Below 640px the Tags button is an icon only.
+  const narrow = useNarrowerThan(headerRef, 640);
   const styles = `${family.faces.length} ${family.faces.length === 1 ? "style" : "styles"}`;
   // Cmd+T opens Tags here: only an ask for this page that's newer than the last one seen (an
   // ask for a font page opened over this one leaves it alone; the first render isn't one).
@@ -76,7 +96,7 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
     setTagsOpen(true);
   }, [tagsAsk]);
   return (
-    <header className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
+    <header ref={headerRef} className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
       <BackButton placeName={placeName} onBack={onBack} />
       <div className="flex min-w-0 flex-1 items-baseline gap-2">
         {/* Focused when the page opens, so screen readers start here. */}
@@ -91,7 +111,8 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
           onValueChange={(key) => typeof key === "string" && onChoose(key)}
           items={family.faces.map((f) => ({ value: f.key, label: styleLabel(f) }))}
         >
-          <Tip tip="Picks which style this page shows">
+          {/* It shows the style, not its own name, so its tooltip names it. */}
+          <Tip tip="Style">
             <SelectTrigger size="sm" aria-label="Style" className="max-w-56 min-w-24">
               <SelectValue />
             </SelectTrigger>
@@ -117,8 +138,8 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
         onSwitch={(on, scope) => onActivate(activationIds(family.switchable, on), on, scope)}
       />
       <Popover open={tagsOpen} onOpenChange={setTagsOpen}>
-        {/* The tooltip puts Cmd+T on aria-keyshortcuts. */}
-        <Tip tip="Adds or removes this family's tags" shortcut="Mod+T" hide={tagsOpen}>
+        {/* A tooltip only while its word is hidden; it puts Cmd+T on aria-keyshortcuts either way. */}
+        <Tip tip="Tags" shortcut="Mod+T" hide={tagsOpen || !narrow}>
           <PopoverTrigger render={<Button variant="ghost" size="sm" aria-label={`Tags for ${family.name}`} />}>
             <Icon name="sell" size={16} />
             <span className="@max-[640px]/pagehead:hidden">Tags</span>
@@ -129,7 +150,7 @@ export function FontPageHeader({ family, face, placeName, headingRef, busy, onBa
         </PopoverContent>
       </Popover>
       <DropdownMenu onOpenChange={setMoreOpen}>
-        <Tip tip="Shows more actions: Compare, Pair, Family Group and others" hide={moreOpen}>
+        <Tip tip="More" hide={moreOpen}>
           {/* The id is on the trigger, so the tooltip, the menu and the button share it. */}
           <DropdownMenuTrigger id={FONT_PAGE_MORE_ID} render={<Button variant="ghost" size="icon-sm" aria-label="More" />}>
             <Icon name="more_horiz" size={18} />

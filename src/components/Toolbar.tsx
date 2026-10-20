@@ -31,14 +31,14 @@ interface Props {
   filter?: React.ReactNode;
   /** What the search field searches, when it isn't the library: "Search Google Fonts". */
   searchLabel?: string;
-  /** Layouts the view can't show, each with why (the layout switch greys them out). */
-  unavailableLayouts?: Partial<Record<LibraryLayout, string>>;
+  /** Layouts the view can't show (the layout switch greys them out). */
+  unavailableLayouts?: readonly LibraryLayout[];
 }
 
-const STATUS: { value: StatusFilter; label: string; tip: string }[] = [
-  { value: "any", label: "All", tip: "Shows every font, on or off" },
-  { value: "active", label: "Active", tip: "Shows only fonts that are on" },
-  { value: "inactive", label: "Inactive", tip: "Shows only fonts that are off" },
+const STATUS: { value: StatusFilter; label: string }[] = [
+  { value: "any", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "inactive", label: "Inactive" },
 ];
 
 /**
@@ -77,8 +77,9 @@ export function Toolbar({
           (Google Fonts has its own filter instead). */}
       <div className="flex shrink-0 items-center gap-1.5">
         {filter ?? (showStatus && <ChoiceGroup label="Show fonts" value={status} options={STATUS} onChange={onStatus} />)}
-        {/* An icon only, the same size on or off, so nothing beside it moves when it's pressed. */}
-        <Tip tip={variableOnly ? "Shows every font again, not only variable ones" : "Shows only variable fonts"}>
+        {/* An icon only, the same size on or off, so nothing beside it moves when it's pressed. Its
+            tooltip is its name. */}
+        <Tip tip="Variable fonts only">
           <button
             type="button"
             aria-pressed={variableOnly}

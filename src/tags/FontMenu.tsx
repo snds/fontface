@@ -1,15 +1,22 @@
 import { focusBack } from "@/focusReturn";
 import type { Face } from "@/library";
-import { ContextMenuGroup, ContextMenuLabel, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent } from "@/components/ui/context-menu";
+import {
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+} from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
-import { CONTEXT, TipItem } from "@/components/Tip";
 import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
 import { tagCoverage, type TagIndex } from "./model";
 import { applyTags } from "./TagPicker";
 
 const subContent = "max-h-[min(26rem,var(--available-height))] min-w-52 overflow-y-auto shadow-lg";
-// Greyed out, but still under the pointer, so its tooltip can say why.
+// A submenu trigger has no greyed-out look of its own.
 const disabledTrigger = "data-disabled:opacity-50";
 
 /** "Sci-Fi/Star Trek" as "Sci-Fi › Star Trek", for lists that don't show the tree. */
@@ -42,62 +49,52 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
   const count = (id: number) => coverage.get(id) ?? 0;
   const own = index.byGroup.filter((g) => g.group === "mine");
   const has = index.ordered.filter((node) => !node.tag.builtin && count(node.tag.id) > 0);
-  const lockedOn = index.ordered.some((node) => node.tag.builtin && count(node.tag.id) > 0);
-  const these = faces.length === 1 ? "this font" : "these fonts";
   return (
     <>
       <ContextMenuSub>
-        <TipItem kit={CONTEXT} as="SubTrigger" tip={`Adds ${these} to one of your tags`}>
+        <ContextMenuSubTrigger>
           <Icon name="new_label" size={16} />
           Add to tag
-        </TipItem>
+        </ContextMenuSubTrigger>
         <ContextMenuSubContent className={subContent}>
-          <TipItem kit={CONTEXT} tip="Opens a box to find a tag by typing its name" onClick={() => openTagDialog({ kind: "pick", faces, returnFocus: focusBack() })}>
+          <ContextMenuItem onClick={() => openTagDialog({ kind: "pick", faces, returnFocus: focusBack() })}>
             <Icon name="search" size={16} />
             Find a tag…
-          </TipItem>
-          <TipItem kit={CONTEXT} tip={`Makes a new tag and adds ${these} to it`} onClick={() => openTagDialog({ kind: "create", faces })}>
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => openTagDialog({ kind: "create", faces })}>
             <Icon name="add" size={16} />
             New tag…
-          </TipItem>
+          </ContextMenuItem>
           {own.length > 0 && <ContextMenuSeparator />}
           {own.flatMap((g) =>
             g.nodes.map((node) => {
               const all = count(node.tag.id) === faces.length;
               return (
-                <TipItem
-                  kit={CONTEXT}
+                <ContextMenuItem
                   key={node.tag.id}
                   disabled={all}
-                  tip={all ? `Already in “${node.tag.name}”` : `Adds ${these} to “${node.tag.name}”`}
                   style={{ paddingLeft: 6 + node.depth * 14 }}
                   onClick={() => applyTags([node.tag.id], faces, true)}
                 >
                   <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
                   <span className="flex-1 truncate">{node.label}</span>
                   {all && <Icon name="check" size={16} aria-label="already added" />}
-                </TipItem>
+                </ContextMenuItem>
               );
             }),
           )}
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSub>
-        <TipItem
-          kit={CONTEXT}
-          as="SubTrigger"
-          disabled={!has.length}
-          className={disabledTrigger}
-          tip={has.length ? `Takes ${these} off one of your tags` : lockedOn ? `${faces.length === 1 ? "It's" : "They're"} only in built-in tags, which can't be changed by hand` : `${faces.length === 1 ? "It isn't" : "They aren't"} in any of your tags`}
-        >
+        <ContextMenuSubTrigger disabled={!has.length} className={disabledTrigger}>
           <Icon name="label_off" size={16} />
           Remove from tag
-        </TipItem>
+        </ContextMenuSubTrigger>
         <ContextMenuSubContent className={subContent}>
           {has.map((node) => {
             const n = count(node.tag.id);
             return (
-              <TipItem kit={CONTEXT} key={node.tag.id} tip={`Takes ${these} off “${node.tag.name}”`} onClick={() => applyTags([node.tag.id], faces, false)}>
+              <ContextMenuItem key={node.tag.id} onClick={() => applyTags([node.tag.id], faces, false)}>
                 <Icon name="label" size={16} filled style={{ color: colorVar(node.tag.color) }} />
                 <span className="flex-1 truncate">{pathLabel(node.tag.name)}</span>
                 {n < faces.length && (
@@ -105,15 +102,13 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
                     {n}/{faces.length}
                   </span>
                 )}
-              </TipItem>
+              </ContextMenuItem>
             );
           })}
           {has.length > 1 && (
             <>
               <ContextMenuSeparator />
-              <TipItem
-                kit={CONTEXT}
-                tip={lockedOn ? `Takes ${these} off all your tags. Built-in tags stay.` : `Takes ${these} off all your tags`}
+              <ContextMenuItem
                 onClick={() =>
                   applyTags(
                     has.map((node) => node.tag.id),
@@ -124,7 +119,7 @@ export function TagSubmenus({ faces, index }: { faces: Face[]; index: TagIndex }
               >
                 <Icon name="clear_all" size={16} />
                 Remove all tags
-              </TipItem>
+              </ContextMenuItem>
             </>
           )}
         </ContextMenuSubContent>

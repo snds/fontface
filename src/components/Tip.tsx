@@ -1,4 +1,4 @@
-import { cloneElement, useId } from "react";
+import { cloneElement, useCallback, useState } from "react";
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
 import {
   ContextMenuCheckboxItem,
@@ -24,39 +24,43 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
-import { joinIds, shortcutAria, shortcutLabel, shortcutSaid, tipSaid, type ShortcutSpec } from "@/tips";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { shortcutAria, shortcutLabel, type ShortcutSpec } from "@/tips";
 import { IS_MAC } from "./TitleBar";
 
 /*
- * Tooltips: every action in the app has one, from the design system (ui/tooltip.tsx), never the
- * browser's `title`. Use these parts for every new one:
+ * Tooltips: only a control with no visible words of its own has one, and it says just that
+ * control's name.
  *
- * - `Tip` around any one control: a Button, a plain <button>, a link, a Switch, a Slider, a
- *   ChoiceGroup option (give the option a `tip`), a menu's or popover's trigger (Tip goes
- *   outside: <Tip><PopoverTrigger render={<Button/>} /></Tip>, never inside its `render`). It
- *   doesn't change the control: same element, same layout, same focus order. In a virtualised
- *   list, share one tooltip between the rows: `createTipHandle()`, one <TipHost handle/>, and
- *   `handle` on each row's Tip.
- * - `TipItem` for a menu item, submenu trigger, radio or checkbox item, in a dropdown (`DROPDOWN`)
- *   or right-click menu (`CONTEXT`).
+ * - Which controls: icon-only buttons and toggles, color swatches, icon-only menu or popover
+ *   triggers, icon-only ChoiceGroup options (give the option a `tip`), a picker that shows only
+ *   its value. A control that shows its words has none: a text button, a menu item, a tab, a
+ *   link, a switch or checkbox with its label beside it, a settings row. A button whose words
+ *   hide at narrow widths has one only while they're hidden (`hide` while they show).
+ * - Words: the control's name, a few words, sentence case, no full stop: "Uninstall",
+ *   "Align left", "Reset preview", "More". Not a sentence, not what it does, not why it's
+ *   greyed out. If that reason matters, say it in short visible text near the control, where
+ *   it fits. Give the keyboard shortcut with `shortcut` ("Mod+1"; see tips.ts), never in the
+ *   words.
+ * - Two other uses, both the content itself, not an explanation: text cut short (truncated)
+ *   shows all of itself while it's cut (`CutShort`), and a mark with no words (an icon, a row
+ *   of dots) shows what it stands for ("Not in this font: ä ö", "3 copies").
+ * - Never the browser's `title`: always these parts, on the design system's tooltip
+ *   (ui/tooltip.tsx). Don't name other font managers; macOS's own font folders are
+ *   "macOS Fonts".
  *
- * Words: plain and short (about 4 to 12), usually starting with a verb, saying what happens:
- * "Shows fonts as a grid of cards", "Turns on every style in this family". One sentence has no
- * closing period; two or more end each with one ("Stops the scan. Fonts read so far are kept.").
- * Give the shortcut with `shortcut` ("Mod+1"; see tips.ts), never in the words. A greyed-out
- * control says why, and what would make it work: `disabledReason` ("Select a font to compare
- * it"); while Fontface is busy, "Wait: Fontface is still …". Don't name other font managers;
- * macOS's own font folders are "macOS Fonts".
+ * `Tip` goes around one control: a Button, a plain <button>, a Switch, a menu's or popover's
+ * trigger (Tip goes outside: <Tip><PopoverTrigger render={<Button/>} /></Tip>, never inside its
+ * `render`). It doesn't change the control: same element, same layout, same focus order. In a
+ * virtualised list, share one tooltip between the rows: `createTipHandle()`, one
+ * <TipHost handle/>, and `handle` on each row's Tip.
  *
- * Screen readers: the words become the control's description (aria-describedby, after its own),
- * with the shortcut as said ("Command-1"); the shortcut also goes on aria-keyshortcuts. Pass
- * `describe={false}` only when the control's name already says exactly the same. Keyboard focus
- * shows the tooltip as hover does. A greyed-out control must still take the pointer and focus,
- * or its tooltip can't show: on a Button or a Switch, `disabled` with `focusableWhenDisabled`
- * (they look greyed out by themselves); on a plain <button>, `aria-disabled` instead of
- * `disabled` (with `aria-disabled:opacity-50`), and ignore the click.
+ * Screen readers: the control's own name (its aria-label) says the same words, so the tooltip
+ * adds nothing to its description. The shortcut goes on aria-keyshortcuts. Keyboard focus shows
+ * the tooltip as hover does. A greyed-out control keeps focus, so focus never drops when it
+ * greys out under it: on a Button or a Switch, `disabled` with `focusableWhenDisabled`; on a
+ * plain <button>, `aria-disabled` instead of `disabled` (with `aria-disabled:opacity-50`), and
+ * ignore the click.
  *
  * Esc closes an open tooltip and, in the same press, still does its other job there: closes the
  * dialog or menu, goes Back, leaves Settings (ui/tooltip.tsx; window handlers ask tips.ts's
@@ -64,8 +68,8 @@ import { IS_MAC } from "./TitleBar";
  *
  * Timing: the app's TooltipProvider (App.tsx) opens a tooltip once the pointer rests on a
  * control for TIP_DELAY; once one is open, the next control's opens at once, as on macOS. Don't
- * pass `delay` unless the control is a big target the pointer crosses on its way elsewhere (a
- * list or sidebar row's name: ROW_TIP_DELAY). Menu items each wait MENU_TIP_DELAY (TipItem).
+ * pass `delay` unless the target is a big one the pointer crosses on its way elsewhere (a list
+ * row's cut-short name: ROW_TIP_DELAY).
  */
 
 /** How long the pointer rests on a control before its tooltip opens, app-wide (App.tsx's
@@ -74,11 +78,8 @@ export const TIP_DELAY = 500;
 /** After a tooltip closes, the next one opens without waiting for this long, so moving along a
  *  toolbar shows each tooltip at once, like macOS. */
 export const TIP_INSTANT_WINDOW = 400;
-/** For big targets the pointer crosses on its way elsewhere: a list or sidebar row's name. */
+/** For big targets the pointer crosses on its way elsewhere: a list row's cut-short name. */
 export const ROW_TIP_DELAY = 800;
-/** How long the pointer rests on a menu item before its tooltip shows, so moving down a menu
- *  doesn't flash one per item. */
-export const MENU_TIP_DELAY = 500;
 
 type Side = "top" | "bottom" | "left" | "right";
 type Align = "start" | "center" | "end";
@@ -117,101 +118,98 @@ export function TipShortcut({ shortcut }: { shortcut: ShortcutSpec }) {
 }
 
 export interface TipProps {
-  /** What the control does, in plain words. A string, so it can also be the screen-reader
-   *  description (else give `description`). */
+  /** The control's name, a few words with no full stop ("Align left"): the same words as its
+   *  aria-label. Or, for text cut short, all of it. */
   tip: React.ReactNode;
   /** The control's keyboard shortcut ("Mod+1", "Shift+Mod+Enter", or `{ mac, other }`; see
-   *  tips.ts). Shown after the words as the menus show it, said to screen readers, and put on
-   *  aria-keyshortcuts unless the control has its own. Hidden while it's greyed out. */
+   *  tips.ts). Shown after the words as the menus show it, and put on aria-keyshortcuts unless
+   *  the control has its own. */
   shortcut?: ShortcutSpec;
-  /** Set when the control is greyed out: why, and what would make it work. Shown (and said)
-   *  instead of `tip`. The control must stay hoverable and focusable (see the top of this file). */
-  disabledReason?: string | false | null;
   /** Default "top". */
   side?: Side;
   align?: Align;
   /** Only for a big target the pointer crosses on its way elsewhere (ROW_TIP_DELAY). */
   delay?: number;
-  /** false: don't add the words to the control's description, because its name (aria-label)
-   *  already says exactly the same. */
-  describe?: boolean;
-  /** The screen-reader words, when `tip` isn't a plain string. */
-  description?: string;
-  /** Keeps the tooltip from showing (the control is unchanged), e.g. while its own menu is open. */
+  /** Keeps the tooltip from showing (the control is unchanged): while its own menu is open, or
+   *  while the button's words show. */
   hide?: boolean;
-  /** false: a click leaves the tooltip open. Only for a button whose whole job is to show its
-   *  tooltip (an (i) that explains a section). Default true: a click closes it. */
-  closeOnClick?: boolean;
-  /** Classes for the tooltip's popup (e.g. "max-w-64" for a longer one). */
+  /** Classes for the tooltip's popup (e.g. "max-w-sm break-all" for a long path). */
   contentClassName?: string;
   /** A shared tooltip (createTipHandle, TipHost), for rows of a virtualised list. */
   handle?: TipHandle;
-  /** The one control. It's rendered as is, with the tooltip's handlers and the description
-   *  merged in. */
+  /** The one control. It's rendered as is, with the tooltip's handlers merged in. */
   children: React.ReactElement;
 }
 
 /**
- * A design-system tooltip on one control, with no change to the control itself. Its words reach
- * screen readers through a hidden copy beside it (aria-describedby), and keyboard focus opens it
- * as hover does. See the top of this file for when and how.
+ * A design-system tooltip on one control, with no change to the control itself. Keyboard focus
+ * opens it as hover does. See the top of this file for when and what it says.
  */
-export function Tip({
-  tip,
-  shortcut,
-  disabledReason,
-  side = "top",
-  align = "center",
-  delay,
-  describe = true,
-  description,
-  hide = false,
-  closeOnClick = true,
-  contentClassName,
-  handle,
-  children,
-}: TipProps) {
-  const descId = useId();
-  const reason = disabledReason || undefined;
-  const keys = reason ? undefined : shortcut;
-  const words = reason ?? tip;
-  const text = reason ?? description ?? (typeof tip === "string" ? tip : undefined);
-  const said = describe && text ? tipSaid(text, keys === undefined ? undefined : shortcutSaid(keys, IS_MAC)) : undefined;
-
-  const own = children.props as { id?: string; "aria-describedby"?: string; "aria-keyshortcuts"?: string };
-  const extra: Record<string, string | undefined> = {};
-  if (said) extra["aria-describedby"] = joinIds(own["aria-describedby"], descId);
-  if (keys !== undefined && own["aria-keyshortcuts"] === undefined) extra["aria-keyshortcuts"] = shortcutAria(keys, IS_MAC);
-  const trigger = Object.keys(extra).length ? cloneElement(children, extra) : children;
+export function Tip({ tip, shortcut, side = "top", align = "center", delay, hide = false, contentClassName, handle, children }: TipProps) {
+  const own = children.props as { id?: string; "aria-keyshortcuts"?: string };
+  const trigger =
+    shortcut !== undefined && own["aria-keyshortcuts"] === undefined
+      ? cloneElement(children, { "aria-keyshortcuts": shortcutAria(shortcut, IS_MAC) } as Record<string, string>)
+      : children;
 
   const content = (
     <>
-      {words}
-      {keys !== undefined && <TipShortcut shortcut={keys} />}
+      {tip}
+      {shortcut !== undefined && <TipShortcut shortcut={shortcut} />}
     </>
   );
-  // The trigger takes the control's own id, so Base UI's and the DOM's agree.
-  const tooltip = handle ? (
-    <TooltipTrigger handle={handle} payload={{ content, side, align, className: contentClassName }} delay={delay} disabled={hide} closeOnClick={closeOnClick} id={own.id} render={trigger} />
+  // The trigger takes the control's own id, so Base UI's and the DOM's agree. Always the same
+  // shape, so a change of words never remounts the control (it keeps focus).
+  return handle ? (
+    <TooltipTrigger handle={handle} payload={{ content, side, align, className: contentClassName }} delay={delay} disabled={hide} id={own.id} render={trigger} />
   ) : (
     <Tooltip disabled={hide}>
-      <TooltipTrigger delay={delay} closeOnClick={closeOnClick} id={own.id} render={trigger} />
+      <TooltipTrigger delay={delay} id={own.id} render={trigger} />
       <TooltipContent side={side} align={align} className={contentClassName}>
         {content}
       </TooltipContent>
     </Tooltip>
   );
-  // Always the same shape, so a change of words never remounts the control (it keeps focus).
+}
+
+/**
+ * Text that's cut short ("…") where there's no room for all of it: while it is, a tooltip shows
+ * all of it. That's the text itself, not an explanation, so it's the one tooltip text gets. Only
+ * where text had its whole self on hover already; don't add new ones. `more`: the tooltip shows
+ * a little more than the text does (a file's whole path, every place's name), so it shows even
+ * when nothing is cut. `children`: the one element that's cut short (`truncate`). Such text is a
+ * big target the pointer crosses on its way elsewhere, so it waits ROW_TIP_DELAY.
+ */
+export function CutShort({
+  tip,
+  more = false,
+  align = "start",
+  contentClassName,
+  handle,
+  children,
+}: {
+  tip: React.ReactNode;
+  more?: boolean;
+  align?: Align;
+  contentClassName?: string;
+  handle?: TipHandle;
+  children: React.ReactElement;
+}) {
+  const [cut, setCut] = useState(false);
+  // Checked again whenever its size changes (a column dragged wider, the window resized).
+  const measure = useCallback(
+    (el: HTMLElement | null) => {
+      if (!el || more) return;
+      const observer = new ResizeObserver(() => setCut(el.scrollWidth > el.clientWidth));
+      observer.observe(el);
+      return () => observer.disconnect();
+    },
+    [more],
+  );
   return (
-    <>
-      {tooltip}
-      {/* The words for screen readers. Hidden, so it takes no room in the layout. */}
-      {said && (
-        <span id={descId} hidden>
-          {said}
-        </span>
-      )}
-    </>
+    <Tip tip={tip} align={align} delay={ROW_TIP_DELAY} hide={!more && !cut} contentClassName={contentClassName} handle={handle}>
+      {cloneElement(children as React.ReactElement<{ ref?: React.Ref<HTMLElement> }>, { ref: measure })}
+    </Tip>
   );
 }
 
@@ -256,50 +254,3 @@ export const CONTEXT: Kit = {
   RadioItem: ContextMenuRadioItem,
   CheckboxItem: ContextMenuCheckboxItem,
 };
-
-/**
- * A menu item (or, with `as`, a submenu trigger, radio item or checkbox item) with a
- * design-system tooltip: what it does, or, when it's greyed out, why. The tip is also the item's
- * description for screen readers. A greyed-out item still takes the pointer, so its tooltip
- * shows. Submenu triggers put the tip above, so it doesn't cover the submenu. A shortcut the
- * menu shows on the item (its Shortcut) isn't repeated in the tip.
- */
-export function TipItem({
-  kit,
-  tip,
-  as = "Item",
-  disabled,
-  className,
-  children,
-  ...rest
-}: {
-  kit: Kit;
-  tip: string;
-  as?: "Item" | "SubTrigger" | "RadioItem" | "CheckboxItem";
-  disabled?: boolean;
-  className?: string;
-  children: React.ReactNode;
-} & Record<string, unknown>) {
-  const Item = kit[as];
-  const id = useId();
-  return (
-    // Its own delay group: under the app's, once one item's tooltip showed, each next item's
-    // (and the first one's, just after the menu's trigger showed its own) would open at once.
-    <TooltipProvider delay={MENU_TIP_DELAY} timeout={0}>
-      <Tooltip>
-        <TooltipTrigger
-          delay={MENU_TIP_DELAY}
-          render={<Item disabled={disabled} aria-describedby={id} className={cn(disabled && "data-disabled:pointer-events-auto data-disabled:opacity-50", className)} {...rest} />}
-        >
-          {children}
-          <span id={id} hidden>
-            {tip}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side={as === "SubTrigger" ? "top" : "right"} className="max-w-64">
-          {tip}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}

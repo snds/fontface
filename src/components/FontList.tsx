@@ -182,7 +182,8 @@ function FamilyRow(props: RowProps & { family: Family }) {
           // Lines the name up with family rows' names.
           <span className="size-6 shrink-0" aria-hidden />
         ) : (
-          <Tip handle={actions.tips} tip={isOpen ? "Hides this family's styles" : "Lists this family's styles under it"}>
+          // An icon only: its name ("Expand", "Collapse") is its tooltip.
+          <Tip handle={actions.tips} tip={isOpen ? "Collapse" : "Expand"}>
             <Button
               variant="ghost"
               size="icon-xs"
@@ -199,7 +200,7 @@ function FamilyRow(props: RowProps & { family: Family }) {
           </Tip>
         )}
         <span className="truncate text-sm font-semibold">{family.name}</span>
-        <LocationDots copies={copies} locations={locations} srId={`${props.id}-places`} />
+        <LocationDots copies={copies} locations={locations} srId={`${props.id}-places`} tipHandle={actions.tips} />
         <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground">
           {single ? (
             <span className="shrink-0 font-mono">
@@ -225,7 +226,7 @@ function FamilyRow(props: RowProps & { family: Family }) {
           )}
           <SampleBadge profile={preview.profile} row={single ? "full" : "family"} id={`${props.id}-sample`} />
           <MissingHint text={previewText} profile={preview.profile} srId={`${props.id}-missing`} />
-          <TagChips faces={family.faces} index={actions.index} srId={`${props.id}-tags`} />
+          <TagChips faces={family.faces} index={actions.index} srId={`${props.id}-tags`} tipHandle={actions.tips} />
         </span>
         <RowTagButton rowKey={key} actions={actions} label={family.name} tabIndex={tab} />
         <StateControl
@@ -269,7 +270,7 @@ function FaceRow(props: RowProps & { face: Face }) {
           {face.style}
           {font.variable && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(Variable)</span>}
         </span>
-        <LocationDots copies={face.copies} locations={locations} srId={`${props.id}-places`} />
+        <LocationDots copies={face.copies} locations={locations} srId={`${props.id}-places`} tipHandle={actions.tips} />
         <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden font-mono text-xs text-muted-foreground">
           <span className="shrink-0">
             {font.weight}
@@ -286,7 +287,7 @@ function FaceRow(props: RowProps & { face: Face }) {
             <MissingHint text={previewText} profile={preview.profile} srId={`${props.id}-missing`} />
           </span>
           <span className="font-sans">
-            <TagChips faces={[face]} index={actions.index} srId={`${props.id}-tags`} />
+            <TagChips faces={[face]} index={actions.index} srId={`${props.id}-tags`} tipHandle={actions.tips} />
           </span>
         </span>
         <RowTagButton rowKey={key} actions={actions} label={`${face.family} ${face.style}`} tabIndex={tab} />

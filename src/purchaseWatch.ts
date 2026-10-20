@@ -15,16 +15,9 @@ export function watchExplainer(isMac: boolean): string {
   return isMac ? `${what} When you turn this on, macOS asks once whether Fontface may see your Downloads folder.` : what;
 }
 
-/** The watch switch's tooltip. */
-export function watchSwitchTip(watching: boolean, isMac: boolean): string {
-  if (watching) return "Stops watching for font purchases. Fonts you've added stay.";
-  return `Watches your download folders for fonts you buy.${isMac ? " macOS asks for access first." : ""}`;
-}
-
 /** Where to allow a folder on macOS: System Settings › Privacy & Security › Files and Folders. */
 export const PRIVACY_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders";
 export const PRIVACY_SETTINGS_LABEL = "Open Privacy Settings";
-export const PRIVACY_SETTINGS_TIP = "Opens System Settings at Files and Folders, where you can let Fontface see the folder";
 
 const folderName = (path: string) => path.split(/[/\\]/).filter(Boolean).pop() || path;
 
@@ -57,12 +50,10 @@ export function emptyFindsText(watching: boolean): string {
     : "Watching is off. Turn it on to see new font downloads here, or import a zip or folder of fonts you've already bought.";
 }
 
-/** Why Check now is greyed out, or false when it can run. */
-export function checkNowBlocked(watching: boolean, folders: number, checking: boolean): string | false {
-  if (checking) return "Wait: Fontface is still checking";
-  if (!watching) return "Turn on watching first";
-  if (folders === 0) return "Add a folder to watch first";
-  return false;
+/** Whether Check now can run: watching is on, there's a folder to look in, and no check is
+ *  running. Otherwise it's greyed out; the switch and the folder list beside it show why. */
+export function canCheckNow(watching: boolean, folders: number, checking: boolean): boolean {
+  return watching && folders > 0 && !checking;
 }
 
 /** The label before the folder list. */

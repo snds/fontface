@@ -56,22 +56,22 @@ export type Waited<T> = { value: T; error?: undefined } | { value?: undefined; e
  */
 export type CatalogShow = "all" | "downloaded" | "active" | "updates";
 
-export const CATALOG_SHOWS: readonly { value: CatalogShow; label: string; tip: string }[] = [
-  { value: "all", label: "All", tip: "Shows every Google Fonts family" },
-  { value: "downloaded", label: "Downloaded", tip: "Shows the families you downloaded with Fontface" },
-  { value: "active", label: "Active", tip: "Shows families that are on, downloaded here or your own copy" },
-  { value: "updates", label: "Updates", tip: "Shows downloaded families with a newer version" },
+export const CATALOG_SHOWS: readonly { value: CatalogShow; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "downloaded", label: "Downloaded" },
+  { value: "active", label: "Active" },
+  { value: "updates", label: "Updates" },
 ];
 
 /** The catalog's categories, as the slim bar under the toolbar offers them ("" is all). */
-export const CATEGORIES: readonly { value: string; label: string; tip: string }[] = [
-  { value: "", label: "All", tip: "Shows families of every kind" },
-  { value: "sans-serif", label: "Sans Serif", tip: "Shows only sans serif families" },
-  { value: "serif", label: "Serif", tip: "Shows only serif families" },
-  { value: "display", label: "Display", tip: "Shows only display families, for headings and big text" },
-  { value: "handwriting", label: "Handwriting", tip: "Shows only handwriting and script families" },
-  { value: "monospace", label: "Monospace", tip: "Shows only monospaced families, for code" },
-  { value: "icons", label: "Icons", tip: "Shows only icon fonts" },
+export const CATEGORIES: readonly { value: string; label: string }[] = [
+  { value: "", label: "All" },
+  { value: "sans-serif", label: "Sans Serif" },
+  { value: "serif", label: "Serif" },
+  { value: "display", label: "Display" },
+  { value: "handwriting", label: "Handwriting" },
+  { value: "monospace", label: "Monospace" },
+  { value: "icons", label: "Icons" },
 ];
 
 export const categoryLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
@@ -353,7 +353,3 @@ export function uninstallWords(family: string, h: Holding | undefined): string[]
   out.push(`You can get ${family} from Google again at any time.`);
   return out;
 }
-
-/** The "Installed" switch's tooltip (yours first): what flipping it does now. */
-export const yoursFirstTip = (on: boolean) =>
-  on ? "Lists every family A to Z" : "Lists installed families first, downloaded here or already in your library";

@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PurchaseFind } from "./api.ts";
-import { checkNowBlocked, emptyFindsText, foldersLabel, newPurchaseCount, watchExplainer, watchNotice, watchSwitchTip } from "./purchaseWatch.ts";
+import { canCheckNow, emptyFindsText, foldersLabel, newPurchaseCount, watchExplainer, watchNotice } from "./purchaseWatch.ts";
 
 const find = (status: string, missing = false) => ({ status, missing }) as PurchaseFind;
 
@@ -15,8 +15,6 @@ test("no 'n new' badge while watching is off", () => {
 test("turning on says macOS asks first, on the Mac only", () => {
   assert.match(watchExplainer(true), /macOS asks once whether Fontface may see your Downloads folder/);
   assert.doesNotMatch(watchExplainer(false), /macOS/);
-  assert.match(watchSwitchTip(false, true), /macOS asks for access first/);
-  assert.match(watchSwitchTip(true, true), /^Stops watching/);
 });
 
 test("no notice when every folder could be read", () => {
@@ -42,10 +40,10 @@ test("other systems point at the folder's permissions", () => {
 });
 
 test("Check now waits for watching, then for a folder", () => {
-  assert.equal(checkNowBlocked(true, 1, true), "Wait: Fontface is still checking");
-  assert.equal(checkNowBlocked(false, 1, false), "Turn on watching first");
-  assert.equal(checkNowBlocked(true, 0, false), "Add a folder to watch first");
-  assert.equal(checkNowBlocked(true, 1, false), false);
+  assert.equal(canCheckNow(true, 1, true), false, "still checking");
+  assert.equal(canCheckNow(false, 1, false), false, "watching is off");
+  assert.equal(canCheckNow(true, 0, false), false, "no folder to look in");
+  assert.equal(canCheckNow(true, 1, false), true);
 });
 
 test("the list and folders say whether watching is on", () => {

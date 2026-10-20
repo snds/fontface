@@ -14,13 +14,10 @@ import { cn } from "@/lib/utils";
 import { ChoiceGroup } from "./ChoiceGroup";
 import { MissingHint } from "./FacePreview";
 import { useFontPicker } from "./FontPicker";
-import { BackButton, styleLabel } from "./fontPage/PageHeader";
+import { BackButton, styleLabel, useNarrowerThan } from "./fontPage/PageHeader";
 import { FaceStateMessage } from "./fontPage/parts";
 import { dragRegion, NO_DRAG, useTitleBar } from "./TitleBar";
 import { Tip } from "./Tip";
-
-/** Add Fonts…'s tooltip. */
-const ADD_TIP = "Adds fonts from your library to compare";
 
 /** A face found by its key, with its whole family (App's `familyOfFace`). */
 export interface FaceRef {
@@ -57,6 +54,9 @@ interface Props {
  */
 export function ComparePage({ page, faceOf, placeName, previewText, onBack, onChange, onOpen, announce }: Props) {
   const titleBar = useTitleBar();
+  const headerRef = useRef<HTMLElement>(null);
+  // Below 640px Add Fonts… is an icon only.
+  const narrow = useNarrowerThan(headerRef, 640);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const addRef = useRef<HTMLButtonElement>(null);
   const base = useId();
@@ -84,7 +84,6 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
       description: `Compare shows up to ${COMPARE_MAX} fonts at once.`,
       multiple: true,
       confirm: "Add",
-      confirmTip: "Adds the fonts you picked to Compare",
       // A family adds its usual style: one already shown in that style isn't offered again.
       exclude: shownFamilies(page.faces, faceOf),
       onPick: (families) => {
@@ -138,7 +137,7 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
 
   return (
     <>
-      <header className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
+      <header ref={headerRef} className="@container/pagehead flex h-13 shrink-0 items-center gap-2 overflow-hidden border-b px-3 select-none" {...dragRegion(titleBar)}>
         <BackButton placeName={placeName} onBack={onBack} />
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h1 ref={headingRef} tabIndex={-1} className="truncate text-base font-semibold outline-none">
@@ -153,12 +152,13 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
           value={mode}
           onChange={(m) => onChange({ mode: m })}
           options={[
-            { value: "lines", label: <span className="flex items-center gap-1"><Icon name="view_agenda" size={14} />Lines</span>, tip: "Shows one line per font, one above the other" },
-            { value: "columns", label: <span className="flex items-center gap-1"><Icon name="view_column" size={14} />Columns</span>, tip: "Shows a paragraph per font, side by side" },
+            { value: "lines", label: <span className="flex items-center gap-1"><Icon name="view_agenda" size={14} />Lines</span> },
+            { value: "columns", label: <span className="flex items-center gap-1"><Icon name="view_column" size={14} />Columns</span> },
           ]}
         />
-        {/* Stays focusable while Compare is full, so its tooltip can say why it's greyed out. */}
-        <Tip tip={ADD_TIP} disabledReason={full && `Compare shows up to ${COMPARE_MAX} fonts. Remove one to add another.`}>
+        {/* A tooltip only while its words are hidden. Stays focusable while Compare is full, so
+            focus doesn't fall out of the page. */}
+        <Tip tip="Add Fonts" hide={!narrow}>
           <Button ref={addRef} variant="outline" size="sm" disabled={full} focusableWhenDisabled className="aria-disabled:opacity-50" onClick={addFonts}>
             <Icon name="add" size={16} />
             <span className="@max-[640px]/pagehead:sr-only">Add Fonts…</span>
@@ -172,7 +172,6 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
         </div>
         <SizeSlider
           label="Size"
-          tip="Sets the text size for every font"
           value={size}
           min={SIZES[mode].min}
           max={SIZES[mode].max}
@@ -191,12 +190,10 @@ export function ComparePage({ page, faceOf, placeName, previewText, onBack, onCh
         {count < 2 && (
           <div className="mx-6 mt-4 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
             <span>{count === 0 ? "No fonts to compare yet." : "Add another font to compare it with."}</span>
-            <Tip tip={ADD_TIP}>
-              <Button variant="outline" size="sm" onClick={addFonts}>
-                <Icon name="add" size={16} />
-                Add Fonts…
-              </Button>
-            </Tip>
+            <Button variant="outline" size="sm" onClick={addFonts}>
+              <Icon name="add" size={16} />
+              Add Fonts…
+            </Button>
           </div>
         )}
         {mode === "lines" ? (
@@ -250,22 +247,18 @@ function Lane({
 }) {
   const lines = mode === "lines";
   const { profile } = usePreviewProfile(face?.face.primary);
-  // Each Move button's name says what its tooltip does; greyed out at the end, the tooltip also
-  // says why (and that reaches screen readers as its description).
-  const upTip = lines ? "Moves this font up one place" : "Moves this font one place left";
-  const downTip = lines ? "Moves this font down one place" : "Moves this font one place right";
-  const firstWhy = first && (lines ? "It's at the top already" : "It's first already");
-  const lastWhy = last && (lines ? "It's at the bottom already" : "It's last already");
+  // Move and Remove are icons: each tooltip is its name. Their names for screen readers also say
+  // which font (every lane has them).
+  const up = lines ? "up" : "left";
+  const down = lines ? "down" : "right";
   return (
     <section aria-label={name} className={cn("flex min-w-0 flex-col gap-2", lines ? "border-b px-6 py-4" : "")}>
       <div className="flex min-w-0 items-center gap-2">
         {face ? (
           <>
-            <Tip tip={`Opens the font page for ${face.family.name}`}>
-              <Button id={openId} variant="link" size="sm" className="h-auto min-w-0 px-0 text-sm font-semibold text-foreground" onClick={onOpen} aria-label={`Open ${face.family.name}`}>
-                <span className="truncate">{face.family.name}</span>
-              </Button>
-            </Tip>
+            <Button id={openId} variant="link" size="sm" className="h-auto min-w-0 px-0 text-sm font-semibold text-foreground" onClick={onOpen} aria-label={`Open ${face.family.name}`}>
+              <span className="truncate">{face.family.name}</span>
+            </Button>
             <StylePicker face={face} taken={taken} onChange={onStyle} />
             {/* Typed text this font can't draw: those characters show in another font. */}
             {typed && <MissingHint text={typed} profile={profile} />}
@@ -276,7 +269,7 @@ function Lane({
           </span>
         )}
         <span className="flex-1" />
-        <Tip tip={upTip} disabledReason={firstWhy} describe={!!firstWhy}>
+        <Tip tip={`Move ${up}`}>
           <Button
             id={moveId(-1)}
             variant="ghost"
@@ -284,13 +277,13 @@ function Lane({
             disabled={first}
             focusableWhenDisabled
             className="aria-disabled:opacity-50"
-            aria-label={`Move ${name} ${lines ? "up" : "left"}`}
+            aria-label={`Move ${name} ${up}`}
             onClick={() => onMove(-1)}
           >
             <Icon name={lines ? "arrow_upward" : "arrow_back"} size={16} />
           </Button>
         </Tip>
-        <Tip tip={downTip} disabledReason={lastWhy} describe={!!lastWhy}>
+        <Tip tip={`Move ${down}`}>
           <Button
             id={moveId(1)}
             variant="ghost"
@@ -298,14 +291,13 @@ function Lane({
             disabled={last}
             focusableWhenDisabled
             className="aria-disabled:opacity-50"
-            aria-label={`Move ${name} ${lines ? "down" : "right"}`}
+            aria-label={`Move ${name} ${down}`}
             onClick={() => onMove(1)}
           >
             <Icon name={lines ? "arrow_downward" : "arrow_forward"} size={16} />
           </Button>
         </Tip>
-        {/* Its name says the same as the tooltip. */}
-        <Tip tip="Takes this font out of Compare" describe={false}>
+        <Tip tip="Remove from Compare">
           <Button variant="ghost" size="icon-xs" aria-label={`Remove ${name} from Compare`} onClick={onRemove}>
             <Icon name="close" size={16} />
           </Button>
@@ -316,19 +308,17 @@ function Lane({
   );
 }
 
-/** A style picker for one font: the other styles of its family. `tip`: its tooltip, what
- *  picking a style changes. */
+/** A style picker for one font: the other styles of its family. It shows the style, not its
+ *  own name, so its tooltip is its name (`label`). */
 export function StylePicker({
   face,
   taken = [],
   label = "Style",
-  tip = `Picks which style of ${face.family.name} to show`,
   onChange,
 }: {
   face: FaceRef;
   taken?: readonly string[];
   label?: string;
-  tip?: string;
   onChange: (faceKey: string) => void;
 }) {
   if (face.family.faces.length < 2) return <span className="truncate text-xs text-muted-foreground">{styleLabel(face.face)}</span>;
@@ -338,7 +328,7 @@ export function StylePicker({
       onValueChange={(key) => typeof key === "string" && onChange(key)}
       items={face.family.faces.map((f) => ({ value: f.key, label: styleLabel(f) }))}
     >
-      <Tip tip={tip}>
+      <Tip tip={label}>
         <SelectTrigger size="sm" aria-label={`${label} of ${face.family.name}`} className="max-w-56 min-w-24">
           <SelectValue />
         </SelectTrigger>
@@ -360,11 +350,10 @@ export function StylePicker({
   );
 }
 
-/** A labelled size slider with its value in px, and `tip`, its tooltip (what it sizes). It
+/** A labelled size slider with its value in px. Its label shows, so it has no tooltip. It
  *  doesn't move the window (title bar). */
 export function SizeSlider({
   label,
-  tip,
   value,
   min,
   max,
@@ -373,7 +362,6 @@ export function SizeSlider({
   onChange,
 }: {
   label: string;
-  tip: string;
   value: number;
   min: number;
   max: number;
@@ -384,9 +372,7 @@ export function SizeSlider({
   return (
     <div className="flex w-52 shrink-0 items-center gap-2" {...NO_DRAG}>
       <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
-      <Tip tip={tip}>
-        <Slider min={min} max={max} step={step} value={[value]} onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)} aria-label={label} />
-      </Tip>
+      <Slider min={min} max={max} step={step} value={[value]} onValueChange={(v) => onChange(Array.isArray(v) ? v[0] : v)} aria-label={label} />
       <span className="w-12 shrink-0 text-right font-mono text-xs text-muted-foreground tabular-nums">
         {value}
         {unit}

@@ -27,14 +27,14 @@ import {
   typeSize,
   type SizeDraft,
 } from "@/previewSize";
-import { shortcutSaid, tipSaid } from "@/tips";
+import { shortcutAria } from "@/tips";
 import { sizeShortcut } from "@/viewOptions";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { ALIGN_TIPS, CASE_TIPS, ColorChoice, colorName, ContrastNote, INKS, PAPERS } from "./PreviewOptions";
+import { ColorChoice, colorName, ContrastNote, INKS, PAPERS } from "./PreviewOptions";
 import { Tip, TipShortcut } from "./Tip";
 import { IS_MAC } from "./TitleBar";
 
@@ -46,10 +46,10 @@ import { IS_MAC } from "./TitleBar";
  * colors (with the contrast), and Reset.
  *
  * It's a toolbar (role="toolbar"): one Tab stop, Left and Right move along it, Home and End go
- * to its ends. Every control is a button or toggle button with a tooltip; groups that don't fit
- * as one toggle open a small panel above the bar. The panels sit outside the toolbar (Base UI's
- * detached popover triggers), so their own keys and buttons stay theirs. The list keeps room
- * under its last row for the bar (PREVIEW_BAR_SPACE), so the bar never hides it.
+ * to its ends. Its controls are icons, so each has its name (and shortcut) as a tooltip; groups
+ * that don't fit as one toggle open a small panel above the bar. The panels sit outside the
+ * toolbar (Base UI's detached popover triggers), so their own keys and buttons stay theirs. The
+ * list keeps room under its last row for the bar (PREVIEW_BAR_SPACE), so the bar never hides it.
  *
  * Every choice but the text and the size is saved as a setting at once (Settings › Reset covers
  * it); the text and the size last the session, starting from Settings' defaults.
@@ -63,7 +63,6 @@ export const PREVIEW_BAR_SPACE = 64;
  *  Smaller Preview). */
 const BIGGER = "Mod+=";
 const SMALLER = "Mod+-";
-const SIZE_TIP = "Sets the preview size";
 
 /** One of the bar's buttons: round, the same size in every state, so nothing moves. Pressed
  *  toggles (data-pressed) and buttons whose panel holds a choice that isn't the default (`ON`)
@@ -96,9 +95,6 @@ function usePanel() {
 }
 type Panel = ReturnType<typeof usePanel>;
 
-/** "Hello there…": typed text, short enough for a tooltip. */
-const shortText = (text: string) => (text.length > 40 ? `${text.slice(0, 39).trimEnd()}…` : text);
-
 export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, onPreview, dark }: Props) {
   const textPanel = usePanel();
   const casePanel = usePanel();
@@ -128,7 +124,7 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
           if (!e.currentTarget.contains(e.target as Node)) e.preventBaseUIHandler();
         }}
       >
-        <Tip tip={typed ? `Previews show “${shortText(previewText)}”` : "Shows your own words in every preview"} hide={textPanel.open} contentClassName="max-w-72">
+        <Tip tip="Preview text" hide={textPanel.open}>
           <Toolbar.Button
             render={<PopoverTrigger handle={textPanel.handle} />}
             aria-label="Preview text"
@@ -148,15 +144,18 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
           onValueChange={(value) => value[0] && onPreview({ align: value[0] as PreviewAlign })}
           className="flex shrink-0 gap-0.5"
         >
-          {PREVIEW_ALIGNS.map((a) => (
-            <Tip key={a.id} tip={ALIGN_TIPS[a.id]}>
-              <Toolbar.Button render={<Toggle value={a.id} />} aria-label={`Align ${a.label.toLowerCase()}`} className={ITEM}>
-                <Icon name={a.icon} size={18} />
-              </Toolbar.Button>
-            </Tip>
-          ))}
+          {PREVIEW_ALIGNS.map((a) => {
+            const name = `Align ${a.label.toLowerCase()}`;
+            return (
+              <Tip key={a.id} tip={name}>
+                <Toolbar.Button render={<Toggle value={a.id} />} aria-label={name} className={ITEM}>
+                  <Icon name={a.icon} size={18} />
+                </Toolbar.Button>
+              </Tip>
+            );
+          })}
         </ToggleGroup>
-        <Tip tip="Changes the case of previews" hide={casePanel.open}>
+        <Tip tip="Case" hide={casePanel.open}>
           <Toolbar.Button
             render={<PopoverTrigger handle={casePanel.handle} />}
             aria-label={`Case: ${currentCase.label}`}
@@ -165,7 +164,7 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
             <span aria-hidden>{preview.case === "asTyped" ? "Aa" : currentCase.short}</span>
           </Toolbar.Button>
         </Tip>
-        <Tip tip="Draws previews as outlines, with no fill">
+        <Tip tip="Outline">
           <Toolbar.Button
             render={<Toggle pressed={preview.outline} onPressedChange={(on) => onPreview({ outline: on })} />}
             aria-label="Outline"
@@ -177,7 +176,7 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
             </span>
           </Toolbar.Button>
         </Tip>
-        <Tip tip="Underlines previews, with the font's own underline">
+        <Tip tip="Underline">
           <Toolbar.Button
             render={<Toggle pressed={preview.underline} onPressedChange={(on) => onPreview({ underline: on })} />}
             aria-label="Underline"
@@ -186,14 +185,10 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
             <Icon name="format_underlined" size={18} />
           </Toolbar.Button>
         </Tip>
-        <Tip
-          tip={features.length ? `OpenType features: ${features.map((f) => f.label.toLowerCase()).join(", ")}` : "Turns on OpenType features for every preview"}
-          hide={featuresPanel.open}
-          contentClassName="max-w-64"
-        >
+        <Tip tip="OpenType features" hide={featuresPanel.open}>
           <Toolbar.Button
             render={<PopoverTrigger handle={featuresPanel.handle} />}
-            aria-label="Features"
+            aria-label="OpenType features"
             className={cn(ITEM, "text-[13px] font-medium italic", features.length > 0 && ON)}
           >
             {/* "fi": the letters a ligature joins, for the features. */}
@@ -203,7 +198,7 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
 
         <Toolbar.Separator className="mx-1 h-4 w-px shrink-0 bg-border" />
 
-        <Tip tip={`Changes the color of the letters${colors.low ? ". These colors are hard to read together" : ""}`} hide={inkPanel.open}>
+        <Tip tip="Ink" hide={inkPanel.open}>
           <Toolbar.Button
             render={<PopoverTrigger handle={inkPanel.handle} />}
             aria-label={`Ink: ${colorName(preview.ink, INKS)}${lowContrast}`}
@@ -213,7 +208,7 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
             {colors.low && <WarningDot />}
           </Toolbar.Button>
         </Tip>
-        <Tip tip={`Changes the color behind previews${colors.low ? ". These colors are hard to read together" : ""}`} hide={paperPanel.open}>
+        <Tip tip="Paper" hide={paperPanel.open}>
           <Toolbar.Button
             render={<PopoverTrigger handle={paperPanel.handle} />}
             aria-label={`Paper: ${colorName(preview.paper, PAPERS)}${lowContrast}`}
@@ -233,8 +228,8 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
 
         <Toolbar.Separator className="mx-1 h-4 w-px shrink-0 bg-border" />
 
-        {/* Stays focusable once there's nothing to reset, so its tooltip still says why it's greyed out. */}
-        <Tip tip="Puts alignment, case, lines, features and colors back to the defaults" disabledReason={plain && "Nothing to reset: previews already use the defaults"}>
+        {/* Greyed out once there's nothing to reset, but still focusable, like the bar's other items. */}
+        <Tip tip="Reset preview">
           <Toolbar.Button disabled={plain} aria-label="Reset preview" className={ITEM} onClick={() => !plain && onPreview({ ...DEFAULT_PREVIEW })}>
             <Icon name="format_clear" size={18} />
           </Toolbar.Button>
@@ -247,9 +242,10 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
         <PopoverContent side="top" sideOffset={8} className="w-auto gap-2 p-2.5">
           <PopoverTitle className="text-xs font-medium text-muted-foreground">Case</PopoverTitle>
           <div role="group" aria-label="Case" className="flex gap-1">
-            {PREVIEW_CASES.map((c) => (
-              <Tip key={c.id} tip={CASE_TIPS[c.id]}>
+            {PREVIEW_CASES.map((c) => {
+              const toggle = (
                 <Toggle
+                  key={c.id}
                   pressed={preview.case === c.id}
                   // One case at a time: pressing the one already on leaves it on.
                   onPressedChange={(on) => on && onPreview({ case: c.id })}
@@ -258,8 +254,16 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
                 >
                   {c.id === "asTyped" ? c.label : <span aria-hidden>{c.short}</span>}
                 </Toggle>
-              </Tip>
-            ))}
+              );
+              // "As typed" shows its name; the others show only letters ("AB"), so their name is a tooltip.
+              return c.id === "asTyped" ? (
+                toggle
+              ) : (
+                <Tip key={c.id} tip={c.label}>
+                  {toggle}
+                </Tip>
+              );
+            })}
           </div>
         </PopoverContent>
       </Popover>
@@ -269,18 +273,17 @@ export function PreviewBar({ previewText, onPreviewText, size, onSize, preview, 
           <PopoverTitle className="text-xs font-medium text-muted-foreground">OpenType features</PopoverTitle>
           <div role="group" aria-label="OpenType features" className="grid grid-cols-2 gap-1">
             {PREVIEW_FEATURES.map((f) => (
-              <Tip key={f.id} tip={f.description}>
-                <Toggle
-                  pressed={preview.features.includes(f.id)}
-                  onPressedChange={(on) =>
-                    onPreview({ features: PREVIEW_FEATURES.map((x) => x.id).filter((x) => (x === f.id ? on : preview.features.includes(x))) })
-                  }
-                  className={cn(CHOICE, "group/choice pr-2.5 pl-1.5")}
-                >
-                  <Icon name="check" size={14} className="invisible group-data-pressed/choice:visible" />
-                  {f.label}
-                </Toggle>
-              </Tip>
+              <Toggle
+                key={f.id}
+                pressed={preview.features.includes(f.id)}
+                onPressedChange={(on) =>
+                  onPreview({ features: PREVIEW_FEATURES.map((x) => x.id).filter((x) => (x === f.id ? on : preview.features.includes(x))) })
+                }
+                className={cn(CHOICE, "group/choice pr-2.5 pl-1.5")}
+              >
+                <Icon name="check" size={14} className="invisible group-data-pressed/choice:visible" />
+                {f.label}
+              </Toggle>
             ))}
           </div>
         </PopoverContent>
@@ -342,9 +345,9 @@ function TextPanel({ panel, text, onText }: { panel: Panel; text: string; onText
             }}
             className="pr-8 pl-8"
           />
-          {/* Always there, so the field never changes shape; greyed out with nothing to clear,
-              like the bar's own items (aria-disabled keeps it reachable, so its tooltip can say why). */}
-          <Tip tip="Clears your words, so previews show font names again" disabledReason={!text && "Nothing to clear: previews show font names"}>
+          {/* Always there, so the field never changes shape; greyed out with nothing to clear, like
+              the bar's own items (aria-disabled keeps it reachable). */}
+          <Tip tip="Clear preview text">
             <button
               type="button"
               aria-label="Clear preview text"
@@ -413,25 +416,25 @@ function SizeField({ size, onSize }: { size: number; onSize: (size: number) => v
     onSize(to);
   };
 
+  // Its name, with both shortcuts (Cmd+- and Cmd+=) after it.
   const sizeTip = (
     <>
-      {SIZE_TIP}
+      Preview size
       <TipShortcut shortcut={SMALLER} />
       <TipShortcut shortcut={BIGGER} />
     </>
   );
-  const sizeSaid = tipSaid(SIZE_TIP, `${shortcutSaid(SMALLER, IS_MAC)}, ${shortcutSaid(BIGGER, IS_MAC)}`);
 
   if (draft) {
     const now = draftSize(draft);
     return (
       <div className="flex h-7 w-[4.75rem] shrink-0 items-center rounded-full pr-0.5 pl-2.5 ring-1 ring-ring/60 focus-within:ring-3 focus-within:ring-ring/50">
-        <Tip tip="Type a size, or press Up and Down to change it. Return keeps it, Esc puts it back." contentClassName="max-w-64">
+        <Tip tip="Preview size">
           <Toolbar.Input
             ref={inputRef}
             role="spinbutton"
             inputMode="numeric"
-            aria-label="Preview size in pixels"
+            aria-label="Preview size"
             aria-valuenow={now}
             aria-valuemin={MIN_SIZE}
             aria-valuemax={MAX_SIZE}
@@ -468,8 +471,8 @@ function SizeField({ size, onSize }: { size: number; onSize: (size: number) => v
         </span>
         {/* Pointer only (the arrow keys do the same): pressing them keeps focus in the field. */}
         <span className="ml-auto flex flex-col">
-          <Stepper label="Bigger preview" tip="Makes previews 1 px bigger" icon="keyboard_arrow_up" onStep={() => step(draft, buttonStep(now, 1))} />
-          <Stepper label="Smaller preview" tip="Makes previews 1 px smaller" icon="keyboard_arrow_down" onStep={() => step(draft, buttonStep(now, -1))} />
+          <Stepper label="Bigger preview" icon="keyboard_arrow_up" onStep={() => step(draft, buttonStep(now, 1))} />
+          <Stepper label="Smaller preview" icon="keyboard_arrow_down" onStep={() => step(draft, buttonStep(now, -1))} />
         </span>
       </div>
     );
@@ -483,11 +486,12 @@ function SizeField({ size, onSize }: { size: number; onSize: (size: number) => v
         else if (typeof value === "string" && Number.isFinite(Number(value))) onSize(Number(value));
       }}
     >
-      <Tip tip={sizeTip} description={sizeSaid}>
+      <Tip tip={sizeTip}>
         <Toolbar.Button
           ref={triggerRef}
           render={<SelectTrigger size="sm" />}
           aria-label="Preview size"
+          aria-keyshortcuts={`${shortcutAria(SMALLER, IS_MAC)} ${shortcutAria(BIGGER, IS_MAC)}`}
           className="h-7 w-[4.75rem] shrink-0 rounded-full border-transparent data-[size=sm]:rounded-full bg-transparent pr-1 pl-2.5 text-xs text-muted-foreground hover:bg-foreground/5 hover:text-foreground data-popup-open:bg-foreground/5 data-popup-open:text-foreground dark:bg-transparent dark:hover:bg-foreground/5"
         >
           <span className="min-w-0 flex-1 text-left tabular-nums">{sizeLabel(size)}</span>
@@ -506,9 +510,9 @@ function SizeField({ size, onSize }: { size: number; onSize: (size: number) => v
   );
 }
 
-function Stepper({ label, tip, icon, onStep }: { label: string; tip: string; icon: string; onStep: () => void }) {
+function Stepper({ label, icon, onStep }: { label: string; icon: string; onStep: () => void }) {
   return (
-    <Tip tip={tip} describe={false}>
+    <Tip tip={label}>
       <button
         type="button"
         tabIndex={-1}
