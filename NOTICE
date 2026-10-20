@@ -4,7 +4,8 @@ Copyright 2026 Sean Sands
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Parts of the user interface in src/components/ui are derived from shadcn/ui
-(https://ui.shadcn.com), MIT License, Copyright (c) 2023 shadcn.
+(https://ui.shadcn.com), MIT License, Copyright (c) 2023 shadcn. Its licence text
+is in LICENSES/shadcn-ui.txt.
 
 The app bundles these, installed as packages under their own licences:
 - IBM Plex Sans and IBM Plex Mono, through @fontsource (SIL Open Font License 1.1)
