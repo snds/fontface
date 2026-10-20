@@ -54,6 +54,10 @@ Figma names fonts by family and style, not by PostScript name, so the copied lin
   each page is loaded (`page.loadAsync()`) before it's searched.
 - The plugin is plain JavaScript, so Figma runs the files as they are. `src/figmaPlugin.test.ts`
   runs `code.js` against a stand-in for Figma's API (`npm run test:ui`).
+- `fixtures/` holds what the plugin copies for a sample file. The same test checks the plugin
+  still copies exactly that and that Turn On Fonts from a List… reads it font for font; a Rust
+  test (`src-tauri/src/font_names/tests.rs`) checks the name matcher finds each font in a library
+  that names them the way their files do.
 
 ## Figma's documentation
 

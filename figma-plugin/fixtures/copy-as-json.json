@@ -1,0 +1,40 @@
+{
+  "fonts": [
+    {
+      "family": "Fraunces",
+      "style": "Black Italic"
+    },
+    {
+      "family": "Helvetica",
+      "style": "Bold Oblique"
+    },
+    {
+      "family": "IBM Plex Sans",
+      "style": "SemiBold Italic"
+    },
+    {
+      "family": "Inter",
+      "style": "Regular"
+    },
+    {
+      "family": "Inter Display",
+      "style": "Bold"
+    },
+    {
+      "family": "Lora",
+      "style": "Italic"
+    },
+    {
+      "family": "Noto Sans JP",
+      "style": "Medium"
+    },
+    {
+      "family": "Söhne",
+      "style": "Buch"
+    },
+    {
+      "family": "Univers LT Std",
+      "style": "45 Light"
+    }
+  ]
+}

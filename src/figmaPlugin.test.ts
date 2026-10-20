@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { parseFontList } from "./fontList.ts";
 
 const PLUGIN = new URL("../figma-plugin/", import.meta.url);
 const read = (file: string) => readFileSync(new URL(file, PLUGIN), "utf8");
@@ -297,4 +298,56 @@ test("the plugin stays offline: no network in the manifest, nothing loaded from 
     assert.doesNotMatch(source, /https?:|fetch\(|XMLHttpRequest|WebSocket|<script\s+src|<link/);
   }
   assert.doesNotMatch(ui, /\stitle=/, "tooltips come from the window's own Tip, never `title`");
+});
+
+// ------------------------------------------------------- into Turn On Fonts from a List…
+
+/** The fonts behind figma-plugin/fixtures/: a mix of names, weights, slants and variable styles,
+ *  one Figma can't find. src-tauri/src/font_names/tests.rs matches the same files. */
+const FIXTURE_FONTS: Font[] = [
+  ["Univers LT Std", "45 Light"],
+  ["Inter", "Regular"],
+  ["Inter Display", "Bold"],
+  ["IBM Plex Sans", "SemiBold Italic"],
+  ["Lora", "Italic"],
+  ["Fraunces", "Black Italic"],
+  ["Noto Sans JP", "Medium"],
+  ["Helvetica", "Bold Oblique"],
+  ["Söhne", "Buch"],
+];
+
+test("what the plugin copies is the fixtures, and Turn On Fonts from a List… reads them font for font", async () => {
+  const p = plugin([page([text(FIXTURE_FONTS)])], FIXTURE_FONTS.filter(([family]) => family !== "Söhne"));
+  const { copy } = await p.list("all");
+  const all = read("fixtures/copy-all.txt");
+  const json = read("fixtures/copy-as-json.json");
+  assert.equal(copy.all, all.trimEnd(), "Copy all gives fixtures/copy-all.txt");
+  assert.equal(copy.json, json.trimEnd(), "Copy as JSON gives fixtures/copy-as-json.json");
+  assert.equal(copy.missing, "Söhne Buch");
+
+  // Lines: each one is a name for the matcher, as it is.
+  const lines = parseFontList(all);
+  assert.equal(lines.badJson, false);
+  assert.equal(lines.repeats, 0);
+  assert.deepEqual(
+    lines.entries.map((e) => e.line),
+    all.trimEnd().split("\n"),
+  );
+  // JSON: each font by family and style, labelled the same as its line.
+  const fromJson = parseFontList(json);
+  assert.equal(fromJson.badJson, false);
+  assert.deepEqual(
+    fromJson.entries.map((e) => e.line),
+    JSON.parse(json).fonts,
+  );
+  assert.deepEqual(
+    fromJson.entries.map((e) => e.label),
+    lines.entries.map((e) => e.label),
+  );
+  assert.equal(fromJson.entries.length, FIXTURE_FONTS.length);
+  // Copy missing reads the same way.
+  assert.deepEqual(
+    parseFontList(copy.missing).entries.map((e) => e.line),
+    ["Söhne Buch"],
+  );
 });

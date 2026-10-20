@@ -369,3 +369,54 @@ fn the_library_query_reads_every_name_a_copy_carries() {
     drop(conn);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// What the Figma plugin copies (figma-plugin/fixtures/, checked against the plugin itself in
+/// src/figmaPlugin.test.ts): "Family Style" lines, and the same fonts as JSON.
+const FIGMA_LINES: &str = include_str!("../../../figma-plugin/fixtures/copy-all.txt");
+const FIGMA_JSON: &str = include_str!("../../../figma-plugin/fixtures/copy-as-json.json");
+
+#[test]
+fn the_figma_plugins_list_finds_each_font_as_its_files_name_it() {
+    // The fonts as their files name them: PostScript names, typographic names, variable fonts.
+    let lib = index(&[
+        font("/f/Fraunces[wght].ttf", "Fraunces-Regular", "Fraunces", "Regular").variable(),
+        font("/f/Fraunces-Italic[wght].ttf", "Fraunces-Italic", "Fraunces", "Italic").variable().italic(true),
+        font("/System/Library/Fonts/Helvetica.ttc", "Helvetica", "Helvetica", "Regular").installed(),
+        font("/System/Library/Fonts/Helvetica.ttc", "Helvetica-BoldOblique", "Helvetica", "Bold Oblique").installed(),
+        font("/f/IBMPlexSans-SemiBoldItalic.otf", "IBMPlexSans-SemiBoldItalic", "IBM Plex Sans", "SemiBold Italic"),
+        font("/f/Inter-Regular.otf", "Inter-Regular", "Inter", "Regular"),
+        font("/f/InterDisplay-Bold.otf", "InterDisplay-Bold", "Inter Display", "Bold"),
+        font("/f/Lora-Italic[wght].ttf", "Lora-Italic", "Lora", "Italic").variable(),
+        font("/f/NotoSansJP[wght].ttf", "NotoSansJP-Thin", "Noto Sans JP", "Thin").variable(),
+        font("/f/UniversLTStd-Light.otf", "UniversLTStd-Light", "Univers LT Std", "45 Light"),
+    ]);
+    let expected = [
+        Some("Fraunces Italic"),
+        Some("Helvetica Bold Oblique"),
+        Some("IBM Plex Sans SemiBold Italic"),
+        Some("Inter Regular"),
+        Some("Inter Display Bold"),
+        Some("Lora Italic"),
+        Some("Noto Sans JP Thin"),
+        None, // Söhne Buch isn't in this library
+        Some("Univers LT Std 45 Light"),
+    ];
+    let text: Vec<NameLine> = FIGMA_LINES.lines().map(|l| NameLine::Text(l.into())).collect();
+    let json: serde_json::Value = serde_json::from_str(FIGMA_JSON).unwrap();
+    let parts: Vec<NameLine> = serde_json::from_value(json["fonts"].clone()).unwrap();
+    assert_eq!(text.len(), expected.len());
+    assert_eq!(parts.len(), expected.len());
+    for lines in [text, parts] {
+        let out = lib.match_lines(&lines, |_| false);
+        for ((line, m), want) in lines.iter().zip(&out).zip(expected) {
+            let got: Vec<String> = m.faces.iter().map(|f| format!("{} {}", f.family, f.style)).collect();
+            match want {
+                Some(want) => assert_eq!(got, vec![want.to_string()], "{line:?}"),
+                None => assert!(got.is_empty(), "{line:?}"),
+            }
+        }
+        // The variable ones come from their variable fonts.
+        assert_eq!(out[0].how, Some(How::NamedStyle));
+        assert_eq!(out[6].how, Some(How::NamedStyle));
+    }
+}
