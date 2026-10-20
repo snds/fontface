@@ -1073,9 +1073,9 @@ export default function App() {
   };
 
   /**
-   * Turns a downloaded Google Fonts family off, deletes its files (Fontface keeps them aside
-   * until it quits, for Undo) and updates the library. Asked first on the Google Fonts view.
-   * The message after it offers Undo, as Remove from Library does.
+   * Uninstalls a downloaded Google Fonts family: turns it off, removes its files (Fontface keeps
+   * them aside until it quits, for Undo) and updates the library. Asked first on the Google
+   * Fonts view. The message after it offers Undo, as Remove from Library does.
    */
   const removeGoogle = async (fam: GoogleFamily) => {
     const removed = await googleOp(fam.id, async () => {
@@ -1088,16 +1088,16 @@ export default function App() {
         if (folder) await rescan(folder).catch(() => {});
       }
     });
-    announce(`Removed ${fam.family}`);
-    toast.success(`Removed ${fam.family}`, {
-      description: "Its downloaded files were turned off and deleted.",
+    announce(`Uninstalled ${fam.family}`);
+    toast.success(`Uninstalled ${fam.family}`, {
+      description: "Its downloaded files were turned off and removed.",
       action: { label: "Undo", onClick: () => void undoRemoveGoogle(fam, removed) },
       // As long as Remove from Library's Undo.
       duration: 10_000,
     });
   };
 
-  /** Undo for Remove: the family's files go back, and what was on turns back on the same way
+  /** Undo for Uninstall: the family's files go back, and what was on turns back on the same way
    *  (until logout, or to stay). */
   const undoRemoveGoogle = async (fam: GoogleFamily, removed: GoogleRemoved) => {
     try {

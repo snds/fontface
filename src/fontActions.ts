@@ -512,7 +512,7 @@ export interface RemovalPlan {
 
 /**
  * What removing `faces` from the library would remove. Only copies in your folders are removed:
- * Font Book's fonts are part of the OS, and Google Fonts and Purchases have their own Remove.
+ * Font Book's fonts are part of the OS, Google Fonts has its own Uninstall and Purchases its own Remove.
  * `library` is every style in the library, to find others that share a file.
  */
 export function removalPlan(faces: readonly Face[], library: readonly Face[], removable: (font: FontSummary) => boolean): RemovalPlan {
@@ -559,7 +559,7 @@ export function removalSummary(plan: RemovalPlan, os: string): string[] {
   if (plan.staying) out.push(`${count(plan.staying, "style stays", "styles stay")} listed from ${plan.staying === 1 ? "its" : "their"} other copies.`);
   if (plan.blocked) {
     out.push(
-      `${count(plan.blocked, "style isn't", "styles aren't")} in your folders, so ${plan.blocked === 1 ? "it stays" : "they stay"}. Fonts from ${os}, Google Fonts and Purchases are removed where they came from.`,
+      `${count(plan.blocked, "style isn't", "styles aren't")} in your folders, so ${plan.blocked === 1 ? "it stays" : "they stay"}. Fonts from ${os}, Google Fonts and Purchases are managed where they came from.`,
     );
   }
   return out;

@@ -14,12 +14,12 @@ import {
   nameMatches,
   noMatchText,
   openFace,
-  removalWords,
   rowLabel,
   rowPlan,
   switchFaces,
   switchIds,
   turnOnFaces,
+  uninstallWords,
   yoursFirstTip,
   type CatalogFamily,
 } from "./googleCatalog.ts";
@@ -123,15 +123,16 @@ test("the same style downloaded and in your folder is one style with two copies,
   assert.deepEqual([...h.files], [`${GOOGLE}/Lora/Lora-Regular.ttf`]);
 });
 
-test("a downloaded style with a copy of yours too: Remove counts only the download and says yours stays; the switch turns on Google's", () => {
+test("a downloaded style with a copy of yours too: Uninstall counts only the download and says yours stays; the switch turns on Google's", () => {
   // Your own Lora from fonts.google.com, then Get Google's Lora: the same PostScript name, so one
   // style with two copies. Your copy is the newer file.
   const google = font("Lora", "Regular", { path: `${GOOGLE}/Lora/Lora[wght].ttf`, postscriptName: "Lora-Regular", mtime: 1 });
   const mine = font("Lora", "Regular", { path: "/Users/me/Fonts/Lora-VariableFont_wght.ttf", postscriptName: "Lora-Regular", mtime: 2 });
   const h = holdingsOf([fam("lora", "Lora", { installed: downloadedAt("Lora") })], facesOf([google, mine])).get("lora")!;
-  assert.deepEqual(removalWords("Lora", h), [
-    "Fontface turns off its 1 downloaded font file and deletes it from its Google Fonts folder.",
+  assert.deepEqual(uninstallWords("Lora", h), [
+    "Fontface turns off its 1 downloaded font file and removes it from its Google Fonts folder.",
     "Your own copy of Lora stays in your library, as it is.",
+    "You can get Lora from Google again at any time.",
   ]);
   // On: Google's copy, not yours (as Get turned it on). Off: every copy, so the style goes off.
   assert.deepEqual(switchIds(h, true), [google.id]);
@@ -197,26 +198,48 @@ test("the count and the empty list say what's shown", () => {
   assert.equal(noMatchText({ show: "updates" }), "No families have updates.");
 });
 
-test("each row offers what fits: the switch for what you have, Get for the rest", () => {
+test("each row offers what fits: the switch and Uninstall once downloaded, Get before", () => {
   const plan = (id: string, working = false) => rowPlan(CATALOG.find((f) => f.id === id)!, HOLDINGS.get(id), working);
-  // Downloaded, with an update: the switch, Update and Remove.
-  assert.deepEqual(plan("inter"), { have: true, downloaded: true, main: "switch", extras: ["update", "remove"] });
-  // Your own copy: the switch, and Google's copy to get. Never Remove: those are your files.
-  assert.deepEqual(plan("roboto"), { have: true, downloaded: false, main: "switch", extras: ["getCopy"] });
+  // Downloaded, with an update: the switch, Update, and Uninstall on hover.
+  assert.deepEqual(plan("inter"), { have: true, downloaded: true, main: "switch", hover: "uninstall", extras: ["update"] });
+  // Your own copy, not downloaded from Google: no switch, and Google's version to get on hover.
+  // Never Uninstall: those are your files.
+  assert.deepEqual(plan("roboto"), { have: true, downloaded: false, main: null, hover: "getCopy", extras: [] });
+  // Your copy is installed in macOS's font folders: still no switch (or lock) here.
+  assert.deepEqual(plan("roboto-mono"), { have: true, downloaded: false, main: null, hover: "getCopy", extras: [] });
   // Nothing of it: Get.
-  assert.deepEqual(plan("lora"), { have: false, downloaded: false, main: "get", extras: [] });
+  assert.deepEqual(plan("lora"), { have: false, downloaded: false, main: "get", hover: null, extras: [] });
   // Can't be downloaded: says why.
-  assert.deepEqual(plan("material-symbols"), { have: false, downloaded: false, main: "unavailable", extras: [] });
-  // Working: progress takes Get's place, or stands for Update and Remove (the switch stays).
-  assert.deepEqual(plan("lora", true), { have: false, downloaded: false, main: "working", extras: [] });
-  assert.deepEqual(plan("inter", true), { have: true, downloaded: true, main: "switch", extras: ["working"] });
+  assert.deepEqual(plan("material-symbols"), { have: false, downloaded: false, main: "unavailable", hover: null, extras: [] });
+  // Working: progress takes Get's place, or stands for Update and Uninstall (the switch stays).
+  assert.deepEqual(plan("lora", true), { have: false, downloaded: false, main: "working", hover: null, extras: [] });
+  assert.deepEqual(plan("inter", true), { have: true, downloaded: true, main: "switch", hover: null, extras: ["working"] });
+  // Getting Google's version beside your copy: its progress where Get would be.
+  assert.deepEqual(plan("roboto", true), { have: true, downloaded: false, main: "working", hover: null, extras: [] });
   // Downloaded, but its styles aren't in the library yet (a scan is coming): no switch, no Get.
   assert.deepEqual(rowPlan(fam("lora", "Lora", { installed: downloadedAt("Lora") }), undefined, false), {
     have: false,
     downloaded: true,
     main: null,
-    extras: ["remove"],
+    hover: "uninstall",
+    extras: [],
   });
+});
+
+test("the switch works on a download only, never on your own copy beside it", () => {
+  const mine = font("Lora", "Regular", { path: "/Users/me/Fonts/Lora-Regular.ttf", postscriptName: "Lora-Mine" });
+  const yours = holdingsOf([fam("lora", "Lora")], facesOf([mine])).get("lora")!;
+  // Only your copy: no switch.
+  assert.equal(rowPlan(fam("lora", "Lora"), yours, false).main, null);
+  // Just downloaded, before the scan lists Google's styles: your copy is all the library has of
+  // it, so still no switch (it would turn your copy on and off).
+  const downloaded = fam("lora", "Lora", { installed: downloadedAt("Lora") });
+  assert.deepEqual(rowPlan(downloaded, yours, false), { have: true, downloaded: true, main: null, hover: "uninstall", extras: [] });
+  // Once Google's styles are in the library: the switch, on those.
+  const google = font("Lora", "Regular", { path: `${GOOGLE}/Lora/Lora-Regular.ttf`, postscriptName: "Lora-Regular" });
+  const both = holdingsOf([downloaded], facesOf([google, mine])).get("lora")!;
+  assert.equal(rowPlan(downloaded, both, false).main, "switch");
+  assert.deepEqual(switchIds(both, true), [google.id]);
 });
 
 test("a row's name for screen readers is short and says what you have", () => {
@@ -226,8 +249,9 @@ test("a row's name for screen readers is short and says what you have", () => {
     return rowLabel(f, rowPlan(f, h, false), h);
   };
   assert.equal(label("inter"), "Inter, downloaded, 1 of 2 on, update available");
-  assert.equal(label("roboto"), "Roboto, your copy, off");
-  assert.equal(label("roboto-mono"), "Roboto Mono, your copy, always on, installed");
+  // Your own copy has no switch here, so its row doesn't say whether it's on.
+  assert.equal(label("roboto"), "Roboto, your copy");
+  assert.equal(label("roboto-mono"), "Roboto Mono, your copy");
   assert.equal(label("lora"), "Lora, not downloaded");
   assert.equal(label("material-symbols"), "Material Symbols, can't be downloaded here");
   // While it downloads, updates or goes.
@@ -241,15 +265,24 @@ test("a family's page opens on its most regular style", () => {
   assert.equal(openFace([]), undefined);
 });
 
-test("Remove's confirmation counts the downloaded files and leaves your copy alone", () => {
-  assert.deepEqual(removalWords("Inter", HOLDINGS.get("inter")), ["Fontface turns off its 2 downloaded font files and deletes them from its Google Fonts folder."]);
+test("Uninstall's confirmation counts the downloaded files, leaves your copy alone, and says you can get it again", () => {
+  assert.deepEqual(uninstallWords("Inter", HOLDINGS.get("inter")), [
+    "Fontface turns off its 2 downloaded font files and removes them from its Google Fonts folder.",
+    "You can get Inter from Google again at any time.",
+  ]);
   const one = HOLDINGS.get("inter")!.downloaded.slice(0, 1);
   const both = { downloaded: one, yours: HOLDINGS.get("roboto")!.yours, files: new Set(one.flatMap((f) => f.copies.map((c) => c.path))) };
-  assert.deepEqual(removalWords("Inter", both), [
-    "Fontface turns off its 1 downloaded font file and deletes it from its Google Fonts folder.",
+  assert.deepEqual(uninstallWords("Inter", both), [
+    "Fontface turns off its 1 downloaded font file and removes it from its Google Fonts folder.",
     "Your own copy of Inter stays in your library, as it is.",
+    "You can get Inter from Google again at any time.",
   ]);
-  assert.deepEqual(removalWords("Inter", undefined), ["Fontface turns off its downloaded files and deletes them from its Google Fonts folder."]);
+  assert.deepEqual(uninstallWords("Inter", undefined), [
+    "Fontface turns off its downloaded files and removes them from its Google Fonts folder.",
+    "You can get Inter from Google again at any time.",
+  ]);
+  // Never "delete": uninstalling isn't final.
+  for (const w of uninstallWords("Inter", both)) assert.doesNotMatch(w, /delet/i);
 });
 
 /** A promise to settle by hand. */

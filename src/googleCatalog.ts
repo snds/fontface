@@ -4,7 +4,7 @@ import { familyKey, type CatalogRef } from "./googlePreviews.ts";
 import { activationIds, type Face } from "./library.ts";
 
 // The Google Fonts source's own view (components/GoogleFontsPanel.tsx): the whole catalog, as
-// the place to get, remove, update and turn on Google Fonts. How its loads take turns, which
+// the place to get, uninstall, update and turn on Google Fonts. How its loads take turns, which
 // families the toolbar's filters keep, what you have of each family (downloaded here, or your
 // own copy), and what each row offers. Pure (no React, no DOM), so `npm run test:ui` covers it.
 
@@ -86,8 +86,8 @@ export interface Holding {
   downloaded: Face[];
   /** Styles elsewhere in your library with the family's name ("Your copy"). */
   yours: Face[];
-  /** The files of `downloaded` that are in the family's downloaded folder: what Remove turns
-   *  off and deletes, and what the switch turns on. */
+  /** The files of `downloaded` that are in the family's downloaded folder: what Uninstall turns
+   *  off and removes, and what the switch turns on. */
   files: ReadonlySet<string>;
 }
 
@@ -274,70 +274,83 @@ export function noMatchText({ query = "", category = "", show = "all", variableO
 
 // ------------------------------------------------------------------------- one row
 
-/** What a family's row offers. */
+/**
+ * What a family's row offers. A Google family is installed here when it's downloaded with
+ * Fontface: only then does its row have the on/off switch, and only then can it be uninstalled.
+ * A family that's only your own copy (in your folders, not downloaded from Google) has no switch
+ * here; its row offers Google's version instead.
+ */
 export interface RowPlan {
-  /** You have styles of it in the library: downloaded here, or your own copy. Its switch, font
-   *  page (double-click or Return) and font menu work on those. */
+  /** You have styles of it in the library: downloaded here, or your own copy. Its font page
+   *  (double-click or Return) and font menu work on those. */
   have: boolean;
-  /** Downloaded with Fontface (into its Google Fonts folder). Only these can be removed. */
+  /** Downloaded with Fontface (into its Google Fonts folder). Only these have the switch, and
+   *  only these can be uninstalled. */
   downloaded: boolean;
   /**
-   * The control at the row's end: the on/off switch for a family you have; else Get, or (while
-   * it downloads) its progress, or why it can't be downloaded. Null: downloaded, but its styles
-   * aren't in the library yet (a scan is on its way).
+   * The control at the row's end: the on/off switch for a downloaded family, on its downloaded
+   * styles; else Get, or (while it downloads) its progress, or why it can't be downloaded. Null:
+   * your own copy, whose Get is the hover button; or downloaded, but its styles aren't in the
+   * library yet (a scan is on its way).
    */
   main: "switch" | "get" | "working" | "unavailable" | null;
-  /** The quieter buttons before it: Update when there's a newer version, Remove for a download,
-   *  Get (Google's copy) beside your own copy. "working" stands for them while a download,
-   *  update or removal runs. */
-  extras: ("update" | "remove" | "getCopy" | "working")[];
+  /**
+   * The quiet icon button just before it, shown while the row is hovered, focused or selected:
+   * Uninstall for a download, Get (Google's version) beside your own copy. None while a
+   * download, update or uninstall runs.
+   */
+  hover: "uninstall" | "getCopy" | null;
+  /** Before those: Update when there's a newer version. "working" stands for it while an update
+   *  or an uninstall runs on a download. */
+  extras: ("update" | "working")[];
 }
 
-/** `working`: a download, update or removal of this family is running. */
+/** `working`: a download, update or uninstall of this family is running. */
 export function rowPlan(f: CatalogFamily, h: Holding | undefined, working: boolean): RowPlan {
   const downloaded = !!f.installed;
   const have = switchFaces(h).length > 0;
-  const main = have ? "switch" : working ? "working" : downloaded ? null : f.unavailable ? "unavailable" : "get";
+  // The switch works on the downloaded styles alone, never on your own copy.
+  const ready = downloaded && !!h?.downloaded.length;
+  const main = ready ? "switch" : downloaded ? null : working ? "working" : f.unavailable ? "unavailable" : have ? null : "get";
+  const hover = working ? null : downloaded ? "uninstall" : have && !f.unavailable ? "getCopy" : null;
   const extras: RowPlan["extras"] = [];
   if (working) {
-    if (have || downloaded) extras.push("working");
-  } else {
-    if (hasUpdate(f)) extras.push("update");
-    if (downloaded) extras.push("remove");
-    else if (have && !f.unavailable) extras.push("getCopy");
-  }
-  return { have, downloaded, main, extras };
+    if (downloaded) extras.push("working");
+  } else if (hasUpdate(f)) extras.push("update");
+  return { have, downloaded, main, hover, extras };
 }
 
 /**
  * A row's name for screen readers: short, so the arrow keys move quickly. "Inter, downloaded,
- * on, update available", "Roboto, your copy, 3 of 12 on", "Lora, not downloaded". The rest of
- * what the row shows is its description.
+ * 1 of 2 on, update available", "Roboto, your copy", "Lora, not downloaded". Only a row with the
+ * switch says whether the family is on. The rest of what the row shows is its description.
  */
 export function rowLabel(f: CatalogFamily, plan: RowPlan, h: Holding | undefined, wording: StateWording = {}): string {
   const parts = [f.family];
   if (plan.downloaded) parts.push("downloaded");
   else if (plan.have) parts.push("your copy");
   else parts.push(f.unavailable ? "can't be downloaded here" : "not downloaded");
-  if (plan.have) parts.push(stateWords(summarize(switchFaces(h)), wording));
+  if (plan.main === "switch") parts.push(stateWords(summarize(switchFaces(h)), wording));
   if (plan.extras.includes("update")) parts.push("update available");
   if (plan.main === "working" || plan.extras.includes("working")) parts.push("working");
   return parts.join(", ");
 }
 
-// --------------------------------------------------------------------------- remove
+// ------------------------------------------------------------------------ uninstall
 
 /**
- * What Remove's confirmation says: the downloaded files are turned off and deleted, and a copy
- * of your own isn't touched, whether it's a style of its own or a copy of a downloaded style
- * (the same PostScript name) outside the downloaded folder. (The message after it offers Undo.)
+ * What Uninstall's confirmation says: the downloaded files are turned off and removed; a copy of
+ * your own isn't touched, whether it's a style of its own or a copy of a downloaded style (the
+ * same PostScript name) outside the downloaded folder; and the family can be downloaded again.
+ * (The message after it offers Undo.)
  */
-export function removalWords(family: string, h: Holding | undefined): string[] {
+export function uninstallWords(family: string, h: Holding | undefined): string[] {
   const files = h?.files.size ?? 0;
   const what = files ? `its ${files.toLocaleString("en-US")} downloaded font ${files === 1 ? "file" : "files"}` : "its downloaded files";
-  const out = [`Fontface turns off ${what} and deletes ${files === 1 ? "it" : "them"} from its Google Fonts folder.`];
+  const out = [`Fontface turns off ${what} and removes ${files === 1 ? "it" : "them"} from its Google Fonts folder.`];
   const yoursToo = !!h && (h.yours.length > 0 || h.downloaded.some((face) => face.copies.some((c) => !h.files.has(c.path))));
   if (yoursToo) out.push(`Your own copy of ${family} stays in your library, as it is.`);
+  out.push(`You can get ${family} from Google again at any time.`);
   return out;
 }
 
