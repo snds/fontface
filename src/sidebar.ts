@@ -40,20 +40,18 @@ export const SECTION_STARTS_OPEN = true;
  */
 export const sourceRevealed = (before: string | null, now: string | null): boolean => now !== null && now !== before;
 
-/** The divider's tooltip: what a click does, and where its other commands are. */
-export function dividerTip(section: SidebarSection, open: boolean): string {
-  const { what } = SECTIONS[section];
-  return `${open ? "Hides" : "Shows"} ${what}. Right-click for more.`;
+/** The divider's tooltip, which names the icon-only button: "Collapse Sources", or for a divider
+ *  that doesn't collapse (Tags, whose click opens its menu), the section's name. */
+export function dividerTip(section: SidebarSection, { open, collapsible }: { open: boolean; collapsible: boolean }): string {
+  const { label } = SECTIONS[section];
+  if (!collapsible) return label;
+  return `${open ? "Collapse" : "Expand"} ${label}`;
 }
 
 /** What screen readers hear for a divider: its section's name (its state comes from
  *  aria-expanded). */
 export const dividerLabel = (section: SidebarSection) => SECTIONS[section].label;
 
-/** The (i) on the Tags divider: one tooltip about the whole section, instead of one on every tag. */
-export const TAGS_INFO_LABEL = "About tags";
-export const TAGS_INFO =
-  "Tags sort your fonts into groups you choose. Click a tag to see its fonts. Drag fonts onto a tag to add them, or drag a tag into another tag. My tags are yours to change. Built-in tags come from other apps and are read-only. To turn on every font in a tag, use its … menu or right-click it.";
 
 // ------------------------------------------------------------------------------------- counts
 
@@ -169,8 +167,8 @@ export interface DividerMenuContext {
   anyNested?: boolean;
 }
 
-/** A divider's right-click menu. Sources: Add Folder…; Tags: New Tag…, Import Tags…, Export
- *  Tags…, Open and Close All Tags; then Collapse (or Expand) Section. */
+/** A divider's menu. Sources: Add Folder…, then Collapse (or Expand) Section. Tags, which is
+ *  always shown: New Tag…, Import Tags…, Export Tags…, then Open and Close All Tags. */
 export function dividerMenu(section: SidebarSection, ctx: DividerMenuContext): MenuLine[] {
   if (section === "sources") return [ADD_FOLDER, "-", toggleEntry(section, ctx.open)];
   const out: MenuLine[] = [
@@ -191,6 +189,5 @@ export function dividerMenu(section: SidebarSection, ctx: DividerMenuContext): M
       { id: "closeAllTags", label: "Close All Tags", icon: "unfold_less", tip: "Hides the tags inside other tags" },
     );
   }
-  out.push("-", toggleEntry(section, ctx.open));
   return out;
 }

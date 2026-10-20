@@ -1,7 +1,7 @@
 // Run with `npm run test:ui`. The sidebar's sections, menus and counts (sidebar.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addMenu, countClass, countShown, dividerMenu, dividerTip, ROW_ACTIONS_CLASS, SECTIONS, sourceRevealed, stylesSaid, TAGS_INFO, type MenuLine } from "./sidebar.ts";
+import { addMenu, countClass, countShown, dividerMenu, dividerTip, ROW_ACTIONS_CLASS, SECTIONS, sourceRevealed, stylesSaid, type MenuLine } from "./sidebar.ts";
 
 const labels = (lines: MenuLine[]) => lines.map((l) => (l === "-" ? "-" : l.label));
 
@@ -51,7 +51,7 @@ test("the + menu makes a tag, adds a folder, and imports fonts you bought and ta
   }
 });
 
-test("each divider's menu has its section's commands, then Collapse or Expand Section", () => {
+test("each divider's menu has its section's commands; only Sources collapses", () => {
   assert.deepEqual(labels(dividerMenu("sources", { open: true })), ["Add Folder…", "-", "Collapse Section"]);
   assert.deepEqual(labels(dividerMenu("sources", { open: false })), ["Add Folder…", "-", "Expand Section"]);
   assert.deepEqual(labels(dividerMenu("tags", { open: true, anyTags: true, anyNested: true })), [
@@ -61,11 +61,9 @@ test("each divider's menu has its section's commands, then Collapse or Expand Se
     "-",
     "Open All Tags",
     "Close All Tags",
-    "-",
-    "Collapse Section",
   ]);
   // Open and Close All Tags only when some tag has tags inside it.
-  assert.deepEqual(labels(dividerMenu("tags", { open: false, anyTags: true, anyNested: false })), ["New Tag…", "Import Tags…", "Export Tags…", "-", "Expand Section"]);
+  assert.deepEqual(labels(dividerMenu("tags", { open: true, anyTags: true, anyNested: false })), ["New Tag…", "Import Tags…", "Export Tags…"]);
   // Export is greyed out with no tags, and says why.
   const none = dividerMenu("tags", { open: true, anyTags: false, anyNested: false });
   const exportTags = none.find((l) => l !== "-" && l.id === "exportTags");
@@ -73,20 +71,15 @@ test("each divider's menu has its section's commands, then Collapse or Expand Se
   assert.match(exportTags.tip, /no tags/);
 });
 
-test("the dividers say what a click does and where the rest is", () => {
-  assert.equal(dividerTip("sources", true), "Hides the sources. Right-click for more.");
-  assert.equal(dividerTip("tags", false), "Shows the tags. Right-click for more.");
+test("the dividers' tooltips name their buttons", () => {
+  // Tooltips name icon-only buttons, in a word or two.
+  assert.equal(dividerTip("sources", { open: true, collapsible: true }), `Collapse ${SECTIONS.sources.label}`);
+  assert.equal(dividerTip("sources", { open: false, collapsible: true }), `Expand ${SECTIONS.sources.label}`);
+  assert.equal(dividerTip("tags", { open: true, collapsible: false }), SECTIONS.tags.label, "Tags doesn't collapse: a click opens its menu");
   assert.notEqual(SECTIONS.sources.openId, SECTIONS.tags.openId);
   // Plain outlined icons from the app's icon font.
   assert.match(SECTIONS.sources.icon, /^[a-z_0-9]+$/);
   assert.match(SECTIONS.tags.icon, /^[a-z_0-9]+$/);
-});
-
-test("the Tags (i) explains tags once, including how to turn one on", () => {
-  assert.match(TAGS_INFO, /Built-in/);
-  assert.match(TAGS_INFO, /read-only/);
-  assert.match(TAGS_INFO, /turn on every font in a tag/);
-  assert.match(TAGS_INFO, /… menu/);
 });
 
 test("the view moving to a source opens a collapsed Sources, so it keeps its row", () => {

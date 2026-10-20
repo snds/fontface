@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { viewKey, type Face, type Family, type LibraryView } from "@/library";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -8,15 +8,15 @@ import { SectionDivider } from "@/components/SectionDivider";
 import { CONTEXT, DROPDOWN, Tip } from "@/components/Tip";
 import { IS_MAC } from "@/components/TitleBar";
 import { cn } from "@/lib/utils";
-import { countClass, countShown, dividerMenu, IMPORT_TAGS_TIP, NEW_TAG_TIP, SECTION_STARTS_OPEN, SECTIONS, stylesSaid, TAGS_INFO, TAGS_INFO_LABEL, type SidebarCommand } from "@/sidebar";
+import { countClass, countShown, dividerMenu, IMPORT_TAGS_TIP, NEW_TAG_TIP, SECTIONS, stylesSaid, type SidebarCommand } from "@/sidebar";
 import { facesByTag, tagSwitchProgress } from "@/tagActions";
 import { colorVar } from "./api";
 import { openTagDialog } from "./dialogs";
 import { DragLayer, dropTarget, pressToDrag, useDrag } from "./drag";
-import { isOpen, setOpen, toggleOpen, useOpenRows } from "./expanded";
+import { toggleOpen, useOpenRows } from "./expanded";
 import { flatten, GROUP_LABELS, parentOf, useTagIndex, type TagGroup, type TagNode } from "./model";
 import { openMenuFromKeyboard, TagMenuItems } from "./menus";
-import { GROUP_ROWS, revealTag, tagOpenId as openId } from "./reveal";
+import { revealTag, tagOpenId as openId } from "./reveal";
 import { useOrganize } from "./store";
 import { useTagRun } from "./switching";
 
@@ -53,7 +53,7 @@ function setOpenDeep(node: TagNode, to: boolean) {
 }
 
 /** The Tags divider's button, which Left reaches from the top of the section. */
-const dividerOf = (el: Element) => el.closest("[data-tags-section]")?.querySelector<HTMLElement>("[data-section-divider] button[aria-expanded]") ?? null;
+const dividerOf = (el: Element) => el.closest("[data-tags-section]")?.querySelector<HTMLElement>("[data-section-divider] button") ?? null;
 
 /** No fonts: the same empty list for every tag that has none, so rows don't redraw for nothing. */
 const NO_FACES: Face[] = [];
@@ -114,10 +114,8 @@ function TagRow({
         const row = (e.currentTarget as HTMLElement).closest("[data-tag-group]")?.parentElement?.querySelector<HTMLElement>(":scope > [data-tag-row] [data-tag-link]");
         row?.focus();
       } else {
-        // A top-level tag: up to its group's heading, if the groups have headings, else to the
-        // Tags divider.
-        const row = e.currentTarget as HTMLElement;
-        const up = row.closest("[data-tags-group]")?.querySelector<HTMLElement>("[data-group-heading]") ?? dividerOf(row);
+        // A top-level tag: up to the Tags divider (the group headings aren't controls).
+        const up = dividerOf(e.currentTarget as HTMLElement);
         if (up) {
           e.preventDefault();
           up.focus();
@@ -246,7 +244,6 @@ function TopLevelTarget() {
 }
 
 /** The two groups' headings: open-state ids in the expanded-rows store, and how each starts. */
-const GROUPS: Record<TagGroup, { openId: string; startsOpen: boolean }> = GROUP_ROWS;
 
 /**
  * One group of top-level tags (My tags or Built-in) under a small heading that opens and closes
@@ -268,75 +265,28 @@ function TagGroupList({
   view: LibraryView;
   onView: (v: LibraryView) => void;
 }) {
-  const { openId, startsOpen } = GROUPS[group];
-  const open = isOpen(useOpenRows(), openId, startsOpen);
-  const drag = useDrag();
-  const dragging = !!drag;
-  const [hovered, setHovered] = useState(false);
-  const listId = useId();
   const total = useMemo(() => flatten(nodes).length, [nodes]);
-
-  // Hovering a closed heading while dragging opens it, so the tags inside can be reached.
-  useEffect(() => {
-    if (!labelled || open || !dragging || !hovered) return;
-    const t = setTimeout(() => setOpen(openId, true, startsOpen), 700);
-    return () => clearTimeout(t);
-  }, [labelled, open, dragging, hovered, openId, startsOpen]);
-
   const rows = nodes.map((node) => <TagRow key={node.tag.id} node={node} sets={sets} view={view} onView={onView} />);
   if (!labelled) return <>{rows}</>;
-
-  const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
-    // Like a tree: Right opens (or goes to the first tag), Left closes (then goes up to the Tags
-    // divider).
-    if (e.key === "ArrowRight") {
-      e.preventDefault();
-      if (!open) setOpen(openId, true, startsOpen);
-      else document.getElementById(listId)?.querySelector<HTMLElement>("[data-tag-link]")?.focus();
-    } else if (e.key === "ArrowLeft") {
-      const up = open ? null : dividerOf(e.currentTarget);
-      if (!open && !up) return;
-      e.preventDefault();
-      if (open) setOpen(openId, false, startsOpen);
-      else up?.focus();
-    }
-  };
-
+  const labelId = `tags-group-${group}`;
+  // A heading, not a control: the groups are always open.
   return (
-    <div data-tags-group={group}>
-      {/* No tooltip: the (i) on the Tags divider explains the groups. Right opens and Left closes,
-          as in a tree (aria-keyshortcuts says so). */}
-      <button
-        type="button"
-        className="flex h-6 w-full items-center gap-1 rounded-md pr-1 pl-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
-        aria-expanded={open}
-        aria-controls={open ? listId : undefined}
-        aria-keyshortcuts={open ? "ArrowLeft" : "ArrowRight"}
-        data-group-heading=""
-        onClick={() => setOpen(openId, !open, startsOpen)}
-        onKeyDown={onKeyDown}
-        onPointerEnter={() => setHovered(true)}
-        onPointerLeave={() => setHovered(false)}
-      >
-        <Icon name="chevron_right" size={16} className={cn("transition-transform", open && "rotate-90")} />
-        <span className="flex min-w-0 flex-1 items-center gap-1">
+    <div data-tags-group={group} role="group" aria-labelledby={labelId}>
+      <div className="flex h-6 w-full items-center gap-1 pr-1 pl-2 text-xs font-medium text-muted-foreground">
+        <span id={labelId} className="flex min-w-0 flex-1 items-center gap-1">
           <span className="truncate">{GROUP_LABELS[group]}</span>
           {group === "builtin" && <Icon name="lock" size={12} aria-hidden />}
+          <span className="sr-only">
+            , {total === 1 ? "1 tag" : `${n(total)} tags`}
+            {group === "builtin" ? ", read-only" : ""}
+          </span>
         </span>
         {/* Always shown (sidebar.ts, countShown "group"): how many tags, not fonts. */}
         <span className="text-[11px] font-normal tabular-nums" aria-hidden>
           {n(total)}
         </span>
-        <span className="sr-only">
-          , {total === 1 ? "1 tag" : `${n(total)} tags`}
-          {group === "builtin" ? ", read-only" : ""}
-        </span>
-      </button>
-      {open && (
-        <div id={listId} role="group" aria-label={GROUP_LABELS[group]}>
-          {rows}
-        </div>
-      )}
+      </div>
+      {rows}
     </div>
   );
 }
@@ -400,9 +350,6 @@ export function TagsSection({
   }, [viewPlace]);
 
   const contentId = useId();
-  const sectionOpen = isOpen(useOpenRows(), SECTIONS.tags.openId, SECTION_STARTS_OPEN);
-  const setSectionOpen = useCallback((to: boolean) => setOpen(SECTIONS.tags.openId, to, SECTION_STARTS_OPEN), []);
-  const dragging = !!useDrag();
 
   /** The divider menu's commands. */
   const run = (id: SidebarCommand) => {
@@ -411,35 +358,21 @@ export function TagsSection({
     else if (id === "exportTags") openTagDialog({ kind: "export" });
     else if (id === "openAllTags") {
       groups.forEach((g) => toggleOpen(openId(g.tag.id), true));
-      // Open the group headings too, so every tag is in sight. (Close all leaves them, so the
-      // lists stay in place.)
-      for (const g of Object.values(GROUPS)) setOpen(g.openId, true, g.startsOpen);
     } else if (id === "closeAllTags") groups.forEach((g) => toggleOpen(openId(g.tag.id), false));
-    else if (id === "toggleSection") setSectionOpen(!sectionOpen);
   };
 
   return (
     <div data-tags-section="">
       <SectionDivider
         section="tags"
-        open={sectionOpen}
-        onOpenChange={setSectionOpen}
+        open
+        onOpenChange={() => {}}
         contentId={contentId}
-        enter="[data-group-heading], [data-tag-link], [data-tags-empty] button"
-        menu={dividerMenu("tags", { open: sectionOpen, anyTags: index.tags.length > 0, anyNested: groups.length > 0 })}
+        collapsible={false}
+        menu={dividerMenu("tags", { open: true, anyTags: index.tags.length > 0, anyNested: groups.length > 0 })}
         run={run}
-        dragging={dragging}
-        after={
-          // Not a command: it only shows its tooltip, on hover or keyboard focus, and a click
-          // keeps it open. Screen readers hear the words as its description.
-          <Tip tip={TAGS_INFO} contentClassName="max-w-72" closeOnClick={false}>
-            <button type="button" aria-label={TAGS_INFO_LABEL} className="flex size-5 items-center justify-center rounded-md text-muted-foreground hover:text-foreground">
-              <Icon name="info" size={14} />
-            </button>
-          </Tip>
-        }
       />
-      {sectionOpen && (
+      {
         <div id={contentId} role="group" aria-label={SECTIONS.tags.label}>
           {loaded && index.tags.length === 0 && (
             <div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground" data-tags-empty="">
@@ -465,7 +398,7 @@ export function TagsSection({
           <TagGroupList group="mine" nodes={mine} labelled={labelled && mine.length > 0} sets={sets} view={view} onView={onView} />
           <TagGroupList group="builtin" nodes={builtin} labelled={labelled} sets={sets} view={view} onView={onView} />
         </div>
-      )}
+      }
       <DragLayer />
     </div>
   );

@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
-import { cn } from "@/lib/utils";
-import { CONTEXT, Tip, TipItem, type Kit } from "@/components/Tip";
+import { CONTEXT, DROPDOWN, Tip, TipItem, type Kit } from "@/components/Tip";
 import { dividerLabel, dividerTip, SECTIONS, type MenuLine, type SidebarCommand, type SidebarSection } from "@/sidebar";
 import { openMenuFromKeyboard } from "@/tags/menus";
+
+/** The divider's icon button: a square centred on the line, one size up from the rows' icons. */
+const ICON_BUTTON =
+  "relative flex size-6 shrink-0 items-center justify-center rounded-md leading-none text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground";
 
 /** A menu's lines (sidebar.ts) as items of a dropdown or right-click menu, each with its tooltip. */
 export function MenuLines({ kit, lines, run }: { kit: Kit; lines: MenuLine[]; run: (id: SidebarCommand) => void }) {
@@ -27,12 +31,13 @@ export function MenuLines({ kit, lines, run }: { kit: Kit; lines: MenuLine[]; ru
 
 /**
  * The thin line that starts a sidebar section (Sources, Tags), with the section's outlined icon in
- * the middle. The icon is a button: a click collapses or expands the section (Right expands, then
- * moves into it; Left collapses), and a right-click anywhere on the divider, or Shift-F10, opens
- * the section's menu (`menu`, run by `run`). A collapsed section adds a small arrow to the icon.
- * `after`: what sits beside the icon (the Tags divider's (i)). `enter`: where Right goes once the
- * section is open (a selector, within its rows). While fonts or tags are dragged
- * (`dragging`), resting on a collapsed divider expands it, so its rows can be reached.
+ * the middle, as a button. A right-click anywhere on the divider, or Shift-F10, opens the
+ * section's menu (`menu`, run by `run`).
+ * - `collapsible` (Sources): a click collapses or expands the section (Right expands, then moves
+ *   into it; Left collapses), and a collapsed section shows a small arrow beside the icon. While
+ *   fonts or tags are dragged (`dragging`), resting on a collapsed divider expands it.
+ * - Not collapsible (Tags, always shown): a click opens the same menu.
+ * `enter`: where Right goes once the section is open (a selector, within its rows).
  */
 export function SectionDivider({
   section,
@@ -41,7 +46,7 @@ export function SectionDivider({
   contentId,
   menu,
   run,
-  after,
+  collapsible = true,
   enter = "button",
   dragging = false,
 }: {
@@ -52,17 +57,17 @@ export function SectionDivider({
   contentId: string;
   menu: MenuLine[];
   run: (id: SidebarCommand) => void;
-  after?: React.ReactNode;
+  collapsible?: boolean;
   enter?: string;
   dragging?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
 
   useEffect(() => {
-    if (open || !dragging || !hovered) return;
+    if (!collapsible || open || !dragging || !hovered) return;
     const t = setTimeout(() => onOpenChange(true), 700);
     return () => clearTimeout(t);
-  }, [open, dragging, hovered, onOpenChange]);
+  }, [collapsible, open, dragging, hovered, onOpenChange]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
     if (e.key === "ArrowRight") {
@@ -78,31 +83,42 @@ export function SectionDivider({
   return (
     <ContextMenu>
       <ContextMenuTrigger
-        className="flex h-6 shrink-0 items-center gap-1 px-2"
+        className="flex h-7 shrink-0 items-center gap-1 px-2"
         onKeyDown={openMenuFromKeyboard}
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
         data-section-divider={section}
       >
         <span aria-hidden className="h-px flex-1 bg-sidebar-border" />
-        {/* Its name is the section's; aria-expanded says whether its rows show. */}
-        <Tip tip={dividerTip(section, open)} shortcut={open ? "Left" : "Right"} contentClassName="max-w-64">
-          <button
-            type="button"
-            className="flex h-5 items-center rounded-md px-1 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground"
-            aria-label={dividerLabel(section)}
-            aria-expanded={open}
-            aria-controls={open ? contentId : undefined}
-            onClick={() => onOpenChange(!open)}
-            onKeyDown={onKeyDown}
-          >
-            <Icon name={SECTIONS[section].icon} size={16} />
-            {/* Only while collapsed, but its room is always kept, so a click never moves the icon
-                (or the Tags divider's (i)) out from under the pointer. */}
-            <Icon name="chevron_right" size={14} className={cn("-mr-0.5", open && "invisible")} />
-          </button>
-        </Tip>
-        {after}
+        {collapsible ? (
+          // Its name is the section's; aria-expanded says whether its rows show.
+          <Tip tip={dividerTip(section, { open, collapsible })} shortcut={open ? "Left" : "Right"} contentClassName="max-w-64">
+            <button
+              type="button"
+              className={ICON_BUTTON}
+              aria-label={dividerLabel(section)}
+              aria-expanded={open}
+              aria-controls={open ? contentId : undefined}
+              onClick={() => onOpenChange(!open)}
+              onKeyDown={onKeyDown}
+            >
+              <Icon name={SECTIONS[section].icon} size={18} />
+              {/* Beside the square, not in it, so the icon stays centred on the line. */}
+              {!open && <Icon name="chevron_right" size={14} className="absolute left-full" aria-hidden />}
+            </button>
+          </Tip>
+        ) : (
+          <DropdownMenu>
+            <Tip tip={dividerTip(section, { open, collapsible })} contentClassName="max-w-64">
+              <DropdownMenuTrigger render={<button type="button" className={ICON_BUTTON} aria-label={`${dividerLabel(section)} menu`} />}>
+                <Icon name={SECTIONS[section].icon} size={18} />
+              </DropdownMenuTrigger>
+            </Tip>
+            <DropdownMenuContent align="center" className="min-w-48">
+              <MenuLines kit={DROPDOWN} lines={menu} run={run} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         <span aria-hidden className="h-px flex-1 bg-sidebar-border" />
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-48">

@@ -1,21 +1,14 @@
-import { SECTION_STARTS_OPEN, SECTIONS } from "@/sidebar";
-import { setOpen, toggleOpen } from "./expanded";
-import { buildIndex, type TagGroup } from "./model";
+import { toggleOpen } from "./expanded";
+import { buildIndex } from "./model";
 import { organizeNow } from "./store";
 
 /** The open-state id (see expanded.ts) of a tag row with tags inside it. */
 export const tagOpenId = (id: number) => `tag:${id}`;
 
-/** The two group headings in the sidebar: their open-state ids, and how each starts. */
-export const GROUP_ROWS: Record<TagGroup, { openId: string; startsOpen: boolean }> = {
-  mine: { openId: "tags-group:mine", startsOpen: true },
-  builtin: { openId: "tags-group:builtin", startsOpen: false },
-};
-
 /**
- * Brings a tag's row into sight in the sidebar: expands the Tags section if it's collapsed, and
- * opens its group's heading (when the groups have headings) and the tags above it. Does nothing
- * for a tag in Built-in while Settings › Sidebar hides that group (`builtinHidden`).
+ * Brings a tag's row into sight in the sidebar: opens the tags above it (the Tags section and its
+ * groups are always open). Does nothing for a tag in Built-in while Settings › Sidebar hides that
+ * group (`builtinHidden`).
  */
 export function revealTag(id: number, builtinHidden: boolean) {
   const { tags, byKey } = organizeNow();
@@ -23,11 +16,6 @@ export function revealTag(id: number, builtinHidden: boolean) {
   if (!index.byId.has(id)) return;
   const group = index.groupOf(id);
   if (group === "builtin" && builtinHidden) return;
-  setOpen(SECTIONS.tags.openId, true, SECTION_STARTS_OPEN);
-  // Built-in always has its heading in the sidebar; My tags only when Built-in shows there too
-  // (see TagsSection).
-  const headed = group === "builtin" || (index.roots.builtin.length > 0 && !builtinHidden);
-  if (headed) setOpen(GROUP_ROWS[group].openId, true, GROUP_ROWS[group].startsOpen);
   for (const above of index.lineage.get(id)?.slice(1) ?? []) toggleOpen(tagOpenId(above), true);
 }
 
@@ -52,7 +40,7 @@ export function followTag(id: number, builtinHidden: boolean, force = false) {
     const section = document.querySelector("[data-tags-section]");
     const to =
       document.querySelector<HTMLElement>(`[data-tag-id="${id}"] [data-tag-link]`) ??
-      section?.querySelector<HTMLElement>("[data-group-heading], [data-tag-link]") ??
+      section?.querySelector<HTMLElement>("[data-tag-link]") ??
       section?.querySelector<HTMLElement>("button");
     to?.focus();
   });
