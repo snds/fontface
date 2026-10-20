@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
 import { StateControl, useStateWording } from "./ActivationSwitch";
 import { CopiesBadge, FacePreview, MissingHint, SampleBadge } from "./FacePreview";
+import { PREVIEW_BAR_SPACE } from "./PreviewBar";
 import { Tip } from "./Tip";
 import { activeInSight, describedBy, rowKey, RowTagButton, useKeepFocus, type DisplayProps, type ListView, type Row } from "./library/LibraryPane";
 
@@ -38,6 +39,9 @@ export function FontList({ view, ...display }: DisplayProps & { view: ListView }
     // Keep the row at the top of the view in place when rows are added above it, so the list
     // doesn't jump while a scan fills it in.
     anchorTo: "end",
+    // Room under the last row, and when a row is scrolled into view, for the preview bar.
+    paddingEnd: PREVIEW_BAR_SPACE,
+    scrollPaddingEnd: PREVIEW_BAR_SPACE,
     overscan: 6,
   });
   // A focused switch or button whose row scrolls out of the drawn ones hands focus back to the list.

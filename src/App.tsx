@@ -104,10 +104,13 @@ import { FontPage } from "@/components/fontPage/FontPage";
 import { BackButton } from "@/components/fontPage/PageHeader";
 import { Tip, TIP_DELAY, TIP_INSTANT_WINDOW } from "@/components/Tip";
 import { StateWordingContext, type SwitchWording } from "@/components/ActivationSwitch";
-import { CatalogViewOptions, GoogleFontsPanel } from "@/components/GoogleFontsPanel";
+import { GOOGLE_SOURCE, GoogleFontsPanel, GoogleFooterNote } from "@/components/GoogleFontsPanel";
 import { useGoogleView } from "@/components/google/useGoogleView";
 import { ChoiceGroup } from "@/components/ChoiceGroup";
-import { CATALOG_SHOWS, countText } from "@/googleCatalog";
+import { CATALOG_SHOWS } from "@/googleCatalog";
+import { catalogCountText, libraryCountText } from "@/footerCounts";
+import { ListFrame } from "@/components/FooterRail";
+import { PreviewBar } from "@/components/PreviewBar";
 import { AdobeFontsPanel } from "@/components/AdobeFontsPanel";
 import { PurchasesPanel } from "@/components/PurchasesPanel";
 import { IS_MAC, type PageBack } from "@/components/TitleBar";
@@ -1171,6 +1174,19 @@ export default function App() {
   const previewOptions = settings?.preview ?? DEFAULT_SETTINGS.preview;
   const previewStyle = usePreviewStyleValue(previewOptions, dark);
   const choosePreview = useCallback((patch: Partial<PreviewOptions>) => updateSettings({ preview: patch }), [updateSettings]);
+  // The preview bar over the bottom of every list view (PreviewBar.tsx): your own text, the size
+  // and the styling.
+  const previewBar = (
+    <PreviewBar
+      previewText={previewText}
+      onPreviewText={setPreviewText}
+      size={size}
+      onSize={setSize}
+      preview={previewOptions}
+      onPreview={choosePreview}
+      dark={dark}
+    />
+  );
   // "On until logout" says "until you quit Fontface" when quitting turns those fonts off.
   const untilQuit = settings?.clearTemporaryOnQuit ?? false;
   // Switches turn fonts on the saved way; Option-click turns them on the other way.
@@ -1355,6 +1371,11 @@ export default function App() {
   // lists the families they keep. The toolbar's search and Variable work on it too.
   const google = useGoogleView({ shown: googleView, version: googleVersion, faces: allFaces, query, variableOnly });
   const familyOfFaceKey = useCallback((key: string) => familyOfFace.get(key), [familyOfFace]);
+  /** The catalog's families you have, downloaded here or already in your library (its "Installed"). */
+  const googleInstalled = useMemo(
+    () => google.catalog?.families.filter((f) => f.installed || google.holdings.has(f.id)).length ?? 0,
+    [google.catalog, google.holdings],
+  );
   const googleShows = CATALOG_SHOWS.map((o) => ({
     value: o.value,
     tip: o.tip,
@@ -1719,35 +1740,29 @@ export default function App() {
                   was (scroll, selection, loaded previews), hidden and out of reach underneath. */}
               <div inert={pageOpen} className={cn("flex min-h-0 flex-1 flex-col", pageOpen && "invisible")}>
               {adobePage ? (
-                <AdobeFontsPanel previewText={previewText} onStatus={(st) => setAdobeCount(st.faces.length)} />
+                <PreviewStyleContext.Provider value={previewStyle}>
+                  <AdobeFontsPanel previewText={previewText} size={size} bar={previewBar} onStatus={(st) => setAdobeCount(st.faces.length)} />
+                </PreviewStyleContext.Provider>
               ) : (
               <>
               <Toolbar
                 query={query}
                 onQuery={setQuery}
-                previewText={previewText}
-                onPreviewText={setPreviewText}
                 status={listStatus}
                 onStatus={setStatus}
                 showStatus={view.kind !== "active"}
                 variableOnly={variableOnly}
                 onVariableOnly={setVariableOnly}
-                size={size}
-                onSize={setSize}
-                familyCount={filtered.length}
-                fontCount={styleCount}
-                // The Google Fonts view: its own filter, search words and count, and one layout.
+                // The Google Fonts view: its own filter and search words, one layout, and no View
+                // options (its order is the catalog's; the preview bar has the rest).
                 filter={googleView ? <ChoiceGroup label="Show families" value={google.show} options={googleShows} onChange={google.setShow} /> : undefined}
                 searchLabel={googleView ? "Search Google Fonts" : undefined}
-                countText={googleView ? (google.catalog ? countText(google.visible.length, google.catalog.families.length) : "") : undefined}
                 layout={googleView ? "rows" : layout}
                 onLayout={googleView ? () => {} : chooseLayout}
                 unavailableLayouts={googleView ? GOOGLE_LAYOUTS : undefined}
                 browse={browsePurchases ? <BrowseButton newPurchases={newPurchases} onBrowse={() => openCatalog("purchases")} /> : undefined}
                 viewOptions={
-                  googleView ? (
-                    <CatalogViewOptions preview={previewOptions} onPreview={choosePreview} dark={dark} />
-                  ) : (
+                  googleView ? undefined : (
                   <ViewOptions
                     layout={layout}
                     onLayout={chooseLayout}
@@ -1762,14 +1777,17 @@ export default function App() {
                     columns={tableColumns}
                     onColumns={(c) => updateSettings({ tableColumns: c })}
                     onFamilyGroups={() => openFamilyGroups()}
-                    preview={previewOptions}
-                    onPreview={choosePreview}
-                    dark={dark}
                   />
                   )
                 }
               />
               {googleView ? (
+                <ListFrame
+                  bar={google.catalog ? previewBar : undefined}
+                  count={google.catalog ? catalogCountText(google.visible.length, google.catalog.families.length, googleInstalled) : ""}
+                  note={<GoogleFooterNote onlinePreviews={settings?.googlePreviews ?? false} stale={!!google.catalog?.stale} />}
+                  source={GOOGLE_SOURCE}
+                >
                 <PreviewStyleContext.Provider value={previewStyle}>
                   <GoogleFontsPanel
                     ref={listRef}
@@ -1778,10 +1796,6 @@ export default function App() {
                     previewText={previewText}
                     size={size}
                     onlinePreviews={settings?.googlePreviews ?? false}
-                    onOpenSettings={() => {
-                      setSettingsSection("general");
-                      openSettings();
-                    }}
                     yoursFirst={settings?.catalogYoursFirst ?? DEFAULT_SETTINGS.catalogYoursFirst}
                     onYoursFirst={(on) => updateSettings({ catalogYoursFirst: on })}
                     busy={googleBusy}
@@ -1800,7 +1814,10 @@ export default function App() {
                     resetKey={`${query}:${google.category}:${google.show}:${variableOnly}`}
                   />
                 </PreviewStyleContext.Provider>
-              ) : families.length > 0 ? (
+                </ListFrame>
+              ) : (
+              <ListFrame bar={families.length > 0 ? previewBar : undefined} count={libraryCountText(filtered.length, styleCount)}>
+              {families.length > 0 ? (
                 <PreviewStyleContext.Provider value={previewStyle}>
                 <LibraryPane
                   ref={listRef}
@@ -1854,6 +1871,8 @@ export default function App() {
                   onBrowse={openCatalog}
                   onShowSkipped={showSkipped}
                 />
+              )}
+              </ListFrame>
               )}
               </>
               )}

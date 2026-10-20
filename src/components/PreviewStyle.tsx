@@ -3,9 +3,10 @@ import type { PreviewOptions } from "@/api";
 import { DEFAULT_PREVIEW, featureSettings, previewFeatureValues, resolveColors, type FeatureValues, type PreviewColors } from "@/previewStyle";
 
 /**
- * The View options' preview styling, handed to every preview that should follow it: the library
- * layouts and the font page (App provides it around them). Previews elsewhere (the catalogs, the
- * font picker, Compare and Pair, which have their own controls) get the plain default.
+ * The preview bar's styling (PreviewBar.tsx), handed to every preview that should follow it: the
+ * library layouts, the Google Fonts and Adobe Fonts views, and the font page (App provides it
+ * around them). Previews elsewhere (the Purchases page, the font picker, Compare and Pair, which
+ * have their own controls) get the plain default.
  */
 export interface PreviewStyle {
   options: PreviewOptions;

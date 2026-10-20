@@ -1,10 +1,11 @@
 import type { PreviewAlign, PreviewCase, PreviewFeature, PreviewOptions } from "./api.ts";
 
 /**
- * The View options' preview styling, applied to every layout and to the font page: alignment,
- * case, outline, underline, ink and paper colors, and a few OpenType features for every preview.
- * Pure (no React, no DOM), so `npm run test:ui` covers it. PreviewText (components/PreviewText.tsx)
- * applies it, and previewFit.ts fits the result so nothing is clipped.
+ * The preview bar's styling (components/PreviewBar.tsx), applied to every list view and to the
+ * font page: alignment, case, outline, underline, ink and paper colors, and a few OpenType
+ * features for every preview. Pure (no React, no DOM), so `npm run test:ui` covers it.
+ * PreviewText (components/PreviewText.tsx) applies it, and previewFit.ts fits the result so
+ * nothing is clipped.
  *
  * - **Case** changes the text itself rather than using CSS `text-transform`, so the canvas that
  *   measures the text for fitting measures exactly what's drawn.
@@ -19,7 +20,7 @@ import type { PreviewAlign, PreviewCase, PreviewFeature, PreviewOptions } from "
  *   fitting needs nothing more for them.
  */
 
-/** The features every preview can have, in the order the View options show them. Must match
+/** The features every preview can have, in the order the preview bar shows them. Must match
  *  PREVIEW_FEATURES in src-tauri/src/settings.rs. */
 export const PREVIEW_FEATURES: readonly { id: PreviewFeature; label: string; description: string; values: Readonly<Record<string, number>> }[] = [
   {
@@ -33,7 +34,7 @@ export const PREVIEW_FEATURES: readonly { id: PreviewFeature; label: string; des
   { id: "caseForms", label: "Case forms", description: "Punctuation set for capitals", values: { case: 1 } },
 ];
 
-/** The alignments and cases, in the order the View options show them. Must match the choices
+/** The alignments and cases, in the order the preview bar shows them. Must match the choices
  *  `preview_options` accepts in src-tauri/src/settings.rs. */
 export const PREVIEW_ALIGNS: readonly { id: PreviewAlign; label: string; icon: string }[] = [
   { id: "left", label: "Left", icon: "format_align_left" },
@@ -108,7 +109,7 @@ export const validTag = (tag: string) => /^[\x20-\x7e]{4}$/.test(tag) && !/["\\]
 /** The four-character tag for a trimmed one ("lao" is "lao "). */
 export const padTag = (tag: string) => (tag.length < 4 ? tag.padEnd(4, " ") : tag);
 
-/** The values the View options' features stand for. */
+/** The values the preview bar's features stand for. */
 export function previewFeatureValues(features: readonly PreviewFeature[]): FeatureValues {
   const out: Record<string, number> = {};
   for (const f of PREVIEW_FEATURES) if (features.includes(f.id)) Object.assign(out, f.values);

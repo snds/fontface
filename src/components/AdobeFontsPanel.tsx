@@ -4,7 +4,10 @@ import { api, type AdobeFace, type AdobeStatus } from "@/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { libraryCountText } from "@/footerCounts";
 import { cn } from "@/lib/utils";
+import { ListFrame } from "./FooterRail";
+import { PREVIEW_BAR_SPACE } from "./PreviewBar";
 import { PreviewText } from "./PreviewText";
 import { createTipHandle, Tip, TipHost } from "./Tip";
 import { PageHeader } from "./TitleBar";
@@ -29,16 +32,22 @@ function previewFace(faces: AdobeFace[]): AdobeFace {
 }
 
 interface Props {
+  /** The preview bar's text and size. */
   previewText: string;
+  size: number;
+  /** The preview bar, shown over the bottom of the list while there's one. */
+  bar?: React.ReactNode;
   onStatus?: (status: AdobeStatus) => void;
 }
 
 /**
  * Adobe Fonts are licensed for use through Creative Cloud only. Fontface lists the ones Creative
  * Cloud has turned on (names from the OS), draws them through the OS by name, and sends the user
- * to Adobe to change anything. It never opens, copies or switches the files.
+ * to Adobe to change anything. It never opens, copies or switches the files. The preview bar's
+ * text, size and styling apply to the previews, which are drawn by name all the same; the
+ * footer rail counts the families and styles.
  */
-export function AdobeFontsPanel({ previewText, onStatus }: Props) {
+export function AdobeFontsPanel({ previewText, size, bar, onStatus }: Props) {
   const [status, setStatus] = useState<AdobeStatus | null>(null);
   const [loading, setLoading] = useState(false);
   // One tooltip shared by the list's rows (there can be hundreds).
@@ -103,6 +112,10 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
         </div>
       </div>
 
+      <ListFrame
+        bar={status?.supported && status.faces.length > 0 ? bar : undefined}
+        count={status ? libraryCountText(families.length, status.faces.length) : ""}
+      >
       {!status ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
           <Icon name="progress_activity" size={18} className="animate-spin" />
@@ -128,7 +141,13 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
           here, because other apps can't use them.
         </Empty>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label="Adobe Fonts turned on by Creative Cloud">
+        <div
+          className="min-h-0 flex-1 overflow-y-auto"
+          // Room under the last family, and when one is scrolled into view, for the preview bar.
+          style={{ paddingBottom: PREVIEW_BAR_SPACE, scrollPaddingBottom: PREVIEW_BAR_SPACE }}
+          role="list"
+          aria-label="Adobe Fonts turned on by Creative Cloud"
+        >
           {families.map(([family, faces]) => (
             <div key={family} role="listitem" className="border-b px-4 py-3">
               <div className="mb-1 flex items-center gap-2">
@@ -149,7 +168,7 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
               </div>
               {/* Drawn by the OS through the font's registered name. Nothing is read from Adobe's files. */}
               {/* Fitted from the canvas's measurement of the drawn text, never from the file. */}
-              <PreviewText fontFamily={`"${previewFace(faces).postscriptName}", "${family}"`} text={previewText || family} size={22} ready />
+              <PreviewText fontFamily={`"${previewFace(faces).postscriptName}", "${family}"`} text={previewText || family} typed={!!previewText} size={size} ready />
 
               <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
                 {faces.map((f) => (
@@ -160,6 +179,7 @@ export function AdobeFontsPanel({ previewText, onStatus }: Props) {
           ))}
         </div>
       )}
+      </ListFrame>
       <TipHost handle={tips} />
     </div>
   );

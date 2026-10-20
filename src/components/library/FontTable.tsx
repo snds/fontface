@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { LocationDots, TagChips } from "@/tags/TagChips";
 import { StateControl, useStateWording } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
+import { PREVIEW_BAR_SPACE } from "../PreviewBar";
 import { CONTEXT, Tip, TipItem } from "../Tip";
 import {
   clampWidth,
@@ -102,6 +103,9 @@ export function FontTable({ view, sort, onSort, columns: saved, onColumns, densi
     // The header sits above the rows inside the scroll area, and covers the top of the view.
     scrollMargin: HEADER_HEIGHT,
     scrollPaddingStart: HEADER_HEIGHT,
+    // Room under the last row, and when a row is scrolled into view, for the preview bar.
+    paddingEnd: PREVIEW_BAR_SPACE,
+    scrollPaddingEnd: PREVIEW_BAR_SPACE,
     overscan: 8,
   });
   useKeepFocus(view);

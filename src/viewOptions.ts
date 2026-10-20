@@ -42,11 +42,11 @@ export function layoutShortcut(e: ShortcutKey, mac: boolean): LibraryLayout | nu
   return LAYOUTS.find((l) => l.digit === digit)?.id ?? null;
 }
 
-/** The preview sizes Cmd+= and Cmd+- step through. */
+/** The preview sizes Cmd+= and Cmd+- step through, and the preview bar's size select lists. */
 export const SIZE_STEPS = [12, 16, 24, 32, 48, 64, 96, 128] as const;
 
 /** The next size up (+1) or down (-1) from `size`, which may sit between steps or past either
- *  end (the slider goes down to 10). Past the last step it stays: smaller never makes it bigger,
+ *  end (a custom size goes down to 10). Past the last step it stays: smaller never makes it bigger,
  *  and bigger never smaller. */
 export function stepSize(size: number, direction: 1 | -1): number {
   if (direction > 0) return SIZE_STEPS.find((s) => s > size) ?? Math.max(size, SIZE_STEPS[SIZE_STEPS.length - 1]);
