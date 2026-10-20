@@ -1,18 +1,16 @@
 import { useId, useRef } from "react";
-import type { LibraryLayout, PreviewOptions, SortKey, SortOrder, TableColumnSetting, TableDensity } from "@/api";
+import type { LibraryLayout, SortKey, SortOrder, TableColumnSetting, TableDensity } from "@/api";
 import { IS_MAC } from "@/components/TitleBar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { Popover, PopoverClose, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { directionWords, LAYOUTS, SORTS, sortInfo } from "@/viewOptions";
 import { ChoiceGroup } from "./ChoiceGroup";
 import { resolveColumns, setShown } from "./library/columns";
-import { PreviewOptionsSection } from "./PreviewOptions";
 import { Tip } from "./Tip";
 
 const CMD = IS_MAC ? "⌘" : "Ctrl+";
@@ -117,21 +115,17 @@ interface Props {
   onColumns: (columns: TableColumnSetting[]) => void;
   /** Opens the Family groups page. */
   onFamilyGroups: () => void;
-  /** The preview styling, for every layout and the font page. */
-  preview: PreviewOptions;
-  onPreview: (patch: Partial<PreviewOptions>) => void;
-  dark: boolean;
 }
 
 /**
  * The View options popover (the tune button): layout, "Group styles into families", "Group
- * families by name", sort, in Table its row height and columns, and the preview styling
- * (PreviewOptions.tsx). Every choice is saved as a setting. Under about 800px the toolbar drops
- * its own layout switch, and this is where the layout is picked.
+ * families by name", sort, and in Table its row height and columns. How previews look is the
+ * preview bar's, at the bottom of the list (PreviewBar.tsx). Every choice is saved as a setting.
+ * Under about 800px the toolbar drops its own layout switch, and this is where the layout is
+ * picked.
  */
 export function ViewOptions(props: Props) {
-  const { layout, onLayout, groupStyles, onGroupStyles, groupByName, onGroupByName, sort, onSort, density, onDensity, columns, onColumns, onFamilyGroups, preview, onPreview, dark } =
-    props;
+  const { layout, onLayout, groupStyles, onGroupStyles, groupByName, onGroupByName, sort, onSort, density, onDensity, columns, onColumns, onFamilyGroups } = props;
   const id = useId();
   const info = sortInfo(sort.key);
   // The main sorts, plus the current one if it came from a Table header (Format, Source…).
@@ -141,7 +135,7 @@ export function ViewOptions(props: Props) {
   const other = info.directions[sort.desc ? 0 : 1];
   return (
     <Popover>
-      <Tip tip="Changes the layout, grouping, sort and preview styling">
+      <Tip tip="Changes the layout, grouping and sort">
         <PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="View options" />}>
           <Icon name="tune" size={18} />
         </PopoverTrigger>
@@ -288,11 +282,8 @@ export function ViewOptions(props: Props) {
           </>
         )}
 
-        <Separator />
-        <PreviewOptionsSection preview={preview} onPreview={onPreview} dark={dark} />
-
         <p className="text-xs text-muted-foreground">
-          Preview size: {CMD}= and {CMD}−. Layouts: {CMD}1, {CMD}2, {CMD}3.
+          Layouts: {CMD}1, {CMD}2, {CMD}3.
         </p>
       </PopoverContent>
     </Popover>

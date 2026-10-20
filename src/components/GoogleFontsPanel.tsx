@@ -1,7 +1,7 @@
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
-import type { ActivationMode, FontSummary, GoogleFamily, GoogleInstallResult, PreviewInfo, PreviewOptions } from "@/api";
+import type { ActivationMode, FontSummary, GoogleFamily, GoogleInstallResult, PreviewInfo } from "@/api";
 import { faceName, remoteFace, useFontFace, useRemoteFace, type FaceState } from "@/fontLoader";
 import { LIBRARY_LIST_ATTR } from "@/focusReturn";
 import type { FontTarget } from "@/fontActions";
@@ -65,7 +65,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -77,7 +76,7 @@ import type { GoogleView } from "./google/useGoogleView";
 import { Tip } from "./Tip";
 import { activeInSight, ROW_CONTROLS, type ListHandle, type OpenRequest } from "./library/LibraryPane";
 import { useSelection } from "./library/useSelection";
-import { PreviewOptionsSection } from "./PreviewOptions";
+import { PREVIEW_BAR_SPACE } from "./PreviewBar";
 import { usePreviewStyle } from "./PreviewStyle";
 import { PreviewText } from "./PreviewText";
 import { IS_MAC } from "./TitleBar";
@@ -85,10 +84,11 @@ import { IS_MAC } from "./TitleBar";
 /*
  * The Google Fonts source's own view: the whole catalog, as the place to get Google Fonts and
  * manage them (docs/ARCHITECTURE.md, Front end). The sidebar's Google Fonts row opens it, under
- * the main toolbar, whose search, preview text, size and Variable work on it, and whose filter
- * is All / Downloaded / Active / Updates (googleCatalog.ts). Under the toolbar a slim bar has
- * the categories, "Installed" (yours first), Update all and Refresh; at the bottom, one quiet line says
- * where previews come from.
+ * the main toolbar, whose search and Variable work on it, and whose filter is All / Downloaded /
+ * Active / Updates (googleCatalog.ts); the preview bar's text, size and styling work on it too.
+ * Under the toolbar a slim bar has the categories, "Installed" (yours first), Update all and
+ * Refresh; App puts the footer rail under it (the counts, `GoogleFooterNote` and where the
+ * catalog comes from, `GOOGLE_SOURCE`).
  *
  * Each family's row: its preview and facts, then what fits it (googleCatalog.rowPlan): Get;
  * for a family you have (downloaded here, or your own copy) the on/off switch, as in the
@@ -469,13 +469,11 @@ interface Props {
   /** The whole library: a family that's downloaded, or already in your library elsewhere,
    *  previews from those files. */
   fonts: FontSummary[];
-  /** The toolbar's preview text and size. */
+  /** The preview bar's text and size. */
   previewText: string;
   size: number;
   /** Settings › General › "Show previews of Google Fonts you haven't downloaded". */
   onlinePreviews: boolean;
-  /** Opens Settings › General, which has that switch (the note at the bottom links to it). */
-  onOpenSettings: () => void;
   /** "Installed" (yours first): families you have (downloaded, or already in your library) come first. */
   yoursFirst: boolean;
   onYoursFirst: (on: boolean) => void;
@@ -508,7 +506,6 @@ export function GoogleFontsPanel({
   previewText,
   size,
   onlinePreviews,
-  onOpenSettings,
   yoursFirst,
   onYoursFirst,
   busy,
@@ -538,7 +535,6 @@ export function GoogleFontsPanel({
   // asked before Rust saved the switch ask again once it has.
   useEffect(() => refreshGooglePreviews(), [onlinePreviews]);
   useEffect(() => listenForPreviewSetting(), []);
-  const offline = useGoogleOffline() && onlinePreviews;
 
   // Yours: downloaded here, or a copy already in your library. Each group keeps the catalog's order.
   const items = useMemo(() => catalogItems(visible, (f) => !!f.installed || holdings.has(f.id), yoursFirst), [visible, holdings, yoursFirst]);
@@ -570,6 +566,9 @@ export function GoogleFontsPanel({
       const item = items[i];
       return item.kind === "heading" ? item.id : rowKeyOf(item.family.id);
     },
+    // Room under the last row, and when a row is scrolled into view, for the preview bar.
+    paddingEnd: PREVIEW_BAR_SPACE,
+    scrollPaddingEnd: PREVIEW_BAR_SPACE,
     overscan: 6,
   });
 
@@ -945,27 +944,6 @@ export function GoogleFontsPanel({
         </ContextMenu>
       )}
 
-      {/* One quiet line: where previews come from, and how to turn that off. */}
-      <footer className="@container/footer flex shrink-0 items-baseline gap-3 border-t px-4 py-1.5 text-[11px] text-muted-foreground">
-        <p className="min-w-0 flex-1">
-          {onlinePreviews
-            ? "Previews of families you haven't downloaded come from Google. You can turn them off in "
-            : "Previews of families you haven't downloaded are off. You can turn them on in "}
-          <Tip tip="Opens Settings › General, where you can turn these previews on or off">
-            <button
-              type="button"
-              className="rounded-sm underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-              onClick={onOpenSettings}
-            >
-              Settings
-            </button>
-          </Tip>
-          .{offline && ` Google couldn't be reached just now, so some families show their names. ${KEEPS_TRYING}`}
-          {catalog?.stale && " Couldn't reach the catalog, so this is the last saved copy."}
-        </p>
-        <span className="shrink-0 @max-[640px]/footer:hidden">Catalog by Fontsource · files from Google</span>
-      </footer>
-
       <AlertDialog open={!!removing} onOpenChange={(open) => !open && setRemoving(null)}>
         {/* Removed: the button that opened it is gone, so focus goes to the list. */}
         <AlertDialogContent finalFocus={() => (removeConfirmed.current ? scrollRef.current : null) ?? true}>
@@ -997,20 +975,26 @@ export function GoogleFontsPanel({
   );
 }
 
-/** The View options on the Google Fonts view: the preview styling, which the catalog's previews
- *  follow as the library's do. (Its one layout is Rows; the toolbar's switch says why.) */
-export function CatalogViewOptions({ preview, onPreview, dark }: { preview: PreviewOptions; onPreview: (patch: Partial<PreviewOptions>) => void; dark: boolean }) {
+/** Where the catalog and its files come from, at the right of the footer rail. */
+export const GOOGLE_SOURCE = "Catalog by Fontsource · files from Google";
+
+/**
+ * The footer rail's note on the Google Fonts view, only while something's wrong: Google can't be
+ * reached for online previews, or the catalog shown is the last saved copy. Short, on one line;
+ * the whole of it is on hover and for screen readers.
+ */
+export function GoogleFooterNote({ onlinePreviews, stale }: { onlinePreviews: boolean; stale: boolean }) {
+  const offline = useGoogleOffline() && onlinePreviews;
+  const words = [offline && `Google can't be reached, so some families show their names. ${KEEPS_TRYING}`, stale && "Showing the last saved catalog."]
+    .filter(Boolean)
+    .join(" ");
+  if (!words) return null;
   return (
-    <Popover>
-      <Tip tip="Preview styling for the catalog's rows">
-        <PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="View options" />}>
-          <Icon name="tune" size={18} />
-        </PopoverTrigger>
-      </Tip>
-      <PopoverContent align="end" className="max-h-[min(44rem,var(--available-height))] w-[22rem] gap-3.5 overflow-y-auto p-3.5">
-        <PopoverTitle className="sr-only">View options</PopoverTitle>
-        <PreviewOptionsSection preview={preview} onPreview={onPreview} dark={dark} />
-      </PopoverContent>
-    </Popover>
+    <Tip tip={words} describe={false} align="start" contentClassName="max-w-sm whitespace-normal">
+      <span className="flex min-w-0 items-center gap-1">
+        <Icon name="cloud_off" size={13} className="shrink-0" />
+        <span className="truncate">{words}</span>
+      </span>
+    </Tip>
   );
 }

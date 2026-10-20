@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { LocationDots, TagDots } from "@/tags/TagChips";
 import { StateControl, useStateWording } from "../ActivationSwitch";
 import { FacePreview, MissingHint, SampleBadge } from "../FacePreview";
+import { PREVIEW_BAR_SPACE } from "../PreviewBar";
 import { activeInSight, describedBy, rowKey, useKeepFocus, type DisplayProps, type ListView, type Row } from "./LibraryPane";
 import {
   firstVisibleIndex,
@@ -79,7 +80,9 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
     getScrollElement: () => scrollRef.current,
     estimateSize: () => stride,
     paddingStart: GRID_PADDING,
-    paddingEnd: GRID_PADDING - TILE_GAP,
+    // Room under the last row, and when a row is scrolled into view, for the preview bar.
+    paddingEnd: GRID_PADDING - TILE_GAP + PREVIEW_BAR_SPACE,
+    scrollPaddingEnd: PREVIEW_BAR_SPACE,
     overscan: 2,
   });
   useKeepFocus(view);
@@ -176,7 +179,7 @@ export function FontTiles({ view, ...display }: DisplayProps & { view: ListView 
       {/* The height is worked out here rather than asked of the virtualizer, which only learns a
           new card height after this render: a scroll to keep the top card in place would stop
           short at the old height. */}
-      <div className="relative" style={{ height: gridHeight(rows.length, columns, stride) }}>
+      <div className="relative" style={{ height: gridHeight(rows.length, columns, stride) + PREVIEW_BAR_SPACE }}>
         {measured &&
           virtualizer.getVirtualItems().map((item) => {
             const start = item.index * columns;

@@ -141,7 +141,14 @@ export function ChoiceGroup<T extends string>({ label, labelledBy, describedBy, 
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {o.label}
+            {/* Each option is as wide as its label in the chosen (medium) weight, chosen or not,
+                so picking one never moves what's beside the group. */}
+            <span className="inline-grid justify-items-center">
+              <span className="col-start-1 row-start-1">{o.label}</span>
+              <span aria-hidden className="invisible col-start-1 row-start-1 font-medium">
+                {o.label}
+              </span>
+            </span>
           </button>,
         );
       })}
