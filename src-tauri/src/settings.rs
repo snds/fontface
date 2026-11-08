@@ -307,6 +307,9 @@ pub struct AppSettings {
     /// "Installed" (yours first) on a font service's catalog page (Google Fonts): families you have,
     /// downloaded or already in your library, come before the rest. On by default.
     pub catalog_yours_first: bool,
+    /// Settings › About: check for updates at launch and every six hours (updater.rs). On by
+    /// default.
+    pub update_auto_check: bool,
 }
 
 impl Default for AppSettings {
@@ -339,6 +342,7 @@ impl Default for AppSettings {
             preview: PreviewOptions::default(),
             google_previews: true,
             catalog_yours_first: true,
+            update_auto_check: true,
         }
     }
 }
@@ -456,6 +460,7 @@ fn apply_key(s: &mut AppSettings, key: &str, value: &Value) -> AppResult<()> {
         "preview" => s.preview = preview_options(&s.preview, value)?,
         "googlePreviews" => s.google_previews = flag(value, "Show previews of Google Fonts you haven't downloaded")?,
         "catalogYoursFirst" => s.catalog_yours_first = flag(value, "Installed")?,
+        "updateAutoCheck" => s.update_auto_check = flag(value, "Check for updates automatically")?,
         // A setting from a newer Fontface, or a typo: ignored.
         _ => {}
     }

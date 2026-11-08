@@ -34,6 +34,12 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # older Mac disks are) matches the same name written with accented letters. Already in
 # Cargo.lock (URL handling uses it); listed so the name matcher can use it directly.
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
+# Automatic updates: Sean's shared update kit (snds/app-updates 0.2.0, pinned by commit), which
+# drives Tauri's updater plugin from Rust (updater.rs; README.md → Updates).
+snds-app-updates = { git = "https://github.com/snds/app-updates", rev = "24517a6b5eaf1b8488484d466327b6e1815b7bb9", features = ["tauri"] }
+
+[dev-dependencies]
+semver = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

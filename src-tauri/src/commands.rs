@@ -1188,19 +1188,36 @@ pub fn settings_get(state: State<'_, AppState>) -> AppResult<AppSettings> {
 /// with the new settings.
 #[tauri::command(async)]
 pub fn settings_update(app: AppHandle, state: State<'_, AppState>, patch: serde_json::Value) -> AppResult<AppSettings> {
+    let (before, next) = change_settings(&app, &state, &patch)?;
+    updater_follows(&app, &before, &next);
+    Ok(next)
+}
+
+/// `settings_update`, without telling the updater: also how the updater's own "Check
+/// automatically" command saves the switch (updater.rs), since the kit then tells itself.
+/// Returns the settings before and after.
+pub(crate) fn change_settings(app: &AppHandle, state: &AppState, patch: &serde_json::Value) -> AppResult<(AppSettings, AppSettings)> {
     // Held through the save, so two quick changes can't undo each other.
     let mut held = state.settings();
     let mut before = held.clone();
     before.launch_at_login = settings::launch_at_login_enabled();
-    let next = settings::apply_patch(&before, &patch)?;
+    let next = settings::apply_patch(&before, patch)?;
     if next.launch_at_login != before.launch_at_login {
         settings::set_launch_at_login(next.launch_at_login)?;
     }
     state.write(|conn| settings::save(conn, &next))?;
     *held = next.clone();
     drop(held);
-    settings_changed(&app, &before, &next);
-    Ok(next)
+    settings_changed(app, &before, &next);
+    Ok((before, next))
+}
+
+/// "Check for updates automatically" changed through the settings: the updater's status
+/// follows (and turning it on checks, if nothing has been checked since launch).
+fn updater_follows(app: &AppHandle, before: &AppSettings, next: &AppSettings) {
+    if next.update_auto_check != before.update_auto_check {
+        crate::updater::auto_check_saved(app, next.update_auto_check);
+    }
 }
 
 /// Puts every setting back to its default, and removes the login item. Sync's settings (its
@@ -1215,6 +1232,7 @@ pub fn settings_reset(app: AppHandle, state: State<'_, AppState>) -> AppResult<A
     let before = std::mem::replace(&mut *held, next.clone());
     drop(held);
     settings_changed(&app, &before, &next);
+    updater_follows(&app, &before, &next);
     Ok(next)
 }
 

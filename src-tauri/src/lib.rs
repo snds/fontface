@@ -23,6 +23,7 @@ mod sync;
 mod tags;
 mod translucency;
 mod tray;
+mod updater;
 mod window;
 
 use std::{
@@ -166,6 +167,8 @@ pub fn run() {
     let mut app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Automatic updates (updater.rs), driven from Rust: the page gets no updater permission.
+        .plugin(updater::plugin())
         .register_asynchronous_uri_scheme_protocol("ff", |ctx, req, resp| protocol::handle(ctx, req, resp))
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
@@ -235,6 +238,9 @@ pub fn run() {
                     window::show(&main);
                 }
             }
+            // Checks for updates at launch and every six hours while Settings › About's switch is
+            // on, and adds "Check for Updates…" to the macOS app menu.
+            updater::start(app.handle());
             commands::restart_purchase_watcher(app.handle());
             // The auto-activation test: logs other apps' font requests, only when asked for at
             // launch (docs/AUTO-ACTIVATION-TEST.md).
@@ -392,6 +398,11 @@ pub fn run() {
             sync::commands::sync_poke,
             sync::commands::sync_exceptions,
             sync::commands::sync_set_exception,
+            app_updates::shell::commands::update_status,
+            app_updates::shell::commands::update_check,
+            app_updates::shell::commands::update_restart,
+            app_updates::shell::commands::update_auto_set,
+            app_updates::shell::commands::app_reload,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Fontface");
@@ -444,6 +455,8 @@ pub fn run() {
             }
         }
         tauri::RunEvent::Exit => {
+            // A downloaded update not yet taken installs now, without relaunching.
+            updater::on_exit(app);
             let Some(state) = app.try_state::<AppState>() else { return };
             // Google Fonts families removed this session were kept for Undo until now.
             services::google::purge_removed(&state.data_dir);

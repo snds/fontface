@@ -648,6 +648,41 @@ export interface AppSettings {
   /** "Installed" (yours first) on a font service's catalog page: families you have (downloaded, or already
    *  in your library) come before the rest. On by default. */
   catalogYoursFirst: boolean;
+  /** Settings › About › "Check for updates automatically": at launch and every six hours. On by
+   *  default (src-tauri/src/updater.rs). */
+  updateAutoCheck: boolean;
+}
+
+/** Where an update stands (the update kit's `UpdateState`). */
+export type UpdateState = "idle" | "checking" | "up_to_date" | "downloading" | "ready" | "available" | "failed";
+
+/**
+ * Where updates stand, from the shell (the update kit's `UpdateStatus`, src-tauri/src/updater.rs):
+ * plain data and plain words, nothing secret. Arrives on "fontface://update" whenever it changes.
+ */
+export interface UpdateStatus {
+  /** The running version, such as 0.1.0-main.20261108093000. */
+  version: string;
+  channel: "main" | "stable" | "local";
+  /** Whether this build checks for updates at all. */
+  enabled: boolean;
+  /** Why it doesn't, in one line. */
+  off: string | null;
+  /** The "Check for updates automatically" switch. */
+  auto_check: boolean;
+  state: UpdateState;
+  /** 0 to 99 while downloading. */
+  percent: number | null;
+  /** The newer version (downloading, ready, available). */
+  offered: string | null;
+  /** What went wrong, in plain words (failed). */
+  error: string | null;
+  /** The download page (available). */
+  link: string | null;
+  /** Why Fontface points there instead of updating itself (available). */
+  link_why: string | null;
+  /** The last check was asked for (the button or the menu), rather than the automatic one. */
+  asked: boolean;
 }
 
 /** Only the keys given change; `sidebar` and `preview` may be partial too. */
@@ -825,6 +860,14 @@ export const api = {
   settingsGet: () => invoke<AppSettings>("settings_get"),
   settingsUpdate: (patch: AppSettingsPatch) => invoke<AppSettings>("settings_update", { patch }),
   settingsReset: () => invoke<AppSettings>("settings_reset"),
+  /** Where updates stand; changes arrive on "fontface://update" (updates.ts). */
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  /** Checks now, and downloads a newer build in the background. The outcome arrives on the event. */
+  updateCheck: () => invoke<UpdateStatus>("update_check"),
+  /** Installs the downloaded update and opens Fontface again. */
+  updateRestart: () => invoke<void>("update_restart"),
+  /** Closes Fontface and opens it again (installing a downloaded update on the way). */
+  appReload: () => invoke<void>("app_reload"),
   /** What the window shows now; "translucency-changed" says when that changes. */
   translucencyGet: () => invoke<TranslucencyState>("translucency_get"),
   /** Waits until launch has worked out what to ask about, so it's safe to call once at startup. */

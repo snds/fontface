@@ -2,8 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
-import { api, type AppSettings, type FontSummary, type PurchasesStatus, type RemovedFile, type SidebarSections, type TagBackup, type TurnOffAllReport } from "@/api";
+import {
+  api,
+  type AppSettings,
+  type FontSummary,
+  type PurchasesStatus,
+  type RemovedFile,
+  type SidebarSections,
+  type TagBackup,
+  type TurnOffAllReport,
+  type UpdateStatus,
+} from "@/api";
 import { previewCacheButton } from "@/googlePreviews";
+import { AUTO_CHECK_LABEL, canCheck, channelName, updateLine } from "@/updates";
 import { refreshGooglePreviews, useGooglePreviewAnswers } from "@/googlePreviewStore";
 import { INSTALLED_LABEL } from "@/library";
 import { PRIVACY_SETTINGS_LABEL, PRIVACY_SETTINGS_URL, WATCH_LABEL, watchExplainer, watchNotice } from "@/purchaseWatch";
@@ -21,6 +32,7 @@ import { PLATFORM, TRANSLUCENCY_LABEL, TRANSLUCENCY_OPTIONS, translucencyDescrip
 import { ConfirmButton, describe, NumberField, SECTION_LIST, TextSetting, type RowDef, type RowIds, type SectionDef, type SectionId } from "./parts";
 import { useTranslucency } from "./translucent";
 import { useSettings } from "./useSettings";
+import { useUpdates } from "./useUpdates";
 
 const OS = IS_MAC ? "macOS" : "Windows";
 const COMPUTER = IS_MAC ? "Mac" : "computer";
@@ -264,6 +276,7 @@ export function useSections(props: SectionProps): SectionDef[] | null {
   const syncSection = useSyncSection();
   const removed = useRemovedFonts(props.onPutBack);
   const translucency = useTranslucency();
+  const updates = useUpdates();
   // Font files Fontface has turned on, outside the OS's own font folders: what Turn Off All
   // covers (`wanted`), and how many of those macOS has on right now (`on`). The rest are set to
   // come back on, e.g. from a drive that isn't connected, or waiting on "Ask me".
@@ -934,9 +947,42 @@ export function useSections(props: SectionProps): SectionDef[] | null {
           {
             id: "version",
             label: "Fontface",
-            description: outside.version ? `Version ${outside.version}` : "Version unknown",
-            keywords: "about version app name",
+            description: updates
+              ? `Version ${updates.version} · ${channelName(updates)}`
+              : outside.version
+                ? `Version ${outside.version}`
+                : "Version unknown",
+            keywords: "about version app name channel",
           },
+          ...(updates
+            ? ([
+                {
+                  id: "updates",
+                  label: "Updates",
+                  description: updateLine(updates),
+                  keywords: "update updates check new version download install restart reload upgrade",
+                  control: (ids) => <UpdateActions status={updates} describedBy={ids.description} />,
+                  // The status line is the description; screen readers hear it change.
+                  below: () => (
+                    <p role="status" className="sr-only">
+                      {updateLine(updates)}
+                    </p>
+                  ),
+                },
+                ...(updates.enabled
+                  ? ([
+                      {
+                        id: "updateAutoCheck",
+                        label: AUTO_CHECK_LABEL,
+                        description: "When Fontface opens and every six hours. A newer build downloads quietly and installs when you restart or quit.",
+                        keywords: "update updates automatic auto check background",
+                        labelsControl: true,
+                        control: (ids) => flag("updateAutoCheck", ids),
+                      },
+                    ] satisfies RowDef[])
+                  : []),
+              ] satisfies RowDef[])
+            : []),
           {
             id: "appData",
             label: "App data",
@@ -974,6 +1020,51 @@ export function useSections(props: SectionProps): SectionDef[] | null {
   };
 
   return [general, library, sidebar, activation, syncSection, purchasesSection, backupsSection, about];
+}
+
+/**
+ * Settings › About's update actions: Check for updates, then Restart to update once an update is
+ * ready, Reload app otherwise, and the download page where Fontface can't replace itself.
+ */
+function UpdateActions({ status, describedBy }: { status: UpdateStatus; describedBy: string }) {
+  const run = (p: Promise<unknown>, failure: string) => p.catch((e) => toast.error(failure, { description: String(e) }));
+  return (
+    <>
+      {status.state === "available" && status.link && (
+        <Button size="sm" variant="outline" onClick={() => run(openUrl(status.link!), "Couldn't open the download page")}>
+          <Icon name="open_in_new" size={16} />
+          Get it from GitHub
+        </Button>
+      )}
+      {status.state === "ready" ? (
+        <Button size="sm" onClick={() => run(api.updateRestart(), "Couldn't restart to update")}>
+          <Icon name="restart_alt" size={16} />
+          Restart to update
+        </Button>
+      ) : (
+        <Button size="sm" variant="ghost" onClick={() => run(api.appReload(), "Couldn't reload Fontface")}>
+          <Icon name="replay" size={16} />
+          Reload app
+        </Button>
+      )}
+      {/* Stays focusable while it's busy, so keyboard focus isn't lost. */}
+      <Button
+        size="sm"
+        variant="outline"
+        aria-describedby={describedBy}
+        disabled={!canCheck(status)}
+        focusableWhenDisabled
+        onClick={() => run(api.updateCheck(), "Couldn't check for updates")}
+      >
+        <Icon
+          name={status.state === "checking" || status.state === "downloading" ? "progress_activity" : "refresh"}
+          size={16}
+          className={cn((status.state === "checking" || status.state === "downloading") && "animate-spin")}
+        />
+        Check for updates
+      </Button>
+    </>
+  );
 }
 
 /** The preview size slider: moves freely, and saves when you let go. */
