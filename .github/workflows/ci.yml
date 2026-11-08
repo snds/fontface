@@ -33,20 +33,22 @@ jobs:
         run: cargo test --locked
 
   # Publishes each push to main as the rolling `fontface-main` pre-release on snds/releases, signed
-  # with Fontface's update key (README.md → Updates). Without the secrets it's a dry run that
-  # builds and says which secret is missing; it never fails a push for one.
+  # with Fontface's update key (README.md → Updates), through the update kit's reusable workflow
+  # (pinned; its README → Releasing). Without the secrets it's a dry run that builds and says which
+  # secret is missing; it never fails a push for one. Pull requests don't run it.
   release-main:
-    # Turn on once snds/app-updates' release-main workflow is merged: replace `false` with
-    # `github.event_name == 'push' && github.ref == 'refs/heads/main'` (pushes to main only).
-    if: false
+    if: github.event_name == 'push'
     needs: macos
     permissions:
       contents: read
-    uses: snds/app-updates/.github/workflows/release-main.yml@main
+    uses: snds/app-updates/.github/workflows/release-main.yml@4164991dd62f6d31dd99c2444906c8de53f6a719
     with:
       app: fontface
       tauri-dir: src-tauri
+      # Fontface ships on macOS only for now (docs/FEATURES.md).
       platforms: '["macos-universal"]'
+      package-manager: npm
+      kit-ref: 4164991dd62f6d31dd99c2444906c8de53f6a719
     secrets:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

@@ -42,8 +42,9 @@ publishing on:
 2. In this repo's Actions secrets, add `TAURI_SIGNING_PRIVATE_KEY` (the secret key file's
    contents), `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and `RELEASES_TOKEN` (a token that can write
    releases on snds/releases).
-3. In `.github/workflows/ci.yml`, turn on the `release-main` job once snds/app-updates'
-   `release-main` workflow is merged (it says how). Until the secrets exist, it's a dry run.
+3. That's all: CI's `release-main` job (`.github/workflows/ci.yml`) publishes each push to `main`
+   once the secrets are there. Until then it's a dry run that says which secret is missing.
+   snds/releases needs at least one commit (a README) before its first release.
 
 Builds made locally (`npm run tauri build`) carry the version `0.1.0` and don't check for updates:
 only CI's `0.1.0-main.<time>` builds follow the main channel.
