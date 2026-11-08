@@ -31,3 +31,23 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --locked
+
+  # Publishes each push to main as the rolling `fontface-main` pre-release on snds/releases, signed
+  # with Fontface's update key (README.md → Updates). Without the secrets it's a dry run that
+  # builds and says which secret is missing; it never fails a push for one.
+  release-main:
+    # Turn on once snds/app-updates' release-main workflow is merged: replace `false` with
+    # `github.event_name == 'push' && github.ref == 'refs/heads/main'` (pushes to main only).
+    if: false
+    needs: macos
+    permissions:
+      contents: read
+    uses: snds/app-updates/.github/workflows/release-main.yml@main
+    with:
+      app: fontface
+      tauri-dir: src-tauri
+      platforms: '["macos-universal"]'
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}

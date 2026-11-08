@@ -132,7 +132,8 @@ fn serializes_in_the_shape_the_ui_expects() {
                 "ink": null, "paper": null, "features": []
             },
             "googlePreviews": true,
-            "catalogYoursFirst": true
+            "catalogYoursFirst": true,
+            "updateAutoCheck": true
         })
     );
 }
@@ -311,6 +312,9 @@ fn view_options_change_by_patch_and_refuse_bad_values() {
     assert!(d.catalog_yours_first, "catalog pages list your families first by default");
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "catalogYoursFirst": "on" }))), "“Installed” must be on or off");
     assert!(!settings::apply_patch(&d, &json!({ "catalogYoursFirst": false })).unwrap().catalog_yours_first);
+    assert!(d.update_auto_check, "Fontface checks for updates automatically by default");
+    assert_eq!(error_text(settings::apply_patch(&d, &json!({ "updateAutoCheck": "on" }))), "“Check for updates automatically” must be on or off");
+    assert!(!settings::apply_patch(&d, &json!({ "updateAutoCheck": false })).unwrap().update_auto_check);
     assert!(!settings::apply_patch(&d, &json!({ "groupByName": false })).unwrap().group_by_name);
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "tableDensity": "airy" }))), "Table density must be “compact” or “regular”");
     assert_eq!(error_text(settings::apply_patch(&d, &json!({ "sort": "name" }))), "The sort must say what to sort by");
@@ -511,6 +515,7 @@ fn every_setting_can_be_changed_by_a_patch() {
         },
         google_previews: false,
         catalog_yours_first: false,
+        update_auto_check: false,
     };
     let patch = serde_json::to_value(&custom).unwrap();
     assert_eq!(settings::apply_patch(&AppSettings::default(), &patch).unwrap(), custom);

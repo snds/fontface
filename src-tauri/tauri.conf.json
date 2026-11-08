@@ -26,6 +26,14 @@
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ff: http://ff.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' data: ff: http://ff.localhost; img-src 'self' data:"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [],
+      "requireSignedVersion": true,
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
