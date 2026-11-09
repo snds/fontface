@@ -48,7 +48,7 @@ pub const MENU_ID: &str = "fontface-check-for-updates";
 /// The ID of the key Sean made for Fontface (2026-11-08), whose public half is `updater.pub`. A
 /// test holds the committed file to it.
 #[cfg(test)]
-pub const RELEASE_KEY_ID: &str = "3A8BE5A281625358";
+pub const RELEASE_KEY_ID: &str = "A22605A6D757D9B7";
 
 /// The public key built in from `updater.pub` (build.rs), if the file was there when this build
 /// was made. Without it, updates are off in the build and Settings says so.
