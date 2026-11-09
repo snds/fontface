@@ -33,7 +33,7 @@ signature, and offers **Restart to update** (or installs it when you quit). Sett
 **Check for updates**, **Reload app** and the **Check for updates automatically** switch; on macOS
 the app menu has **Check for Updates…** too.
 
-The public key is committed as `src-tauri/updater.pub` (key ID `3A8BE5A281625358`); a build without
+The public key is committed as `src-tauri/updater.pub` (key ID `A22605A6D757D9B7`); a build without
 that file says "Updates are off in this build: it was made without the update key." To turn
 publishing on:
 
